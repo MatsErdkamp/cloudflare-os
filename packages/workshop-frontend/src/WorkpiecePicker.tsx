@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { CaretLeft, CaretRight, Check, Lightning, PencilSimple, Pulse, X } from '@phosphor-icons/react'
 import { FormatGlyph } from './components/format/FormatVisuals'
 import { Tooltip } from '@cloudflare/kumo'
-import type { WorkpieceId, WorkpieceSummary } from '@gadgets/workshop-shared/api'
+import type { WorkpieceId, GadgetWorkpieceSummary } from '@gadgets/workshop-shared/api'
 import { CountBadge } from './components/CountBadge'
 import { WorkshopIconButton, WorkshopInput } from './components/WorkshopControls'
 
@@ -11,7 +11,7 @@ export const WORKPIECE_RAIL_EXPANDED_WIDTH = 220
 
 interface WorkpiecePickerProps {
   // Draft apps remain listed globally; selecting one returns to its creating conversation.
-  gadgets: WorkpieceSummary[]
+  gadgets: GadgetWorkpieceSummary[]
   selectedId: WorkpieceId | null
   // The gadget the agent is currently streaming edits into, if any. Shown as an activity dot when
   // it isn't the selected one (e.g. because the user pinned their selection mid-turn).

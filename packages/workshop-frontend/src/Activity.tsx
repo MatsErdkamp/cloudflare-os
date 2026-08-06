@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Switch, useKumoToastManager } from '@cloudflare/kumo'
 import { CaretRight, Check, Eye, Lightning, ShieldCheck } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
-import { ActionLogEntry, Overseer } from '@gadgets/workshop-shared/api'
+import { ActionLogEntry, ContractOperationSummary, Overseer } from '@gadgets/workshop-shared/api'
 import { ActionKind } from '@gadgets/workshop-shared/gatekeeper'
 import { GatekeeperIcon } from './components/GatekeeperIcon'
 import { HookToggle } from './components/HookToggle'
@@ -121,6 +121,8 @@ export default function Activity({
   const [processingActions, setProcessingActions] = useState<Set<number>>(new Set())
   const [togglingHooks, setTogglingHooks] = useState<Set<number>>(new Set())
   const [expandedActionId, setExpandedActionId] = useState<number | null>(null)
+  const [contractOperations, setContractOperations] = useState<ContractOperationSummary[]>([])
+  const [processingOperations, setProcessingOperations] = useState<Set<string>>(new Set())
   const [confirmAutoApprove, setConfirmAutoApprove] = useState<{
     actionId: number
     gatekeeperId: number
@@ -130,12 +132,42 @@ export default function Activity({
   } | null>(null)
   const toasts = useKumoToastManager()
 
+  useEffect(() => {
+    let disposed = false
+    const load = async () => {
+      try {
+        const operations = await overseer.listContractOperations()
+        if (!disposed) setContractOperations(operations)
+      } catch (error) {
+        if (!disposed) console.error('Failed to load Contract operations:', error)
+      }
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), view === 'review' ? 2_000 : 10_000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [overseer, view, actionsById.size])
+
+  const pendingContractOperations = useMemo(() => contractOperations
+    .filter(operation => operation.state === 'pending' || operation.state === 'applying')
+    .toSorted((a, b) => timeValue(a.createdAt) - timeValue(b.createdAt)), [contractOperations])
+  const resolvedContractOperations = useMemo(() => contractOperations
+    .filter(operation => operation.state !== 'pending' && operation.state !== 'applying')
+    .toSorted((a, b) => timeValue(b.decidedAt ?? b.createdAt) - timeValue(a.decidedAt ?? a.createdAt)),
+  [contractOperations])
+
   const { pendingActions, historyGroups, historyTotal, historyShown } = useMemo(() => {
     const records = [...actionsById.values()]
     const pending = records
-      .filter(record => record.state === 'pending')
+      .filter(record => record.state === 'pending' &&
+        record.contractAttribution?.contractOperationId === undefined &&
+        (record.type !== 'action' || record.contractPreapproved !== true ||
+          record.contractApplyFailed === true))
       .toSorted((a, b) => timeValue(a.createdAt) - timeValue(b.createdAt) || a.id - b.id)
-    const resolved = records.filter(record => record.state !== 'pending')
+    const resolved = records.filter(record => record.state !== 'pending' &&
+      record.contractAttribution?.contractOperationId === undefined)
     const filtered = resolved
       .filter(record => historyFilter === 'all' || record.type === historyFilter)
       .toSorted((a, b) =>
@@ -155,7 +187,31 @@ export default function Activity({
     }
   }, [actionsById, historyFilter])
 
+  const visibleResolvedContractOperations = historyFilter === 'all' || historyFilter === 'action'
+    ? resolvedContractOperations
+    : []
+  const visibleHistoryTotal = historyShown + visibleResolvedContractOperations.length
+  const allHistoryTotal = historyTotal + resolvedContractOperations.length
+
   const resolveAction = useResolveAction(overseer, setProcessingActions)
+
+  const resolveContractOperation = async (operationId: string, decision: 'approve' | 'reject') => {
+    setProcessingOperations(previous => new Set(previous).add(operationId))
+    try {
+      if (decision === 'approve') await overseer.approveContractOperation(operationId)
+      else await overseer.rejectContractOperation(operationId)
+      setContractOperations(await overseer.listContractOperations())
+    } catch (error) {
+      console.error(`Failed to ${decision} Contract operation:`, error)
+      toasts.add({title: `Failed to ${decision} Contract operation`, variant: 'error'})
+    } finally {
+      setProcessingOperations(previous => {
+        const next = new Set(previous)
+        next.delete(operationId)
+        return next
+      })
+    }
+  }
 
   const handleToggleHook = async (hookId: number, enabled: boolean) => {
     setTogglingHooks(previous => new Set(previous).add(hookId))
@@ -192,7 +248,7 @@ export default function Activity({
   return (
     <div className="flex h-full flex-col bg-kumo-base">
       {view === 'review' ? (
-        pendingActions.length === 0 ? (
+        pendingActions.length === 0 && pendingContractOperations.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
             <span className="grid h-9 w-9 place-items-center rounded-full bg-kumo-tint text-kumo-subtle">
               <Check size={17} weight="bold" />
@@ -211,11 +267,25 @@ export default function Activity({
           <>
             <div className={`${PANE_BAR} gap-2 px-5`}>
               <span className="text-[12.5px] font-medium leading-[17px] tracking-[-0.15px] text-kumo-default">
-                {pendingActions.length} {pendingActions.length === 1 ? 'request' : 'requests'} waiting
+                {pendingActions.length + pendingContractOperations.length}{' '}
+                {pendingActions.length + pendingContractOperations.length === 1 ? 'request' : 'requests'} waiting
               </span>
               <span className="ml-auto text-[11.5px] leading-[17px] text-kumo-inactive">Oldest first</span>
             </div>
             <div className="min-h-0 flex-1 overflow-auto">
+              {pendingContractOperations.map(operation => (
+                <ContractOperationReview
+                  key={operation.id}
+                  operation={operation}
+                  children={operation.childActionIds.flatMap(id => {
+                    const action = actionsById.get(id)
+                    return action ? [action] : []
+                  })}
+                  processing={processingOperations.has(operation.id)}
+                  onApprove={() => void resolveContractOperation(operation.id, 'approve')}
+                  onReject={() => void resolveContractOperation(operation.id, 'reject')}
+                />
+              ))}
               {pendingActions.map(record => {
                 const autoApproveTarget =
                   record.type === 'action' && record.gatekeeperId !== undefined &&
@@ -268,12 +338,12 @@ export default function Activity({
               </button>
             ))}
             <span className="ml-auto pr-2 text-[11.5px] leading-[17px] tabular-nums text-kumo-inactive">
-              {historyShown} {historyShown === 1 ? 'event' : 'events'}
+              {visibleHistoryTotal} {visibleHistoryTotal === 1 ? 'event' : 'events'}
             </span>
 
           </div>
 
-          {historyTotal === 0 ? (
+          {allHistoryTotal === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
               <p className="m-0 text-[13px] font-medium leading-[18px] tracking-[-0.25px] text-kumo-default">
                 No activity yet
@@ -282,7 +352,7 @@ export default function Activity({
                 Every resource an agent reads or changes is recorded here.
               </p>
             </div>
-          ) : historyShown === 0 ? (
+          ) : visibleHistoryTotal === 0 ? (
             <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
               <p className="m-0 text-[13px] font-medium text-kumo-default">No matching events</p>
               <button
@@ -301,6 +371,24 @@ export default function Activity({
                 <span>Status</span>
                 <span />
               </div>
+              {visibleResolvedContractOperations.length > 0 && (
+                <section>
+                  <h3 className="sticky top-0 m-0 border-b border-kumo-line bg-kumo-base/90 px-5 py-1 text-[11px] font-medium uppercase tracking-[0.06em] text-kumo-inactive backdrop-blur-sm">
+                    Contract operations
+                  </h3>
+                  {visibleResolvedContractOperations.map(operation => (
+                    <ContractOperationReview
+                      key={operation.id}
+                      operation={operation}
+                      children={operation.childActionIds.flatMap(id => {
+                        const action = actionsById.get(id)
+                        return action ? [action] : []
+                      })}
+                      processing={false}
+                    />
+                  ))}
+                </section>
+              )}
               {historyGroups.map(group => (
                 <section key={group.label}>
                   <h3 className="sticky top-0 m-0 border-b border-kumo-line bg-kumo-base/90 px-5 py-1 text-[11px] font-medium uppercase tracking-[0.06em] text-kumo-inactive backdrop-blur-sm">
@@ -343,6 +431,72 @@ export default function Activity({
         />
       )}
     </div>
+  )
+}
+
+function ContractOperationReview({
+  operation,
+  children,
+  processing,
+  onApprove,
+  onReject,
+}: {
+  operation: ContractOperationSummary
+  children: ActionLogEntry[]
+  processing: boolean
+  onApprove?: () => void
+  onReject?: () => void
+}) {
+  return (
+    <article className="border-b border-kumo-line px-5 py-4">
+      <div className="flex items-start gap-3">
+        <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-full bg-kumo-tint text-kumo-brand">
+          <ShieldCheck size={15} weight="fill" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="font-medium text-kumo-default">{operation.title}</div>
+          <p className="mt-0.5 text-[12.5px] leading-[17px] text-kumo-subtle">
+            {operation.description}
+          </p>
+          <div className="mt-1 font-mono text-[10.5px] text-kumo-inactive">
+            Contract {operation.contractId} · {operation.artifactHash.slice(0, 24)}…
+          </div>
+          {operation.state !== 'pending' && operation.state !== 'applying' && (
+            <div className="mt-1 text-[11px] font-medium text-kumo-subtle">
+              {operation.state === 'applied' || operation.state === 'approved' ? 'Approved' :
+                operation.state === 'rejected' ? 'Denied' : 'Failed'}
+            </div>
+          )}
+          {children.length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[12px] font-medium text-kumo-default">
+                {children.length} provider {children.length === 1 ? 'action' : 'actions'}
+              </summary>
+              <ul className="mt-1 space-y-1 pl-4 text-[12px] text-kumo-subtle">
+                {children.map(child => (
+                  <li key={child.id}>
+                    {child.type === 'action' ? child.description.title : child.resourceTitle}
+                    <span className="ml-1 text-kumo-inactive">({child.resourceTitle})</span>
+                    <span className="ml-1 text-kumo-inactive">
+                      · {child.state === 'approved' ? 'applied' :
+                        child.state === 'rejected' ? 'rejected' : 'pending'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+        {onApprove && onReject && (
+          <div className="flex flex-shrink-0 gap-2">
+            <WorkshopButton disabled={processing} onClick={onReject}>Deny</WorkshopButton>
+            <WorkshopButton tone="primary" disabled={processing} onClick={onApprove}>
+              Approve
+            </WorkshopButton>
+          </div>
+        )}
+      </div>
+    </article>
   )
 }
 
@@ -550,6 +704,11 @@ function ReviewRequest({
       {record.description.description && (
         <p className={`mt-1.5 max-w-2xl whitespace-pre-wrap text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle ${expanded ? '' : 'line-clamp-2'}`}>
           {record.description.description}
+        </p>
+      )}
+      {record.type === 'action' && record.contractApplyFailed === true && (
+        <p className="mt-1.5 text-[12px] leading-4 text-kumo-danger">
+          The provider could not apply this preapproved action. Retry it or deny it.
         </p>
       )}
     </article>

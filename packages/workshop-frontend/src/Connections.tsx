@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { Dialog, Tooltip, useKumoToastManager } from '@cloudflare/kumo'
 import {
   Pencil,
@@ -8,8 +8,8 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
-import { Overseer, GadgetClient, GadgetBindingInfo, BoundHookInfo, AuthenticatedApi, WorkpieceId } from '@gadgets/workshop-shared/api'
-import GatekeeperModal from './GatekeeperModal'
+import { Overseer, GadgetClient, GadgetBindingInfo, BoundHookInfo, AuthenticatedApi } from '@gadgets/workshop-shared/api'
+import type { WorkpieceId } from '@gadgets/workshop-shared/api'
 import { GatekeeperIcon } from './components/GatekeeperIcon'
 import { HookToggle } from './components/HookToggle'
 import { useVendorBranding } from './useVendorBranding'
@@ -39,15 +39,17 @@ interface ConnectionsProps {
 // scoped to one gadget.
 export default function Connections({ overseer, gadget, chatId, authenticatedApi, onConnectionsChange, isVisible, onHasGatekeepersChange }: ConnectionsProps) {
   const [bindings, setBindings] = useState<GadgetBindingInfo[]>([])
-  // Identity of the gadget this tab is showing, needed to offer it to agent spawners.
-  const [gadgetInfo, setGadgetInfo] = useState<{ id: WorkpieceId; title: string } | null>(null)
   const [hooks, setHooks] = useState<BoundHookInfo[]>([])
   const vendorBranding = useVendorBranding(authenticatedApi)
   const [loading, setLoading] = useState(true)
   const [editingBinding, setEditingBinding] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
-  const [isNewConnectionModalVisible, setIsNewConnectionModalVisible] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<{ name: string; resourceTitle: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{
+    name: string
+    target: WorkpieceId
+    targetType: GadgetBindingInfo['targetType']
+    resourceTitle: string
+  } | null>(null)
   const [deleteHookTarget, setDeleteHookTarget] = useState<{ id: number; title: string } | null>(null)
   const [togglingHooks, setTogglingHooks] = useState<Set<number>>(new Set())
   const [annotationTarget, setAnnotationTarget] = useState<GadgetBindingInfo | null>(null)
@@ -55,15 +57,13 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
 
   const loadGatekeepers = async () => {
     try {
-      const [id, gadgetTitle, bindingList, hookList] = await Promise.all([
+      const [id, bindingList, hookList] = await Promise.all([
         gadget.getId(),
-        gadget.getTitle(),
         // Pass the open chat so bindings this tab added provisionally to it are listed too.
         gadget.listBindings(chatId),
         // Workspace-wide; filtered to this gadget below.
         overseer.listHooks(),
       ])
-      setGadgetInfo({ id, title: gadgetTitle })
       setBindings(bindingList)
       // This tab shows one gadget, so drop hooks that wake a different one -- otherwise its
       // toggle/delete controls would operate on another gadget's hooks.
@@ -127,22 +127,6 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
   }, [isVisible])
 
 
-  // What an agent spawner created here may offer its agents: this gadget itself (under the same
-  // `GADGET` name the gadget's own code uses) plus each of the gadget's bindings. All are enabled
-  // by default in the modal, reproducing the pre-multi-gadget behavior where spawned agents
-  // inherited everything the gadget held.
-  const spawnerEnvCandidates = useMemo(() => {
-    if (!gadgetInfo) return []
-    return [
-      {
-        target: gadgetInfo.id,
-        targetTitle: `${gadgetInfo.title} (this gadget)`,
-        name: 'GADGET',
-      },
-      ...bindings.map((b) => ({ target: b.target, targetTitle: b.resourceTitle, name: b.name })),
-    ]
-  }, [gadgetInfo, bindings])
-
   const handleEditStart = (name: string) => {
     setEditingBinding(name)
     setEditValue(name)
@@ -179,7 +163,11 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return
     try {
-      await gadget.unbind(deleteTarget.name)
+      if (deleteTarget.targetType === 'contract') {
+        await overseer.deleteContract(deleteTarget.target)
+      } else {
+        await gadget.unbind(deleteTarget.name)
+      }
       await loadGatekeepers()
       onConnectionsChange?.()
     } catch (err) {
@@ -200,16 +188,9 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                 Connections
               </h2>
               <p className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
-                External resources this gadget can use.
+                Reviewed Contract capabilities this gadget can use.
               </p>
             </div>
-            <WorkshopButton
-              tone="primary"
-              onClick={() => setIsNewConnectionModalVisible(true)}
-              className="self-start"
-            >
-              Connect resource
-            </WorkshopButton>
           </div>
 
           {loading ? (
@@ -218,10 +199,8 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
             </div>
           ) : bindings.length === 0 ? (
             <EmptyState
-              title="No connected resources"
-              description="Connect Google Docs, GitHub, Google Sheets, and other services so this gadget can safely use external data."
-              actionLabel="Connect resource"
-              onAction={() => setIsNewConnectionModalVisible(true)}
+              title="No installed Contracts"
+              description="Ask the Manager in chat to turn a private Source into a reviewed capability for this Gadget."
             />
           ) : (
             <div className="overflow-hidden rounded-xl border border-kumo-line bg-kumo-base">
@@ -244,7 +223,9 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                             Delete {gk.resourceTitle}?
                           </p>
                           <p className="truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
-                            The binding <span className="font-mono">{gk.name}</span> will be removed from this gadget.
+                            {gk.targetType === 'contract'
+                              ? 'Its bindings, callbacks, facet storage, and pending operations will be retracted.'
+                              : <>The legacy Source binding <span className="font-mono">{gk.name}</span> will be removed.</>}
                           </p>
                         </div>
                         <WorkshopButton
@@ -298,6 +279,9 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                         <div className="min-w-0 flex-1">
                           <p className="flex items-center gap-2 truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
                             <span className="min-w-0 truncate">{gk.resourceTitle}</span>
+                            <span className="flex-shrink-0 rounded-full bg-kumo-tint px-1.5 py-0.5 text-[10px] leading-none font-medium text-kumo-subtle">
+                              {gk.targetType === 'contract' ? 'Contract' : gk.targetType === 'source' ? 'Source · legacy' : 'Gadget'}
+                            </span>
                             {isPending && (
                               <Tooltip content="Added in this chat; kept when you accept the chat's changes" asChild>
                                 <span className="flex-shrink-0 rounded-full bg-kumo-fill px-1.5 py-0.5 text-[10px] leading-none font-medium text-kumo-subtle">
@@ -319,7 +303,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                               <Pencil size={14} />
                             </WorkshopIconButton>
                           </Tooltip>
-                          {!isPending && (
+                          {!isPending && gk.targetType !== 'contract' && (
                             <Tooltip content="Edit blueprint settings" asChild>
                               <WorkshopIconButton
                                 onClick={() => setAnnotationTarget(gk)}
@@ -332,8 +316,13 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                           <Tooltip content="Delete connection" asChild>
                             <WorkshopIconButton
                               danger
-                              onClick={() => setDeleteTarget({ name: gk.name, resourceTitle: gk.resourceTitle })}
-                              aria-label="Delete connection"
+                              onClick={() => setDeleteTarget({
+                                name: gk.name,
+                                target: gk.target,
+                                targetType: gk.targetType,
+                                resourceTitle: gk.resourceTitle,
+                              })}
+                              aria-label={gk.targetType === 'contract' ? 'Retract Contract' : 'Delete connection'}
                             >
                               <Trash size={14} />
                             </WorkshopIconButton>
@@ -440,29 +429,6 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
         )}
 
       </div>
-
-      <GatekeeperModal
-        open={isNewConnectionModalVisible}
-        onClose={() => setIsNewConnectionModalVisible(false)}
-        getOverseer={() => overseer}
-        spawnerEnvCandidates={spawnerEnvCandidates}
-        onCreated={async (gk) => {
-          try {
-            const gatekeeperId = await gk.getId()
-            await gadget.bindWithSuggestedName(gatekeeperId, chatId)
-            toasts.add({
-              title: chatId === undefined
-                ? 'Connection created successfully'
-                : "Connection created — accept the chat's changes to keep it",
-              variant: 'success',
-            })
-            await loadGatekeepers()
-            onConnectionsChange?.()
-          } finally {
-            gk[Symbol.dispose]()
-          }
-        }}
-      />
 
       <BlueprintAnnotationModal
         target={annotationTarget}

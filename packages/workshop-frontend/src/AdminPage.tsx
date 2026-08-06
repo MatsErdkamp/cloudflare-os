@@ -3,12 +3,13 @@ import { RpcStub } from 'capnweb'
 import { Switch, Textarea, Input, Button, Tabs, useKumoToastManager } from '@cloudflare/kumo'
 import { Hexagon, ShieldWarning, UserPlus } from '@phosphor-icons/react'
 import { useAuthenticatedApi } from './AuthContext'
-import { AdminApi, AdminFormat, AdminResourceVendor, AmbientGatekeeperMode, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR } from '@gadgets/workshop-shared/api'
+import { AdminApi, AdminFormat, AdminResourceVendor, AmbientGatekeeperMode, ContractorsDependencyPolicy, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_ANNOUNCEMENT_LENGTH, MAX_SITE_NAME_LENGTH, DEFAULT_SITE_NAME, BannerColor, BANNER_COLORS, DEFAULT_BANNER_COLOR } from '@gadgets/workshop-shared/api'
 import { applyAccentColor, DEFAULT_ACCENT_COLOR } from './theme'
 import { cacheBustSiteLogoUrl, prepareSiteLogo } from './siteLogoUtils'
 import SiteLogo from './components/SiteLogo'
 import { useDocumentTitle } from './useDocumentTitle'
 import AdminFormatsPanel from './components/format/AdminFormatsPanel'
+import AdminContractorsPanel from './components/AdminContractorsPanel'
 
 // Preset accent colors offered in the Theme section ('' = default brand).
 const ACCENT_PRESETS: { label: string; value: string }[] = [
@@ -85,6 +86,9 @@ export default function AdminPage() {
   // Promoted output formats, in menu order (see AdminFormatsPanel).
   const [formats, setFormats] = useState<AdminFormat[]>([])
 
+  // npm package governance for immutable Contract artifacts.
+  const [contractorsPolicy, setContractorsPolicy] = useState<ContractorsDependencyPolicy>({})
+
   const resourceKey = (vendorId: string, urlPattern: string) => `${vendorId}\u0000${urlPattern}`
 
   // Populate all editor state from a freshly-fetched settings view.
@@ -104,6 +108,7 @@ export default function AdminPage() {
     setSavedAccent(view.accentColor)
     setAccentDraft(view.accentColor)
     setFormats(view.formats)
+    setContractorsPolicy(view.contractors)
   }
 
   // Mint the admin capability once (the access check happens server-side) and load settings.
@@ -403,6 +408,7 @@ export default function AdminPage() {
           { value: 'general', label: 'General' },
           { value: 'gatekeepers', label: 'Gatekeepers' },
           { value: 'formats', label: 'Formats' },
+          { value: 'contractors', label: 'Contractors' },
           { value: 'access', label: 'Access' },
         ]}
       />
@@ -413,6 +419,15 @@ export default function AdminPage() {
           admin={admin.api}
           formats={formats}
           onChanged={async () => { setFormats((await admin.api.getSettings()).formats) }}
+        />
+      )}
+
+      {activeTab === 'contractors' && admin && (
+        <AdminContractorsPanel
+          key={JSON.stringify(contractorsPolicy)}
+          admin={admin.api}
+          policy={contractorsPolicy}
+          onChanged={setContractorsPolicy}
         />
       )}
 

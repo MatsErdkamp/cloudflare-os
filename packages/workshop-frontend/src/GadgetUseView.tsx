@@ -8,7 +8,7 @@ import {
   GadgetClient,
   GadgetMetadata,
   WorkpieceId,
-  WorkpieceSummary,
+  GadgetWorkpieceSummary,
 } from '@gadgets/workshop-shared/api'
 import GadgetUI from './GadgetUI'
 import UserMenu from './components/UserMenu'
@@ -34,7 +34,7 @@ type Props = {
   // The selected gadget's client, or null if the workspace has no gadgets.
   gadget: RpcStub<GadgetClient> | null
   selectedGadgetId: WorkpieceId | null
-  gadgets: WorkpieceSummary[]
+  gadgets: GadgetWorkpieceSummary[]
   onSelectGadget: (id: WorkpieceId) => void
   metadata: GadgetMetadata
   authenticatedApi: RpcStub<AuthenticatedApi>

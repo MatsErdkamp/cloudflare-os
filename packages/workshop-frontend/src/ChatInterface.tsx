@@ -689,6 +689,8 @@ function getToolCallSummary(
       return { verb: "Listed blueprints" };
     case "listConnectableResources":
       return { verb: "Listed connectable resources", target: tc.input.vendorId };
+    case "proposeContract":
+      return { verb: "Proposed Contract", target: tc.input.title };
     case "requestConnection":
       return { verb: "Requested connection", target: tc.input.vendorId };
   }
@@ -768,6 +770,8 @@ function describeToolCallCount(toolName: AiToolCall["toolName"], count: number):
       return `Listed blueprints`;
     case "listConnectableResources":
       return `Listed connectable resources`;
+    case "proposeContract":
+      return count === 1 ? "Proposed a Contract" : `Proposed ${count} Contracts`;
     case "requestConnection":
       return count === 1 ? "Requested a connection" : `Requested ${count} connections`;
   }
@@ -801,6 +805,8 @@ function getToolIcon(
       return Plus;
     case "listBlueprints":
       return Blueprint;
+    case "proposeContract":
+      return ShieldCheck;
     case "observeUserChanges":
       return MagnifyingGlass;
     case "giveUp":
@@ -836,6 +842,8 @@ function getProvisionalToolLabel(toolName: AiToolCall["toolName"] | null | undef
       return "Observing user changes";
     case "giveUp":
       return "Stopping";
+    case "proposeContract":
+      return "Proposing Contract";
     default:
       return "Using tool";
   }
@@ -862,6 +870,7 @@ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
     case "giveUp": return "Stopping";
     case "listBlueprints": return "Listing blueprints";
     case "listConnectableResources": return "Listing connectable resources";
+    case "proposeContract": return "Proposing Contract";
     case "requestConnection": return "Requesting a connection";
   }
   const _exhaustive: never = toolName;
@@ -886,6 +895,7 @@ function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: n
     case "giveUp": return "Stopping";
     case "listBlueprints": return "Listing blueprints";
     case "listConnectableResources": return "Listing connectable resources";
+    case "proposeContract": return `Proposing ${pluralize(count, "Contract")}`;
     case "requestConnection": return `Requesting ${pluralize(count, "connection")}`;
   }
   const _exhaustive: never = toolName;
@@ -4571,11 +4581,11 @@ function ChatInterface({
     () => computeMessageStates(currentMessages, currentCompactions[0]),
     [currentMessages, currentCompactions],
   );
-  // A pending agent connection request blocks the composer: the user must accept ("Set up") or deny
-  // it before continuing the conversation.
+  // A pending authority request blocks the composer until a human accepts or denies it.
   const hasPendingConnectionRequest = useMemo(
     () => currentMessages.some(
-      (msg) => msg.type === "connectionRequest" && msg.state === "pending",
+      (msg) => (msg.type === "connectionRequest" || msg.type === "contractRequest") &&
+        msg.state === "pending",
     ),
     [currentMessages],
   );
@@ -5768,6 +5778,39 @@ function ChatInterface({
     }
   };
 
+  const handleAcceptContract = async (requestId: string) => {
+    setProcessingConnections((prev) => new Set(prev).add(requestId));
+    try {
+      await overseer.acceptContractRequest(requestId);
+      toasts.add({title: "Contract installed", variant: "success"});
+    } catch (err) {
+      console.error("Failed to install Contract:", err);
+      toasts.add({title: "Failed to install Contract", variant: "error"});
+    } finally {
+      setProcessingConnections((prev) => {
+        const next = new Set(prev);
+        next.delete(requestId);
+        return next;
+      });
+    }
+  };
+
+  const handleDenyContract = async (requestId: string) => {
+    setProcessingConnections((prev) => new Set(prev).add(requestId));
+    try {
+      await overseer.denyContractRequest(requestId);
+    } catch (err) {
+      console.error("Failed to deny Contract:", err);
+      toasts.add({title: "Failed to deny Contract", variant: "error"});
+    } finally {
+      setProcessingConnections((prev) => {
+        const next = new Set(prev);
+        next.delete(requestId);
+        return next;
+      });
+    }
+  };
+
   const toggleToolCallExpansion = useCallback((expansionKey: string) => {
     setExpandedToolCalls((prev) => {
       const next = new Set(prev);
@@ -6114,6 +6157,96 @@ function ChatInterface({
     );
   };
 
+  const renderContractRequestCard = (
+    msg: AiChatMessage & {type: "contractRequest"},
+  ) => {
+    const isPending = msg.state === "pending";
+    const isProc = processingConnections.has(msg.requestId);
+    const status = msg.state === "accepted" ? "Installed" :
+      msg.state === "denied" ? "Denied" : "Approval required";
+    const statusClass = msg.state === "accepted" ? "text-kumo-success" :
+      msg.state === "denied" ? "text-kumo-danger" : "text-kumo-brand";
+    return (
+      <div className="group/work max-w-[860px] text-[14px] leading-5 tracking-[-0.25px] text-kumo-subtle">
+        <div className="rounded-2xl border border-kumo-line bg-kumo-base px-4 py-3">
+          <div className="flex items-start gap-3">
+            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-kumo-tint text-kumo-brand">
+              <ShieldCheck size={20} weight="fill" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-kumo-default">Install {msg.title}</span>
+                <span className={`text-[12px] font-medium ${statusClass}`}>{status}</span>
+              </div>
+              <p className="mt-1 text-[13px] leading-[18px]">
+                {msg.sourceTitle} → {msg.targetGadgetTitle}.{msg.bindingName}
+              </p>
+              <p className="mt-2 rounded-lg bg-kumo-tint px-3 py-2 text-[12px] leading-[17px] text-kumo-default">
+                Possession preapproves every public method. This code defines the capability. It
+                may return or delegate any authority available through the selected Source.
+              </p>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-[12px] font-medium text-kumo-default">
+                  Review code, interface, and authority
+                </summary>
+                <div className="mt-2 space-y-3 text-[12px]">
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    <dt>Proposer</dt><dd className="text-kumo-default">{msg.author.name}</dd>
+                    <dt>Source</dt><dd className="break-all text-kumo-default">{msg.sourceUrl ?? msg.sourceTitle}</dd>
+                    <dt>Artifact</dt><dd className="break-all font-mono text-kumo-default">{msg.artifactHash}</dd>
+                    <dt>Harness</dt><dd className="font-mono text-kumo-default">v{msg.runtimeHarnessVersion}</dd>
+                    <dt>Compatibility</dt><dd className="font-mono text-kumo-default">{msg.compatibilityDate}</dd>
+                    <dt>Source type</dt><dd className="text-kumo-default">
+                      <span className="font-mono">{msg.sourceRootType}</span>
+                      <span className="ml-1 break-all text-kumo-inactive">({msg.sourceTypeHash})</span>
+                    </dd>
+                    <dt>Shared state</dt><dd className="text-kumo-default">{msg.sharedStateKey ?? "None"}</dd>
+                    <dt>Dependencies</dt><dd className="text-kumo-default">
+                      {msg.dependencySummary.length
+                        ? msg.dependencySummary.map(dep => (
+                          <div key={dep.name}>
+                            <span>{dep.name}@{dep.version}</span>
+                            {dep.integrity && (
+                              <span className="ml-1 break-all font-mono text-kumo-inactive">
+                                {dep.integrity}
+                              </span>
+                            )}
+                          </div>
+                        ))
+                        : "None"}
+                    </dd>
+                  </dl>
+                  <div>
+                    <div className="mb-1 font-medium text-kumo-default">Public TypeScript interface</div>
+                    <pre className="max-h-64 overflow-auto rounded-lg bg-kumo-tint p-3 font-mono text-[11px] leading-4 text-kumo-default">{msg.publicTypes}</pre>
+                  </div>
+                  <div>
+                    <div className="mb-1 font-medium text-kumo-default">Reviewed Contract code (compiled ESM)</div>
+                    <pre className="max-h-80 overflow-auto rounded-lg bg-kumo-tint p-3 font-mono text-[11px] leading-4 text-kumo-default">{msg.sourceCode}</pre>
+                  </div>
+                </div>
+              </details>
+            </div>
+            {isPending && (
+              <div className="ml-3 flex flex-shrink-0 items-center gap-2 self-center text-[13px]">
+                <button type="button" disabled={isProc}
+                  onClick={() => handleDenyContract(msg.requestId)}
+                  className="cursor-pointer rounded-md px-2 py-1 font-medium text-kumo-inactive hover:text-kumo-danger disabled:opacity-40">
+                  Deny
+                </button>
+                <button type="button" disabled={isProc}
+                  onClick={() => handleAcceptContract(msg.requestId)}
+                  className="cursor-pointer rounded-md bg-kumo-brand px-3 py-1 font-medium text-white hover:opacity-90 disabled:opacity-40">
+                  Install
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderActionCard = (msg: ActionChatMessage) => {
     const log = msg.actionLog;
     if (!log) return null;
@@ -6123,6 +6256,12 @@ function ChatInterface({
     const open = expandedActions.has(msg.actionId);
     const isProc = processingActions.has(msg.actionId);
     const safeResourceUrl = safeExternalUrl(log.resourceUrl);
+
+    // Contract possession already approved this provider action. While its deferred apply is in
+    // flight there is no human decision to make; surface controls only if application actually
+    // failed and the user must choose whether to retry or discard the staged action.
+    if (isAct && state === "pending" && log.contractPreapproved === true &&
+        log.contractApplyFailed !== true) return null;
 
     if (log.type === "bindHook") {
       const isDeleted = log.hookId === undefined;
@@ -7265,6 +7404,8 @@ function ChatInterface({
                         {msg.type === "action" && renderActionCard(msg)}
 
                         {msg.type === "connectionRequest" && renderConnectionRequestCard(msg)}
+
+                        {msg.type === "contractRequest" && renderContractRequestCard(msg)}
 
                         {msg.type === "useGadget" && (
                           <div className="max-w-[860px] text-[14px] leading-5 tracking-[-0.25px] text-kumo-subtle">

@@ -26,6 +26,7 @@ import {
   ActionLogEntry,
   WorkpieceId,
   WorkpieceSummary,
+  GadgetWorkpieceSummary,
   BlueprintOutput,
   WorkpiecesSubscriber,
 } from '@gadgets/workshop-shared/api'
@@ -218,7 +219,7 @@ function PaneWorkpieceTabs({
   activeId,
   onSelect,
 }: {
-  gadgets: WorkpieceSummary[]
+  gadgets: GadgetWorkpieceSummary[]
   activeId: WorkpieceId | null
   onSelect: (id: WorkpieceId) => void
 }) {
@@ -635,7 +636,9 @@ export default function GadgetEditor() {
   const outputSignature = useMemo(() => {
     const outputs = new Map<WorkpieceId, BlueprintOutput>()
     for (const workpiece of workpieces.values()) {
-      if (workpiece.output) outputs.set(workpiece.id, workpiece.output)
+      if (workpiece.type === 'gadget' && workpiece.output) {
+        outputs.set(workpiece.id, workpiece.output)
+      }
     }
     workpieceOutputsRef.current = outputs
     return JSON.stringify([...outputs])
