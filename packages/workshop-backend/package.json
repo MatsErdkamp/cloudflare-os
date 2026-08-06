@@ -21,6 +21,7 @@
     "@earendil-works/pi-ai": "0.83.0",
     "@cloudflare/puppeteer": "^1.2.0",
     "@gadgets/backend-utils": "workspace:*",
+    "@gadgets/contractors": "workspace:*",
     "@gadgets/error-reporting": "workspace:*",
     "@gadgets/typed-storage": "workspace:*",
     "@gadgets/workshop-shared": "workspace:*",

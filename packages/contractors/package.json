@@ -1,0 +1,37 @@
+{
+  "name": "@gadgets/contractors",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "types:check": "tsc --noEmit",
+    "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.3",
+    "zod": "4.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/node": "26.1.0",
+    "vitest": "^4.1.10"
+  }
+}
