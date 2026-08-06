@@ -7,7 +7,6 @@ const EXACT_VERSION_PATTERN =
 export function isContractPackageName(name: string): boolean {
   return PACKAGE_NAME_PATTERN.test(name);
 }
-
 /** Returns whether a dependency version is one exact SemVer rather than a range or tag. */
 export function isExactContractDependencyVersion(version: string): boolean {
   return EXACT_VERSION_PATTERN.test(version);
@@ -22,4 +21,3 @@ export function isWorkerCompatibilityDate(value: string): boolean {
     date.getUTCMonth() === Number(match[2]) - 1 &&
     date.getUTCDate() === Number(match[3]);
 }
-

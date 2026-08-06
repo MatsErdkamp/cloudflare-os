@@ -8,9 +8,7 @@ export function contractRestorationStorageKey(restorationId: string): string {
   if (!restorationId) throw new TypeError("Contract restoration ID must not be empty.");
   return `${CONTRACT_RESTORATION_STORAGE_PREFIX}${restorationId}`;
 }
-
 /** Narrow Manager capability used by a Contract facet to mint retractable restored stubs. */
 export interface ContractRestoreHost {
   restore<T extends RpcTarget>(restorationId: string): RpcStub<T>;
 }
-

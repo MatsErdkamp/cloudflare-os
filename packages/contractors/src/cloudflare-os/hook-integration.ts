@@ -4,4 +4,3 @@ export interface ContractOwnedHook<WorkpieceId = number> {
   readonly sourceGatekeeperId: WorkpieceId;
   readonly hookId: number;
 }
-

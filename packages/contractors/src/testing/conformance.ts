@@ -15,4 +15,3 @@ export async function assertContractCapabilitiesRetracted(
     throw new Error(`Contract capability calls survived retraction at indexes: ${surviving.join(", ")}.`);
   }
 }
-
