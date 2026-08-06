@@ -164,7 +164,7 @@ async function bobOpensAndCloses(shared: SharedGadget): Promise<ObserverConfigRe
 }
 
 describe("observer re-verification", () => {
-  it.concurrent("lists the connections each sharing role must verify", async () => {
+  it.concurrent("requires Source verification only for Manager-capable sharing roles", async () => {
     await withSession(async publicApi => {
       const [alice] = nextUsernames("alice");
       using aliceApi = await signUp(publicApi, alice);
@@ -175,17 +175,9 @@ describe("observer re-verification", () => {
       using unbound = await overseer.newGatekeeper(account.id, thingUrl("unbound"));
       if (!bound || !unbound) throw new Error("Failed to create test connections");
 
-      using gadget = await overseer.createGadget("Test Gadget", undefined, "TEST_GADGET");
-      await gadget.bind("TEST_THING", await bound.getId());
-
-      await expect(overseer.listObserverRequirements("use")).resolves.toEqual([
-        expect.objectContaining({
-          gatekeeperId: await bound.getId(),
-          vendorId: TEST_VENDOR_ID,
-          resourceTitle: "Test Thing bound",
-          resourceUrl: thingUrl("bound"),
-        }),
-      ]);
+      // Consumer Gadgets can no longer bind either Source directly. Their installed Contracts are
+      // the approved declassification boundary, so use-role collaborators need no Source account.
+      await expect(overseer.listObserverRequirements("use")).resolves.toEqual([]);
       await expect(overseer.listObserverRequirements("build")).resolves.toEqual([
         expect.objectContaining({ resourceTitle: "Test Ambient" }),
         expect.objectContaining({ resourceTitle: "Test Thing bound" }),

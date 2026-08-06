@@ -94,9 +94,42 @@ describe("OverseerDurableObject.startHook", () => {
 
     await expect(overseer.startHook(1)).rejects.toThrow("Hook has been deleted or disabled.");
   });
+
+  it("routes Contract-owned hook activity through the preapproved Contract Source queue", async () => {
+    let authorizeContractObservation = vi.fn(async () => {});
+    let callback = {};
+    let overseer = Object.create(OverseerDurableObject.prototype) as OverseerDurableObject;
+    Object.assign(overseer, {
+      env: {BLUEPRINTS: {get: async () => serializeAdminConfig(DEFAULT_ADMIN_CONFIG)}},
+      impl: {
+        requireContract: () => ({id: 9, artifactHash: "sha256:artifact"}),
+        authorizeContractObservation,
+        storage: {
+          boundHooks: {get: () => ({
+            enabled: true,
+            gatekeeperId: 2,
+            contractId: 9,
+            vendorId: "email",
+            callback,
+          })},
+          gatekeepers: {get: () => ({creationSpec: {type: "gatekeeper", vendorId: "email"}})},
+        },
+      },
+    });
+
+    let session = await overseer.startHook(1);
+    let description = {title: "Received email", description: "Private Source event"};
+    await session.approvalQueue.authorizeObservation(description);
+
+    expect(session.callback).toBe(callback);
+    expect(authorizeContractObservation).toHaveBeenCalledWith(
+      expect.objectContaining({contractId: 9, sourceGatekeeperId: 2, caller: {from: "hook"}}),
+      description,
+    );
+  });
 });
 
-async function makeTargetOverseer(gadgetId?: number) {
+async function makeTargetOverseer(gadgetId?: number, pendingContractChild = false) {
   let controllerEnable = vi.fn(async (_initiator: object, _target: object) => {});
   let record = {
     id: 4,
@@ -128,8 +161,13 @@ async function makeTargetOverseer(gadgetId?: number) {
       },
       storage: {
         prohibitAllSharing: {get: () => false},
-        boundHooks: {get: () => record, put: vi.fn()},
-        actions: {get: () => undefined, put: vi.fn()},
+        boundHooks: {get: () => record, list: () => [record], put: vi.fn()},
+        actions: {get: () => pendingContractChild ? {
+          id: 12,
+          type: "bindHook",
+          state: "pending",
+          contractAttribution: {contractOperationId: "operation-1"},
+        } : undefined, put: vi.fn()},
       },
     },
   } satisfies Pick<OverseerDurableObject, "open"> & {impl: object};
@@ -155,6 +193,14 @@ describe("hook target", () => {
     await client.enableHook(4);
 
     expect(controllerEnable.mock.calls[0][1]).toEqual({workspaceId: "workspace-id"});
+  });
+
+  it("does not allow a staged Contract hook to bypass its parent operation", async () => {
+    let {client, controllerEnable} = await makeTargetOverseer(17, true);
+
+    await expect(client.enableHook(4)).rejects.toThrow("parent operation");
+    expect(controllerEnable).not.toHaveBeenCalled();
+    await expect(client.listHooks()).resolves.toEqual([]);
   });
 
 });

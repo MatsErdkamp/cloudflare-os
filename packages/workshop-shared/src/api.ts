@@ -685,6 +685,18 @@ export const MAX_SITE_LOGO_BYTES = 256 * 1024;
 /** Maximum width or height of an admin-uploaded site logo in pixels. */
 export const MAX_SITE_LOGO_DIMENSION = 512;
 
+/** Deployment policy governing npm packages bundled into immutable Contract artifacts. */
+export type ContractorsDependencyPolicy = {
+  /** Package names that may be bundled; when omitted, packages are allowed unless denied. */
+  allowedPackages?: string[];
+  /** Package names that may never be bundled. */
+  deniedPackages?: string[];
+  /** Exact package versions allowed for named dependencies. */
+  allowedVersions?: Record<string, string>;
+  /** Maximum UTF-8 byte size of a compiled Contract bundle. */
+  maxBundleBytes?: number;
+};
+
 // All admin-managed deployment settings, returned by AdminApi.getSettings() for the admin UI.
 export type AdminSettingsView = {
   // Whether new account signups are allowed.
@@ -705,6 +717,8 @@ export type AdminSettingsView = {
   resourceVendors: AdminResourceVendor[];
   // The blueprints promoted as standard output formats, in menu order (including disabled ones).
   formats: AdminFormat[];
+  /** npm dependency governance applied before a Contract proposal can be approved. */
+  contractors: ContractorsDependencyPolicy;
 };
 
 // One promoted blueprint, as the admin Formats panel sees it: the deployment's curation plus
@@ -765,6 +779,9 @@ export interface AdminApi {
 
   // Replace the agent system-prompt instructions. Pass "" to clear. Rejects over MAX_INSTANCE_INSTRUCTIONS_LENGTH.
   setInstanceInstructions(text: string): Promise<void>;
+
+  /** Replace the npm dependency governance applied to proposed Contract artifacts. */
+  setContractorsDependencyPolicy(policy: ContractorsDependencyPolicy): Promise<void>;
 
   // Enable or disable a single gatekeeper resource type, keyed by vendor id + resource urlPattern.
   // Soft enforcement: disabling hides the resource from the connect UI, the resource picker, and the
@@ -1196,6 +1213,20 @@ export interface CodeSubscriber {
 // * rejected: Action was rejected by the user.
 export type ActionState = "pending" | "approved" | "rejected";
 
+/** Audit attribution added to Source activity performed through an installed Contract. */
+export type ContractActionAttribution = {
+  /** Installed Contract instance that exercised the Source. */
+  contractId: WorkpieceId;
+  /** Exact immutable artifact installed for the Contract instance. */
+  artifactHash: string;
+  /** Unique invocation that produced this activity. */
+  contractCallId: string;
+  /** Public Contract method invoked through the Consumer binding, when available. */
+  contractMethod?: string;
+  /** Parent manual operation, when the action was explicitly gated. */
+  contractOperationId?: string;
+};
+
 export type ActionLogEntry = {
   // Sequential ID number for the action. Counts up from when the workspace was created.
   id: number;
@@ -1211,6 +1242,9 @@ export type ActionLogEntry = {
   appliedAt?: Date;
 
   state: ActionState;
+
+  /** Present when this entry originated inside approved Contract code. */
+  contractAttribution?: ContractActionAttribution;
 } & ({
   type: "action";
   description: ActionDescription;
@@ -1223,6 +1257,12 @@ export type ActionLogEntry = {
   // True when the action was applied automatically by an auto-approval rule rather than by a human
   // clicking Approve. Only ever set alongside state "approved" (there is no automatic rejection).
   autoApproved?: boolean;
+
+  /** True when possession of the installed Contract cleared the human-review gate. */
+  contractPreapproved?: boolean;
+
+  /** True when deferred application failed and this preapproved action now needs a retry decision. */
+  contractApplyFailed?: boolean;
 } | {
   type: "observation";
   description: ObservationDescription;
@@ -1254,6 +1294,46 @@ export type BoundHookInfo = {
   resourceUrl?: string;
   description: HookDescription;
   enabled: boolean;
+};
+
+/** One bundled npm dependency included in an immutable Contract artifact. */
+export type ContractDependency = {
+  /** npm package name. */
+  name: string;
+  /** Exact bundled package version. */
+  version: string;
+  /** Content integrity recorded by the compiler, when available. */
+  integrity?: string;
+};
+
+/** Lifecycle of an explicit Contract approval operation. */
+export type ContractOperationState =
+    "pending" | "approved" | "rejected" | "applying" | "applied" | "failed";
+
+/** Serializable parent operation displayed above any staged provider actions. */
+export type ContractOperationSummary = {
+  /** Stable operation identifier. */
+  id: string;
+  /** Installed Contract instance that created the operation. */
+  contractId: WorkpieceId;
+  /** Exact artifact that was running. */
+  artifactHash: string;
+  /** Existing Cloudflare OS caller metadata; no separate Contract identity taxonomy. */
+  caller: Readonly<Record<string, unknown>>;
+  /** Human-facing operation title. */
+  title: string;
+  /** Human-facing explanation of the authority requested. */
+  description: string;
+  /** Current decision/application state. */
+  state: ContractOperationState;
+  /** Existing action-log entries staged beneath this operation. */
+  childActionIds: number[];
+  /** Instance-scoped retry key for approval.require(), when applicable. */
+  approvalKey?: string;
+  /** Time at which Contract code created the operation. */
+  createdAt: Date;
+  /** Time at which a human decision was recorded. */
+  decidedAt?: Date;
 };
 
 // Configuration for an AI spawner binding. This binding allows the gadget to programmatically
@@ -1450,6 +1530,24 @@ export interface Overseer extends RpcTarget {
   // Deny an agent's pending connection request. Updates the inline card. Does NOT resume the agent:
   // the turn stays ended so the user can decide what to tell the agent to do instead.
   denyConnectionRequest(requestId: string): Promise<void>;
+
+  /** Accept a pending Contract proposal after human review and install its exact artifact. */
+  acceptContractRequest(requestId: string): Promise<void>;
+
+  /** Deny a pending Contract proposal without installing authority. */
+  denyContractRequest(requestId: string): Promise<void>;
+
+  /** List durable Contract approval operations, including provider child action IDs. */
+  listContractOperations(): Promise<ContractOperationSummary[]>;
+
+  /** Approve and apply all staged children of one pending Contract operation. */
+  approveContractOperation(operationId: string): Promise<void>;
+
+  /** Reject all staged children of one pending Contract operation. */
+  rejectContractOperation(operationId: string): Promise<void>;
+
+  /** Retract an installed Contract, its bindings, facet state, callbacks, and pending operations. */
+  deleteContract(contractId: WorkpieceId): Promise<void>;
 
   // Subscribe to action adds/updates. Dispose the returned stub to unsubscribe.
   // If `startAfter` is set, replay actions changed after that timestamp.
@@ -1957,6 +2055,49 @@ export type AiChatMessageBody = {
   // before named chat bindings existed lack it; those are named and stamped lazily at the
   // turn-start naming chokepoint.
   bindingName?: string;
+} | {
+  /** The agent proposed installing reviewed code as a new delegated capability. */
+  type: "contractRequest";
+  /** Stable identifier used by the accept/deny RPCs. */
+  requestId: string;
+  /** Private Source selected by the Manager authoring flow. */
+  sourceGatekeeperId: WorkpieceId;
+  /** Denormalized Source title retained for proposal review. */
+  sourceTitle: string;
+  /** Denormalized Source URL retained for proposal review. */
+  sourceUrl?: string;
+  /** Exact content hash of the reviewed immutable artifact. */
+  artifactHash: string;
+  /** Exact retained Contract harness included in the artifact authority hash. */
+  runtimeHarnessVersion: string;
+  /** Display title of the installed Contract. */
+  title: string;
+  /** Complete public TypeScript declarations exposed to the target Gadget. */
+  publicTypes: string;
+  /** Reviewed executable Contract module stored in the immutable artifact. */
+  sourceCode: string;
+  /** Name under which the installed Contract appears in the Gadget environment. */
+  bindingName: string;
+  /** Gadget that will receive the installed capability. */
+  targetGadgetId: WorkpieceId;
+  /** Denormalized target Gadget title retained for proposal review. */
+  targetGadgetTitle: string;
+  /** Exact bundled dependency names and versions. */
+  dependencySummary: ContractDependency[];
+  /** Hash of the private Source declarations used by the compiler. */
+  sourceTypeHash: string;
+  /** Root Source type used by the compiler. */
+  sourceRootType: string;
+  /** Workers compatibility date used to produce the reviewed artifact. */
+  compatibilityDate: string;
+  /** Explicit cross-instance shared-state namespace, when requested. */
+  sharedStateKey?: string;
+  /** Proposal lifecycle. */
+  state: "pending" | "accepted" | "denied";
+  /** Durable acceptance claim used to reconcile an interrupted installation. */
+  accepting?: true;
+  /** Installed Contract instance after acceptance. */
+  contractId?: WorkpieceId;
 };
 
 // Bytes to upload as a chat attachment.
@@ -2148,6 +2289,39 @@ export type AiToolCall = {
   input: {
     vendorId: string;
   };
+  output?: string;
+} | {
+  /** Propose reviewed Contract code as a new installed capability. */
+  toolName: "proposeContract";
+  input: {
+    /** Chat binding name of the private Source. */
+    source: string;
+    /** Chat binding name of the target Gadget. */
+    targetGadget: string;
+    /** Human-facing Contract title. */
+    title: string;
+    /** Binding name exposed to the target Gadget. */
+    bindingName: string;
+    /** Executable ESM reviewed by the approver. */
+    sourceCode: string;
+    /** Complete public declarations reviewed by the approver. */
+    publicTypes: string;
+    /** Exact bundled dependency versions. */
+    dependencies?: ContractDependency[];
+    /** Compiler-produced content-addressed artifact hash. */
+    artifactHash: string;
+    /** Compiler-recorded hash of the selected Source declarations. */
+    sourceTypeHash: string;
+    /** Compiler-recorded Source root type name. */
+    sourceRootType: string;
+    /** Worker compatibility date used for the compiled artifact. */
+    compatibilityDate: string;
+    /** Exact Contract runtime harness version included in the artifact hash. */
+    runtimeHarnessVersion: string;
+    /** Explicit shared-state namespace. */
+    sharedStateKey?: string;
+  };
+  /** Stable proposal ID and artifact hash, serialized for history replay. */
   output?: string;
 } | {
   // Ask the user to connect a gatekeeper, pre-configured as much as the agent can manage. Renders
@@ -2401,33 +2575,49 @@ export type ConsoleLogEvent = {
   message: any[];
 }
 
-// Summary of one workpiece, delivered via Overseer.subscribeToWorkpieces(). In v1 only
-// gadget-type workpieces are published (gatekeeper workpieces -- chat capsules, ambient
-// singletons, connections -- are not listed); `type` discriminates for future workpiece types.
+/** Summary of one user-visible workpiece delivered by Overseer.subscribeToWorkpieces(). */
 export type WorkpieceSummary = {
+  /** Workspace-local workpiece identifier. */
   id: WorkpieceId;
-  type: "gadget";
-
-  // Display title. (For a gadget, its user-renamable title.)
+  /** Human-facing title. */
   title: string;
 
-  // The format this workpiece was built as, inherited from the blueprint it was instantiated
-  // from. Absent means a generic app. The UI names and draws the workpiece from this.
+  /** Chat that provisionally owns this workpiece, when it is not yet permanent. */
+  chatId?: number;
+} & ({
+  /** User-authored application code and state. */
+  type: "gadget";
+
+  /** Format inherited from the source blueprint, or absent for a generic app. */
   output?: BlueprintOutput;
 
-  // The name of the Y.Doc root map that holds this workpiece's files, if it owns files (see
-  // Overseer.subscribeToCode). For most gadgets this is the decimal workpiece ID; the gadget
-  // migrated from before multi-gadget support keeps the legacy unnamed root "".
+  /** Y.Doc map containing this Gadget's files, including the legacy empty-root form. */
   filesRoot?: string;
 
-  // If present, this workpiece exists only in the context of the given chat. The UI should display
-  // it only while the given chat is open.
-  //
-  // For gadgets, this means the gadget is still provisional: it becomes permanent when the user
-  // accepts the chat's changes through its creation message, and is deleted if those changes are
-  // reverted (or the chat is deleted).
-  chatId?: number;
-};
+} | {
+  /** Installed reviewed capability code. */
+  type: "contract";
+  /** Exact immutable artifact currently installed. */
+  artifactHash: string;
+  /** Exact retained harness used by the installed artifact. */
+  runtimeHarnessVersion: string;
+  /** Private Source used by this Contract, visible only as management metadata. */
+  sourceGatekeeperId: WorkpieceId;
+  /** Complete public declarations exposed to Consumers. */
+  publicTypes: string;
+  /** Time at which the reviewed capability was installed. */
+  createdAt: Date;
+  /** Existing principal identifier that approved installation. */
+  approvedBy: string;
+  /** Explicit shared-state namespace, when configured. */
+  sharedStateKey?: string;
+});
+
+/** Gadget branch of the user-visible workpiece summary union. */
+export type GadgetWorkpieceSummary = Extract<WorkpieceSummary, {type: "gadget"}>;
+
+/** Contract branch of the user-visible workpiece summary union. */
+export type ContractWorkpieceSummary = Extract<WorkpieceSummary, {type: "contract"}>;
 
 // Callback interface used to receive workpiece-list updates. See Overseer.subscribeToWorkpieces().
 export interface WorkpiecesSubscriber {
@@ -2450,6 +2640,9 @@ export type GadgetBindingInfo = {
 
   // The workpiece that the binding points at.
   target: WorkpieceId;
+
+  /** Kind of workpiece referenced, including read-only legacy Source metadata. */
+  targetType: "gadget" | "source" | "contract";
 
   // Denormalized display info about the target.
   resourceTitle: string;
@@ -2747,8 +2940,8 @@ export interface GadgetClient extends WorkpieceClient {
   // --- Binding management ---
   //
   // A gadget's bindings are edges mapping a name (as it appears in the gadget worker's `env`) to
-  // a target workpiece -- today always a gatekeeper. The same gatekeeper may be bound multiple
-  // times in one gadget or by several gadgets, under independent names.
+  // an installed Contract. Legacy Source edges remain visible as management metadata but cannot
+  // be newly installed into Consumer environments.
 
   // List this gadget's bindings.
   //
@@ -2759,9 +2952,9 @@ export interface GadgetClient extends WorkpieceClient {
   // Get the gatekeeper bound under the given name, or null if there is no such binding.
   getBinding(name: string): Promise<GatekeeperClient<any> | null>;
 
-  // Bind the given workpiece (a gatekeeper) into this gadget's `env` under `name`. Throws if the
-  // name is invalid (see validateBindingName()), reserved, or already bound in this gadget
-  // (including bound provisionally by another chat).
+  // Bind an unplaced installed Contract into this gadget's `env` under `name`. A Contract instance
+  // may have only one binding placement; another Gadget requires a separately approved instance.
+  // Throws if the name is invalid (see validateBindingName()), reserved, or already occupied.
   //
   // If `chatId` is provided, the binding is treated like an edit made in the given chat -- it is
   // proposed, but someone needs to click "accept changes" (call `mergeChanges()`) to make it
@@ -2773,9 +2966,9 @@ export interface GadgetClient extends WorkpieceClient {
   // target is already bound, does nothing. Either way, returns the target's binding name.
   bindWithSuggestedName(target: WorkpieceId, chatId?: number): Promise<string>;
 
-  // Remove the binding with the given name. This only removes the edge from this gadget -- the
-  // target gatekeeper itself survives (possibly no longer bound by any gadget); use
-  // GatekeeperClient.remove() to destroy the connection itself.
+  // Remove the binding with the given name. For a Contract edge this retracts the Contract instance
+  // globally, including its facet, callbacks, state, and any other legacy edges. For a legacy raw
+  // Source edge, only the edge is removed and the Source survives.
   unbind(name: string): Promise<void>;
 
   // Rename a binding while preserving its target and blueprint annotation. Throws if `oldName`

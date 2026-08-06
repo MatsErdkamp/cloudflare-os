@@ -10,13 +10,17 @@ export default defineConfig({
   plugins: [
     capnwebValidate(),
     cloudflareTest({
-      main: './src/server.ts',
+      main: './__tests__/worker.ts',
       miniflare: {
         compatibilityDate: '2026-02-02',
-        compatibilityFlags: ['experimental', 'nodejs_compat'],
+        compatibilityFlags: ['experimental', 'nodejs_compat', 'allow_irrevocable_stub_storage'],
         durableObjects: {
           TEST_OVERSEER: { className: 'OverseerDurableObject', useSQLite: true },
+          TEST_CONTRACT_HOST: { className: 'ContractRetractionTestHost', useSQLite: true },
         },
+        kvNamespaces: ['BLUEPRINTS'],
+        r2Buckets: ['BLUEPRINT_CONTENT'],
+        workerLoaders: { TEST_LOADER: {}, LOADER: {} },
       },
     }),
   ],

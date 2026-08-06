@@ -49,6 +49,42 @@ describe("parseAdminConfig", () => {
       { blueprintId: "other", enabled: true },
     ]);
   });
+
+  it("sanitizes Contract dependency governance and backfills legacy configs", () => {
+    expect(parseAdminConfig("{}").contractors).toEqual({});
+    let config = parseAdminConfig(JSON.stringify({
+      contractors: {
+        allowedPackages: ["zod", 42],
+        deniedPackages: ["left-pad"],
+        allowedVersions: {zod: "4.2.0", bad: 7},
+        maxBundleBytes: 250_000,
+      },
+    }));
+    expect(config.contractors).toEqual({
+      allowedPackages: ["zod"],
+      deniedPackages: ["left-pad"],
+      allowedVersions: {zod: "4.2.0"},
+      maxBundleBytes: 250_000,
+    });
+  });
+
+  it("drops unsafe persisted dependency values without discarding unrelated config", () => {
+    let config = parseAdminConfig(JSON.stringify({
+      siteName: "Kept",
+      contractors: {
+        allowedPackages: ["zod", "../escape", "zod"],
+        deniedPackages: ["left-pad"],
+        allowedVersions: {zod: "4.2.0", bad: "latest", "left-pad": "1.3.0"},
+        maxBundleBytes: 1.5,
+      },
+    }));
+    expect(config.siteName).toBe("Kept");
+    expect(config.contractors).toEqual({
+      allowedPackages: ["zod"],
+      deniedPackages: ["left-pad"],
+      allowedVersions: {zod: "4.2.0"},
+    });
+  });
 });
 
 describe("reorderFormats", () => {

@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, ContractOperationSummary, ContractDependency } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -45,6 +45,30 @@ import {
   validateChatAttachmentUpload,
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
+import {
+  contractHarnessForVersion,
+  ContractApprovalRejected,
+  ContractApprovalRequired,
+  assertContractStructuredData,
+  contractActionAttribution,
+  hashArtifact,
+  hashSourceTypes,
+  isContractPackageName,
+  isExactContractDependencyVersion,
+  isWorkerCompatibilityDate,
+  validateDependencyPolicy,
+} from "@gadgets/contractors/runtime";
+import type {
+  ContractActionAttribution as ContractorsContractActionAttribution,
+  ContractApprovalDescription,
+  ContractApprovalRequirement,
+  ContractArtifact,
+  ContractCallContext as ContractorsContractCallContext,
+  ContractOperationRecord as ContractorsContractOperationRecord,
+  ContractRecord as ContractorsContractRecord,
+  ContractSourceApprovalMode,
+} from "@gadgets/contractors/runtime";
+import { R2ContractArtifactStore } from "./contract-artifacts";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
@@ -194,6 +218,56 @@ type GatekeeperRecord = {
   bindingName?: string;
   blueprintAnnotation?: BlueprintBindingAnnotation;
 };
+
+// One installed Contract instance. The instance is itself the Consumer binding.
+type ContractRecord = ContractorsContractRecord<WorkpieceId> & {
+  installationRequestId?: string;
+};
+
+type Mutable<T> = {-readonly [Key in keyof T]: T[Key]};
+type ContractOperationRecord = Omit<
+  Mutable<ContractorsContractOperationRecord<WorkpieceId, GatekeeperCaller>>,
+  "childActionIds"
+> & {childActionIds: number[]};
+
+type ContractTombstoneRecord = ContractRecord & {
+  deletedAt: Date;
+};
+
+type ContractActionAttribution = ContractorsContractActionAttribution<WorkpieceId>;
+
+type ContractCallContext = ContractorsContractCallContext<WorkpieceId, GatekeeperCaller>;
+
+type ContractSessionInput = {
+  source: unknown;
+  policy: unknown;
+  restorer: NativeRpcTarget;
+  sharedState?: NativeRpcTarget;
+  caller: GatekeeperCaller;
+  contract: {id: string, artifactHash: string};
+};
+
+interface ContractFacetRpc extends DurableObject {
+  startSession(session: ContractSessionInput): Promise<unknown>;
+  restoreSession(session: ContractSessionInput, restorationId: string): Promise<unknown>;
+}
+
+interface ContractValidatorRpc extends DurableObject {
+  validate(): Promise<string | null>;
+}
+
+const CONTRACT_VALIDATOR_MODULE = `
+import {DurableObject} from "cloudflare:workers";
+import * as contractModule from "contract.js";
+
+export class ContractValidator extends DurableObject {
+  validate() {
+    return typeof contractModule.default === "function"
+      ? null
+      : "Contract module must export a default factory function.";
+  }
+}
+`;
 
 function gatekeeperVendorId(record: GatekeeperRecord | undefined): string | undefined {
   let spec = record?.creationSpec;
@@ -429,6 +503,7 @@ export type ActionRecord = {
   resourceUrl?: string;     // denormalized to avoid gatekeeper query
   createdAt: Date;
   state: ActionState;
+  contractAttribution?: ContractActionAttribution;
 
   // OBSOLETE: May still be present in records written when there was only one gadget per
   // workspace. Ignore; use `resourceTitle` for display instead.
@@ -440,6 +515,8 @@ export type ActionRecord = {
   description: ActionDescription;
   resolvedBy?: AiChatAuthorInfo;  // set when resolved (approved/rejected); absent while pending (or legacy)
   autoApproved?: boolean;         // set when applied by an auto-approval rule rather than a human
+  contractPreapproved?: boolean;  // possession of the Contract cleared the human-review gate
+  contractApplyFailed?: boolean;  // deferred preapproved application failed and needs a retry decision
 } | {
   type: "observation";
   description: ObservationDescription;
@@ -476,6 +553,7 @@ type BoundHookRecord = {
   callback: NativeRpcStub<RpcTarget>;
   description: HookDescription;
   enabled: boolean;
+  contractId?: WorkpieceId;
 };
 
 type ChatDraftUpdateRecord = {
@@ -626,6 +704,7 @@ function actionRecordToLog(record: ActionRecord): ActionLogEntry {
         resourceUrl: record.resourceUrl,
         createdAt: record.createdAt,
         state: record.state,
+        contractAttribution: record.contractAttribution,
         type: "observation",
         description: record.description,
       };
@@ -638,10 +717,13 @@ function actionRecordToLog(record: ActionRecord): ActionLogEntry {
         createdAt: record.createdAt,
         appliedAt: record.appliedAt,
         state: record.state,
+        contractAttribution: record.contractAttribution,
         type: "action",
         description: record.description,
         resolvedBy: record.resolvedBy,
         autoApproved: record.autoApproved,
+        contractPreapproved: record.contractPreapproved,
+        contractApplyFailed: record.contractApplyFailed,
       };
     case "bindHook":
       return {
@@ -651,6 +733,7 @@ function actionRecordToLog(record: ActionRecord): ActionLogEntry {
         resourceUrl: record.resourceUrl,
         createdAt: record.createdAt,
         state: record.state,
+        contractAttribution: record.contractAttribution,
         type: "bindHook",
         hookId: record.hookId,
         description: record.description,
@@ -779,6 +862,18 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
             return gatekeeper.bindingName ?? null;
           }
         }
+      }),
+
+      contracts: collection<ContractRecord>()({
+        primaryKey: "id",
+      }),
+
+      contractOperations: collection<ContractOperationRecord>()({
+        primaryKey: "id",
+      }),
+
+      contractTombstones: collection<ContractTombstoneRecord>()({
+        primaryKey: "id",
       }),
 
       actions: collection<ActionRecord>()({
@@ -1490,6 +1585,12 @@ class OverseerImpl implements AgentHooks {
     return record;
   }
 
+  requireContract(id: WorkpieceId): ContractRecord {
+    let record = this.storage.contracts.get(id);
+    if (!record) throw new Error(`No such Contract: ${id}`);
+    return record;
+  }
+
   // Name of the Y.Doc root map holding the given gadget's files. The default gadget keeps the
   // legacy unnamed root ""; all others use the decimal workpiece ID.
   gadgetRootName(id: WorkpieceId): string {
@@ -1708,7 +1809,7 @@ class OverseerImpl implements AgentHooks {
         ([, edge]) => !edge.pending || edge.pending.chatId === forChatId);
   }
 
-  // Bind `target` (a gatekeeper) into gadget `gadgetId`'s env under `name`. If `chatId` is
+  // Bind a Contract instance into gadget `gadgetId`'s env under `name`. If `chatId` is
   // given, the edge is provisional to that chat (see BindingRecord.pending); the caller is
   // responsible for getting the addition recorded in the chat log so the pending edge gets
   // sequence-stamped (see addChatMessages()).
@@ -1730,11 +1831,23 @@ class OverseerImpl implements AgentHooks {
       }
       throw new Error(`There is already a binding named "${name}".`);
     }
-    if (!this.storage.gatekeepers.get(target)) {
+    if (!this.storage.contracts.get(target)) {
       if (this.storage.gadgets.get(target)) {
         throw new Error(`Gadget-to-gadget bindings are not supported yet.`);
       }
-      throw new Error(`No such gatekeeper: ${target}`);
+      if (this.storage.gatekeepers.get(target)) {
+        throw new Error("Gadgets can only bind installed Contracts, not raw Sources.");
+      }
+      throw new Error(`No such Contract: ${target}`);
+    }
+    for (let other of this.storage.gadgets.list()) {
+      let placement = Object.entries(other.bindings).find(([, edge]) => edge.target === target);
+      if (placement) {
+        throw new Error(
+          `Contract ${target} is already installed as ${other.title}.${placement[0]}; ` +
+          "create and approve a separate Contract instance for another binding placement.",
+        );
+      }
     }
     gadget.bindings[name] = {target, ...(chatId !== undefined ? {pending: {chatId}} : {})};
     this.storage.gadgets.put(gadget);
@@ -1786,7 +1899,14 @@ class OverseerImpl implements AgentHooks {
   // any content later resurrected into the root by an old client or merged branch is inert
   // because the registry entry -- the enumeration source of truth -- is gone.
   async removeGadget(id: WorkpieceId): Promise<void> {
-    this.getGadgetRecord(id);  // validate it exists
+    let gadget = this.getGadgetRecord(id);  // validate it exists
+
+    // A Contract instance is one approved binding placement. Removing its owning Gadget retracts
+    // that instance instead of leaving movable ambient authority behind.
+    let contracts = new Set(Object.values(gadget.bindings)
+        .map(edge => edge.target)
+        .filter(target => this.storage.contracts.get(target) !== undefined));
+    for (let contractId of contracts) await this.deleteContract(contractId);
 
     // Disable and delete hooks that wake this gadget.
     let def = this.defaultGadgetId;
@@ -1828,6 +1948,7 @@ class OverseerImpl implements AgentHooks {
       await record.controller.disable();
     }
     this.storage.boundHooks.delete(record.id);
+    record.callback[Symbol.dispose]?.();
 
     let actionRecord = this.storage.actions.get(record.actionId);
     if (actionRecord?.type === "bindHook") {
@@ -1837,14 +1958,15 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
-  // Subscribe to the workspace's workpiece list. In v1 only gadget-type workpieces are published.
-  // When `includePending` is false (non-owner/use-role subscribers), gadgets still provisional to
+  // Subscribe to the workspace's user-visible Gadget and Contract workpieces.
+  // When `includePending` is false (non-owner/use-role subscribers), workpieces still provisional to
   // some chat are withheld entirely: they are proposals within the owner's chats, not part of the
   // shared workspace until accepted. (Promotion then surfaces them via the collection's update
   // notification.)
   subscribeToWorkpieces(subscriber: RpcStub<WorkpiecesSubscriber>,
                         includePending: boolean): RpcStub<{}> {
     let gadgets = this.storage.gadgets;
+    let contracts = this.storage.contracts;
     subscriber = subscriber.dup();  // keep stub after return
 
     let toSummary = (record: GadgetRecord): WorkpieceSummary => {
@@ -1867,11 +1989,12 @@ class OverseerImpl implements AgentHooks {
     let unsubscribe = () => {
       if (disposed) return;
       disposed = true;
-      gadgets.unsubscribe(dbSubscriber);
+      gadgets.unsubscribe(gadgetSubscriber);
+      contracts.unsubscribe(contractSubscriber);
       subscriber[Symbol.dispose]();
     };
 
-    let dbSubscriber = {
+    let gadgetSubscriber = {
       add(record: GadgetRecord) {
         if (!includePending && record.pending) return;
         subscriber.entry(toSummary(record)).catch(unsubscribe);
@@ -1886,15 +2009,48 @@ class OverseerImpl implements AgentHooks {
       },
     };
 
+    let toContractSummary = (record: ContractRecord): WorkpieceSummary => ({
+      id: record.id,
+      type: "contract",
+      title: record.title,
+      artifactHash: record.artifactHash,
+      runtimeHarnessVersion: record.runtimeHarnessVersion,
+      sourceGatekeeperId: record.sourceGatekeeperId,
+      publicTypes: record.publicTypes,
+      createdAt: record.createdAt,
+      approvedBy: record.approvedBy,
+      ...(record.sharedStateKey ? {sharedStateKey: record.sharedStateKey} : {}),
+      ...(record.pending ? {chatId: record.pending.chatId} : {}),
+    });
+    let contractSubscriber = {
+      add(record: ContractRecord) {
+        if (!includePending && record.pending) return;
+        subscriber.entry(toContractSummary(record)).catch(unsubscribe);
+      },
+      update(_oldRecord: ContractRecord, newRecord: ContractRecord) {
+        if (!includePending && newRecord.pending) return;
+        subscriber.entry(toContractSummary(newRecord)).catch(unsubscribe);
+      },
+      remove(record: ContractRecord) {
+        if (!includePending && record.pending) return;
+        subscriber.removed(record.id).catch(unsubscribe);
+      },
+    };
+
     subscriber.onRpcBroken(() => unsubscribe());
 
     for (let record of gadgets.list()) {
       if (!includePending && record.pending) continue;
       subscriber.entry(toSummary(record)).catch(unsubscribe);
     }
+    for (let record of contracts.list()) {
+      if (!includePending && record.pending) continue;
+      subscriber.entry(toContractSummary(record)).catch(unsubscribe);
+    }
     subscriber.ready().catch(unsubscribe);
 
-    gadgets.subscribe(dbSubscriber);
+    gadgets.subscribe(gadgetSubscriber);
+    contracts.subscribe(contractSubscriber);
 
     // @ts-expect-error Bugs in native RPC types make this not work currently.
     return new NativeRpcStub<{}>({
@@ -2022,12 +2178,29 @@ class OverseerImpl implements AgentHooks {
   }
 
   makeBindingLoopback(target: BindingLoopbackTarget, caller: GatekeeperCaller) {
-    let props: GatekeeperLoopbackProps = {
+    let props: BindingLoopbackProps = {
       overseerId: this.ctx.id.toString(),
       target,
       caller,
     };
-    return this.ctx.exports.GatekeeperLoopback({props});
+    return this.ctx.exports.BindingLoopback({props});
+  }
+
+  makeManagerSourceLoopback(gatekeeperId: WorkpieceId, caller: GatekeeperCaller) {
+    let props: ManagerSourceLoopbackProps = {
+      overseerId: this.ctx.id.toString(),
+      gatekeeperId,
+      caller,
+    };
+    return this.ctx.exports.ManagerSourceLoopback({props});
+  }
+
+  makeContractCapabilityLoopback(
+      contractId: WorkpieceId, restorationId: string, caller: GatekeeperCaller) {
+    let props: ContractCapabilityLoopbackProps = {
+      overseerId: this.ctx.id.toString(), contractId, restorationId, caller,
+    };
+    return this.ctx.exports.ContractCapabilityLoopback({props});
   }
 
   // Build the flat `env` handed to a gadget's dynamically-loaded worker: the gadget's named
@@ -2041,7 +2214,8 @@ class OverseerImpl implements AgentHooks {
     let gadget = this.getGadgetRecord(gadgetId);
     env.GADGET = this.makeBindingLoopback({type: "gadget", id: gadgetId}, caller);
     for (let [name, edge] of this.visibleBindings(gadget, forChatId)) {
-      env[name] = this.makeBindingLoopback({type: "gatekeeper", id: edge.target}, caller);
+      this.requireContract(edge.target);
+      env[name] = this.makeBindingLoopback({type: "contract", id: edge.target}, caller);
     }
     return env;
   }
@@ -2072,8 +2246,10 @@ class OverseerImpl implements AgentHooks {
         case "workpiece": {
           if (this.storage.gadgets.get(entry.id)) {
             env[name] = this.makeBindingLoopback({type: "gadget", id: entry.id}, caller);
+          } else if (this.storage.contracts.get(entry.id)) {
+            env[name] = this.makeBindingLoopback({type: "contract", id: entry.id}, caller);
           } else if (this.storage.gatekeepers.get(entry.id)) {
-            env[name] = this.makeBindingLoopback({type: "gatekeeper", id: entry.id}, caller);
+            env[name] = this.makeManagerSourceLoopback(entry.id, caller);
           }
           break;
         }
@@ -2467,6 +2643,207 @@ class OverseerImpl implements AgentHooks {
     });
   }
 
+  loadContractWorker(artifactHash: string): WorkerStub {
+    return this.env.LOADER.get(`${this.ctx.id}.contract.${artifactHash}`, async () => {
+      let artifact = await new R2ContractArtifactStore(this.env.BLUEPRINT_CONTENT).get(artifactHash);
+      if (!artifact) throw new Error(`Contract artifact ${artifactHash} is missing.`);
+      return {
+        compatibilityDate: artifact.compatibilityDate,
+        compatibilityFlags: ["allow_irrevocable_stub_storage"],
+        mainModule: "contract-harness.js",
+        modules: {
+          ...artifact.modules,
+          "contract-harness.js": contractHarnessForVersion(artifact.runtimeHarnessVersion),
+        },
+        env: {},
+        globalOutbound: null,
+      };
+    });
+  }
+
+  async validateContractArtifact(artifact: ContractArtifact): Promise<void> {
+    let worker = this.env.LOADER.get(
+        `${this.ctx.id}.contract-validation.${artifact.hash}`, () => ({
+          compatibilityDate: artifact.compatibilityDate,
+          mainModule: "contract-validator.js",
+          modules: {
+            ...artifact.modules,
+            "contract-validator.js": CONTRACT_VALIDATOR_MODULE,
+          },
+          env: {},
+          globalOutbound: null,
+        }));
+    let facetName = `contractValidation${artifact.hash.slice("sha256:".length)}`;
+    let facet = this.ctx.facets.get<ContractValidatorRpc>(facetName, () => ({
+      class: worker.getDurableObjectClass<ContractValidatorRpc>("ContractValidator"),
+      id: facetName,
+    }));
+    try {
+      let error = await facet.validate();
+      if (error) throw new TypeError(error);
+    } finally {
+      this.ctx.facets.delete(facetName);
+    }
+  }
+
+  async validateContractArtifactPolicy(artifact: ContractArtifact): Promise<void> {
+    let dependencyNames = new Set<string>();
+    for (let dependency of artifact.dependencies) {
+      if (dependencyNames.has(dependency.name)) {
+        throw new Error(`Dependency ${dependency.name} was listed more than once.`);
+      }
+      dependencyNames.add(dependency.name);
+      if (!isContractPackageName(dependency.name) ||
+          !isExactContractDependencyVersion(dependency.version) ||
+          !/^sha256-[A-Za-z0-9+/]+=*$/.test(dependency.integrity ?? "")) {
+        throw new Error(
+          `Dependency ${dependency.name}@${dependency.version} lacks exact compiler integrity.`,
+        );
+      }
+    }
+
+    let policy = (await readAdminConfig(this.env)).contractors;
+    validateDependencyPolicy(
+        Object.fromEntries(artifact.dependencies.map(({name, version}) => [name, version])),
+        policy);
+
+    let encoder = new TextEncoder();
+    let bundleBytes = Object.values(artifact.modules)
+        .reduce((total, module) => total + encoder.encode(module).byteLength, 0);
+    if (policy.maxBundleBytes !== undefined && bundleBytes > policy.maxBundleBytes) {
+      throw new Error(
+          `Contract bundle is ${bundleBytes} bytes; limit is ${policy.maxBundleBytes}.`);
+    }
+  }
+
+  getContractFacet(contract: ContractRecord): Fetcher<ContractFacetRpc> {
+    let facetName = `contract${contract.id}`;
+    return this.ctx.facets.get<ContractFacetRpc>(facetName, () => {
+      let worker = this.loadContractWorker(contract.artifactHash);
+      return {
+        class: worker.getDurableObjectClass<ContractFacetRpc>("ContractFacet"),
+        id: facetName,
+      };
+    });
+  }
+
+  async createContract(
+      artifact: ContractArtifact,
+      sourceGatekeeperId: WorkpieceId,
+      title: string,
+      approvedBy: string,
+      targetGadgetId: WorkpieceId,
+      bindingName: string,
+      sharedStateKey?: string,
+      installationRequestId?: string): Promise<ContractRecord> {
+    if (artifact.mainModule !== "contract.js" ||
+        typeof artifact.modules["contract.js"] !== "string") {
+      throw new Error("Contract artifact must provide its reviewed contract.js main module.");
+    }
+    let {hash, createdAt: _createdAt, ...authority} = artifact;
+    contractHarnessForVersion(artifact.runtimeHarnessVersion);
+    let expectedHash = await hashArtifact(authority);
+    if (hash !== expectedHash) {
+      throw new Error("Contract artifact content does not match its reviewed hash.");
+    }
+    await this.validateContractArtifactPolicy(artifact);
+
+    let source = this.getGatekeeperFacet(sourceGatekeeperId);
+    let [sourceDescription, sourceTypes] = await Promise.all([
+      source.describe(),
+      source.getTypeScriptTypes(),
+    ]);
+    if (sourceDescription.tsType !== artifact.sourceRootType ||
+        await hashSourceTypes(sourceTypes) !== artifact.sourceTypeHash) {
+      throw new Error("Contract artifact was compiled against different Source types.");
+    }
+
+    await this.validateContractArtifact(artifact);
+    await new R2ContractArtifactStore(this.env.BLUEPRINT_CONTENT).put(artifact);
+    let id = this.allocateWorkpieceId();
+    let record: ContractRecord = {
+      id,
+      artifactHash: artifact.hash,
+      runtimeHarnessVersion: artifact.runtimeHarnessVersion,
+      sourceGatekeeperId,
+      title: title.trim() || "Contract",
+      publicTypes: artifact.publicTypes,
+      createdAt: new Date(),
+      approvedBy,
+      ...(sharedStateKey ? {sharedStateKey} : {}),
+      ...(installationRequestId ? {installationRequestId} : {}),
+    };
+    this.storage.contracts.put(record);
+    try {
+      this.bindWorkpiece(targetGadgetId, bindingName, id);
+    } catch (error) {
+      this.storage.contracts.delete(id);
+      throw error;
+    }
+    return record;
+  }
+
+  async deleteContract(contractId: WorkpieceId): Promise<void> {
+    let contract = this.requireContract(contractId);
+
+    for (let hook of Array.from(this.storage.boundHooks.list())) {
+      if (hook.contractId !== contractId) continue;
+      if (hook.enabled) {
+        try {
+          await hook.controller.disable();
+        } catch (error) {
+          this.logger.warn("failed to disable Contract hook during retraction", {
+            event: "contract.hook.disable.failed", gadgetId: String(contractId),
+            operation: `hook:${hook.id}`, error,
+          });
+        }
+      }
+      hook.callback[Symbol.dispose]?.();
+      this.storage.boundHooks.delete(hook.id);
+      let action = this.storage.actions.get(hook.actionId);
+      if (action?.type === "bindHook") {
+        action.enabled = false;
+        delete action.hookId;
+        if (action.state === "pending" && action.contractAttribution?.contractOperationId) {
+          action.state = "rejected";
+        }
+        this.storage.actions.put(action);
+      }
+    }
+
+    for (let operation of Array.from(this.storage.contractOperations.list())) {
+      if (operation.contractId === contractId &&
+          (operation.state === "pending" || operation.state === "applying")) {
+        try {
+          await this.rejectContractOperation(operation.id);
+        } catch (error) {
+          this.logger.warn("failed to reject all staged Contract actions during retraction", {
+            event: "contract.operation.reject.failed", gadgetId: String(contractId),
+            operation: operation.id, error,
+          });
+        }
+      }
+    }
+
+    for (let gadget of Array.from(this.storage.gadgets.list())) {
+      let changed = false;
+      for (let [name, edge] of Object.entries(gadget.bindings)) {
+        if (edge.target === contractId) {
+          delete gadget.bindings[name];
+          changed = true;
+        }
+      }
+      if (changed) {
+        this.storage.gadgets.put(gadget);
+        this.bumpVersion([gadget.id]);
+      }
+    }
+
+    this.ctx.facets.delete(`contract${contractId}`);
+    this.storage.contracts.delete(contractId);
+    this.storage.contractTombstones.put({...contract, deletedAt: new Date()});
+  }
+
   // Apply a single pending action: invoke the gatekeeper, mark it approved, and persist (the put
   // auto-notifies subscribeToActions). Shared by manual approval (`approveAction`) and the
   // auto-approval drain (`drainAutoApprovals`). The caller is responsible for validating that the
@@ -2484,6 +2861,7 @@ class OverseerImpl implements AgentHooks {
     record.appliedAt = new Date();
     record.resolvedBy = resolvedBy;
     record.autoApproved = autoApproved;
+    delete record.contractApplyFailed;
     this.storage.actions.put(record);
   }
 
@@ -2548,7 +2926,7 @@ class OverseerImpl implements AgentHooks {
       gatekeeperRecord.hasSlashCommands = description.hasSlashCommands;
       this.storage.gatekeepers.put(gatekeeperRecord);
     } catch (error) {
-      this.removeGatekeeper(id);
+      await this.removeGatekeeper(id);
       throw error;
     }
 
@@ -2558,7 +2936,11 @@ class OverseerImpl implements AgentHooks {
   // Destroy a gatekeeper (connection) workpiece. Any binding edges pointing at it are severed so
   // no gadget's env retains a dangling entry. (This is distinct from merely unbinding it from one
   // gadget -- GadgetClient.unbind() -- which leaves the gatekeeper alive, possibly orphaned.)
-  removeGatekeeper(id: number) {
+  async removeGatekeeper(id: number): Promise<void> {
+    // Removing the private Source retracts every Contract instance whose authority depended on it.
+    for (let contract of Array.from(this.storage.contracts.list())) {
+      if (contract.sourceGatekeeperId === id) await this.deleteContract(contract.id);
+    }
     for (let gadget of Array.from(this.storage.gadgets.list())) {
       let names = Object.entries(gadget.bindings)
           .filter(([, edge]) => edge.target === id)
@@ -2576,8 +2958,8 @@ class OverseerImpl implements AgentHooks {
     this.storage.gatekeepers.delete(id);
   }
 
-  // Open the session behind a binding loopback.
-  startGatekeeperSession(target: BindingLoopbackTarget, caller: GatekeeperCaller): Promise<any> {
+  // Open the Gadget or installed Contract behind a Consumer binding loopback.
+  startBindingSession(target: BindingLoopbackTarget, caller: GatekeeperCaller): Promise<any> {
     switch (target.type) {
       case "gadget": {
         if (caller.from === "agent") {
@@ -2587,16 +2969,378 @@ class OverseerImpl implements AgentHooks {
         return this.getGadgetFacet(target.id, chatId);
       }
 
-      case "gatekeeper": {
-        let client = new GatekeeperClientImpl<any>(
-            this, target.id, this.getGatekeeperFacet(target.id), caller);
-        return client.openSession();
-      }
-
-      default:
-        target.type satisfies never;
-        throw new TypeError("Unknown binding target type.");
+      case "contract": return this.startContractSession(target.id, caller);
     }
+  }
+
+  // Privileged Manager-only raw Source access for Contract authoring and testing.
+  startManagerSourceSession(gatekeeperId: WorkpieceId, caller: GatekeeperCaller): Promise<any> {
+    let client = new GatekeeperClientImpl<any>(
+        this, gatekeeperId, this.getGatekeeperFacet(gatekeeperId), caller);
+    return client.openSession();
+  }
+
+  async startContractSession(
+      contractId: WorkpieceId, caller: GatekeeperCaller,
+      methodName?: string): Promise<unknown> {
+    let contract = this.requireContract(contractId);
+    let call: ContractCallContext = {
+      callId: crypto.randomUUID(),
+      contractId,
+      artifactHash: contract.artifactHash,
+      sourceGatekeeperId: contract.sourceGatekeeperId,
+      caller,
+      startedAt: new Date(),
+      ...(methodName ? {methodName} : {}),
+    };
+    let source = await this.openContractSourceSession(call, {type: "preapproved"});
+    let policy = {
+      approval: new ContractApprovalTarget(this, call),
+    };
+    let sharedState = contract.sharedStateKey
+        ? new ContractSharedStateTarget(this, contract.sharedStateKey)
+        : undefined;
+    try {
+      return await this.getContractFacet(contract).startSession({
+        source,
+        policy,
+        restorer: new ContractRestorerTarget(this, call),
+        sharedState,
+        caller,
+        contract: {id: String(contract.id), artifactHash: contract.artifactHash},
+      });
+    } finally {
+      source[Symbol.dispose]?.();
+    }
+  }
+
+  async invokeContractMethod(
+      contractId: WorkpieceId, caller: GatekeeperCaller,
+      methodName: string, args: unknown[]): Promise<unknown> {
+    let binding = await this.startContractSession(contractId, caller, methodName);
+    try {
+      let method = Reflect.get(binding as object, methodName);
+      if (typeof method !== "function") {
+        throw new TypeError(`Contract binding has no callable method ${methodName}.`);
+      }
+      return await Reflect.apply(method, binding, args);
+    } finally {
+      (binding as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    }
+  }
+
+  async invokeRestoredContractMethod(
+      contractId: WorkpieceId, restorationId: string, caller: GatekeeperCaller,
+      methodName: string, args: unknown[]): Promise<unknown> {
+    let contract = this.requireContract(contractId);
+    let call: ContractCallContext = {
+      callId: crypto.randomUUID(),
+      contractId,
+      artifactHash: contract.artifactHash,
+      sourceGatekeeperId: contract.sourceGatekeeperId,
+      caller,
+      startedAt: new Date(),
+      methodName,
+    };
+    let source = await this.openContractSourceSession(call, {type: "preapproved"});
+    let policy = {approval: new ContractApprovalTarget(this, call)};
+    let sharedState = contract.sharedStateKey
+        ? new ContractSharedStateTarget(this, contract.sharedStateKey)
+        : undefined;
+    let capability: unknown;
+    try {
+      capability = await this.getContractFacet(contract).restoreSession({
+        source,
+        policy,
+        restorer: new ContractRestorerTarget(this, call),
+        sharedState,
+        caller,
+        contract: {id: String(contract.id), artifactHash: contract.artifactHash},
+      }, restorationId);
+      let method = Reflect.get(capability as object, methodName);
+      if (typeof method !== "function") {
+        throw new TypeError(`Restored Contract capability has no callable method ${methodName}.`);
+      }
+      return await Reflect.apply(method, capability, args);
+    } finally {
+      (capability as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
+      source[Symbol.dispose]?.();
+    }
+  }
+
+  openContractSourceSession(
+      call: ContractCallContext,
+      mode: ContractSourceApprovalMode): Promise<NativeRpcStub<NativeRpcTarget>> {
+    let queue = new ContractSourceApprovalQueueImpl(this, call, mode);
+    return this.getGatekeeperFacet(call.sourceGatekeeperId).startSession(queue);
+  }
+
+  async runContractManual(
+      call: ContractCallContext,
+      description: ContractApprovalDescription,
+      operation: NativeRpcStub<(context: {source: unknown}) => Promise<unknown>>): Promise<unknown> {
+    let operationId = crypto.randomUUID();
+    this.storage.contractOperations.put({
+      id: operationId,
+      contractId: call.contractId,
+      artifactHash: call.artifactHash,
+      caller: call.caller,
+      title: description.title,
+      description: description.description,
+      state: "pending",
+      childActionIds: [],
+      createdAt: new Date(),
+    });
+
+    let source: NativeRpcStub<NativeRpcTarget> | undefined;
+    try {
+      source = await this.openContractSourceSession(call, {type: "manual", operationId});
+      return await operation({source});
+    } catch (error) {
+      try {
+        await this.rejectContractOperation(operationId);
+      } catch (rejectionError) {
+        this.logger.warn("failed to discard staged actions after Contract callback failure", {
+          event: "contract.operation.abort.failed", operation: operationId, error: rejectionError,
+        });
+      }
+      let record = this.storage.contractOperations.get(operationId);
+      if (record) {
+        record.state = "failed";
+        record.decidedAt = new Date();
+        this.storage.contractOperations.put(record);
+      }
+      throw error;
+    } finally {
+      source?.[Symbol.dispose]?.();
+      operation[Symbol.dispose]?.();
+    }
+  }
+
+  requireContractApproval(
+      call: ContractCallContext, description: ContractApprovalRequirement): never | void {
+    let existing = [...this.storage.contractOperations.list()].find(operation =>
+      operation.contractId === call.contractId && operation.approvalKey === description.key);
+    if (existing) {
+      if (existing.state === "approved" || existing.state === "applied") return;
+      if (existing.state === "rejected") throw new ContractApprovalRejected(existing.id);
+      throw new ContractApprovalRequired(existing.id);
+    }
+
+    let operationId = crypto.randomUUID();
+    this.storage.contractOperations.put({
+      id: operationId,
+      contractId: call.contractId,
+      artifactHash: call.artifactHash,
+      caller: call.caller,
+      title: description.title,
+      description: description.description,
+      state: "pending",
+      childActionIds: [],
+      approvalKey: description.key,
+      createdAt: new Date(),
+    });
+    throw new ContractApprovalRequired(operationId);
+  }
+
+  async authorizeContractObservation(
+      call: ContractCallContext, description: ObservationDescription): Promise<void> {
+    let actionId = this.storage.nextActionId.get();
+    this.storage.nextActionId.put(actionId + 1);
+    let source = this.storage.gatekeepers.get(call.sourceGatekeeperId);
+    this.storage.actions.put({
+      id: actionId,
+      gatekeeperId: call.sourceGatekeeperId,
+      caller: call.caller,
+      resourceTitle: source?.resourceTitle,
+      resourceUrl: source?.resourceUrl,
+      createdAt: new Date(),
+      state: "approved",
+      type: "observation",
+      description,
+      contractAttribution: contractActionAttribution(call),
+    });
+    await this.#associateAction(call.caller, actionId);
+  }
+
+  async submitContractAction(
+      call: ContractCallContext, mode: ContractSourceApprovalMode,
+      action: number, description: ActionDescription): Promise<void> {
+    if (this.storage.prohibitAllSharing.get()) {
+      throw new Error("This workspace is prohibited from performing actions.");
+    }
+    let actionId = this.storage.nextActionId.get();
+    this.storage.nextActionId.put(actionId + 1);
+    let source = this.storage.gatekeepers.get(call.sourceGatekeeperId);
+    let record: ActionRecord & {type: "action"} = {
+      id: actionId,
+      gatekeeperId: call.sourceGatekeeperId,
+      caller: call.caller,
+      resourceTitle: source?.resourceTitle,
+      resourceUrl: source?.resourceUrl,
+      action,
+      createdAt: new Date(),
+      state: "pending",
+      type: "action",
+      description,
+      contractAttribution: contractActionAttribution(
+          call, mode.type === "manual" ? mode.operationId : undefined),
+      contractPreapproved: mode.type === "preapproved",
+    };
+    this.storage.actions.put(record);
+    if (mode.type === "manual") {
+      let operation = this.storage.contractOperations.get(mode.operationId);
+      if (!operation || operation.contractId !== call.contractId || operation.state !== "pending") {
+        throw new Error("Contract manual approval scope is no longer pending.");
+      }
+      operation.childActionIds.push(actionId);
+      this.storage.contractOperations.put(operation);
+      return;
+    }
+
+    await this.#associateAction(call.caller, actionId);
+
+    this.ctx.waitUntil(Promise.resolve().then(async () => {
+      try {
+        await this.applyPreapprovedContractAction(actionId);
+      } catch (error) {
+        let failed = this.storage.actions.get(actionId);
+        if (failed?.type === "action" && failed.state === "pending" &&
+            failed.contractPreapproved === true) {
+          failed.contractApplyFailed = true;
+          this.storage.actions.put(failed);
+        }
+        this.logger.error("failed to apply preapproved Contract action", {
+          event: "contract.action.apply.failed", actionId, error,
+        });
+      }
+    }));
+  }
+
+  async applyPreapprovedContractAction(actionId: number): Promise<void> {
+    let record = this.storage.actions.get(actionId);
+    if (!record || record.type !== "action" || record.state !== "pending" ||
+        !record.contractAttribution) {
+      throw new Error(`Contract action is not pending: ${actionId}`);
+    }
+    await this.getGatekeeperFacet(record.gatekeeperId).applyAction(record.action);
+    record.state = "approved";
+    record.appliedAt = new Date();
+    record.contractPreapproved = true;
+    delete record.contractApplyFailed;
+    this.storage.actions.put(record);
+  }
+
+  assertContractChildNotIndividuallyDecidable(action: ActionRecord & {type: "action"}): void {
+    if (action.contractAttribution?.contractOperationId) {
+      throw new Error(
+          "Contract child actions can only be decided through their parent operation.");
+    }
+  }
+
+  async approveContractOperation(
+      operationId: string, resolvedBy?: AiChatAuthorInfo): Promise<void> {
+    let operation = this.storage.contractOperations.get(operationId);
+    if (!operation || operation.state !== "pending") {
+      throw new Error(`Contract operation is not pending: ${operationId}`);
+    }
+    operation.state = "applying";
+    operation.decidedAt = new Date();
+    this.storage.contractOperations.put(operation);
+    try {
+      for (let actionId of operation.childActionIds) {
+        let action = this.storage.actions.get(actionId);
+        if (!action || action.state !== "pending") {
+          throw new Error(`Contract child action is not pending: ${actionId}`);
+        }
+        if (action.type === "action") {
+          await this.getGatekeeperFacet(action.gatekeeperId).applyAction(action.action);
+        } else if (action.type === "bindHook" && action.hookId !== undefined) {
+          await this.enableContractHook(action.hookId);
+          action.enabled = true;
+        } else {
+          throw new Error(`Unsupported Contract child action: ${actionId}`);
+        }
+        action.state = "approved";
+        if (action.type === "action") {
+          action.appliedAt = new Date();
+          action.resolvedBy = resolvedBy;
+        }
+        this.storage.actions.put(action);
+      }
+      operation.state = operation.approvalKey ? "approved" : "applied";
+      this.storage.contractOperations.put(operation);
+    } catch (error) {
+      try {
+        await this.rejectContractOperation(operationId, resolvedBy);
+      } catch (cleanupError) {
+        this.logger.warn("failed to discard remaining staged Contract actions", {
+          event: "contract.operation.apply.cleanup.failed",
+          operation: operationId,
+          error: cleanupError,
+        });
+      }
+      let failed = this.storage.contractOperations.get(operationId) ?? operation;
+      failed.state = "failed";
+      failed.decidedAt ??= new Date();
+      this.storage.contractOperations.put(failed);
+      throw error;
+    }
+  }
+
+  async rejectContractOperation(
+      operationId: string, resolvedBy?: AiChatAuthorInfo): Promise<void> {
+    let operation = this.storage.contractOperations.get(operationId);
+    if (!operation || (operation.state !== "pending" && operation.state !== "applying")) return;
+    let failures: unknown[] = [];
+    for (let actionId of operation.childActionIds) {
+      let action = this.storage.actions.get(actionId);
+      if (!action || action.state !== "pending") continue;
+      try {
+        if (action.type === "action") {
+          await this.getGatekeeperFacet(action.gatekeeperId).rejectAction(action.action);
+        } else if (action.type === "bindHook" && action.hookId !== undefined) {
+          await this.deleteHook(action.hookId);
+          action.enabled = false;
+          delete action.hookId;
+        } else {
+          throw new Error(`Unsupported Contract child action: ${actionId}`);
+        }
+      } catch (error) {
+        failures.push(error);
+        continue;
+      }
+      action.state = "rejected";
+      if (action.type === "action") {
+        action.appliedAt = new Date();
+        action.resolvedBy = resolvedBy;
+      }
+      this.storage.actions.put(action);
+    }
+    operation.state = failures.length ? "failed" : "rejected";
+    operation.decidedAt = new Date();
+    this.storage.contractOperations.put(operation);
+    if (failures.length) {
+      throw new AggregateError(failures, `Failed to reject Contract operation ${operationId}.`);
+    }
+  }
+
+  contractSharedStateStorageKey(namespace: string, key: string): string {
+    if (!namespace || !key) throw new TypeError("Shared Contract state keys must not be empty.");
+    return `contractSharedState:${encodeURIComponent(namespace)}:${encodeURIComponent(key)}`;
+  }
+
+  getContractSharedState(namespace: string, key: string): Promise<unknown> {
+    return this.ctx.storage.get(this.contractSharedStateStorageKey(namespace, key));
+  }
+
+  async putContractSharedState(namespace: string, key: string, value: unknown): Promise<void> {
+    assertContractStructuredData(value);
+    await this.ctx.storage.put(this.contractSharedStateStorageKey(namespace, key), value);
+  }
+
+  deleteContractSharedState(namespace: string, key: string): Promise<boolean> {
+    return this.ctx.storage.delete(this.contractSharedStateStorageKey(namespace, key));
   }
 
   // Maps chat ID to action numbers recently performed by that chat's agent. These are drained into
@@ -2902,7 +3646,8 @@ class OverseerImpl implements AgentHooks {
 
   async bindHook<Hook extends RpcTarget>(
         gatekeeperId: number, controller: Fetcher<HookController<Hook>>,
-        callback: NativeRpcStub<Hook>, description: HookDescription, caller: GatekeeperCaller)
+        callback: NativeRpcStub<Hook>, description: HookDescription, caller: GatekeeperCaller,
+        contractCall?: ContractCallContext, contractMode?: ContractSourceApprovalMode)
         : Promise<void> {
     let hookId = this.storage.nextHookId.get();
     this.storage.nextHookId.put(hookId + 1);
@@ -2933,6 +3678,7 @@ class OverseerImpl implements AgentHooks {
       callback: callback as unknown as NativeRpcStub<RpcTarget>,
       description,
       enabled,
+      ...(contractCall ? {contractId: contractCall.contractId} : {}),
     });
 
     let record: ActionRecord = {
@@ -2942,15 +3688,81 @@ class OverseerImpl implements AgentHooks {
       resourceTitle: gatekeeper?.resourceTitle,
       resourceUrl: gatekeeper?.resourceUrl,
       createdAt: new Date(),
-      state: "approved",
+      state: contractMode?.type === "manual" ? "pending" : "approved",
       type: "bindHook",
       hookId,
       description,
       enabled,
+      ...(contractCall ? {contractAttribution: contractActionAttribution(
+        contractCall,
+        contractMode?.type === "manual" ? contractMode.operationId : undefined,
+      )} : {}),
     };
 
     this.storage.actions.put(record);
-    this.#associateAction(caller, actionId);
+    if (contractMode?.type === "manual") {
+      let operation = this.storage.contractOperations.get(contractMode.operationId);
+      if (!operation || operation.contractId !== contractCall?.contractId ||
+          operation.state !== "pending") {
+        this.storage.boundHooks.delete(hookId);
+        this.storage.actions.delete(actionId);
+        callback[Symbol.dispose]?.();
+        throw new Error("Contract manual approval scope is no longer pending.");
+      }
+      operation.childActionIds.push(actionId);
+      this.storage.contractOperations.put(operation);
+    } else {
+      this.#associateAction(caller, actionId);
+    }
+
+    if (contractCall && contractMode?.type !== "manual") {
+      this.ctx.waitUntil(Promise.resolve().then(() => this.enableContractHook(hookId)).catch(error => {
+        this.logger.error("failed to enable preapproved Contract hook", {
+          event: "contract.hook.enable.failed",
+          gadgetId: String(contractCall.contractId),
+          operation: `hook:${hookId}`,
+          error,
+        });
+      }));
+    }
+  }
+
+  async enableContractHook(hookId: number): Promise<void> {
+    let record = this.storage.boundHooks.get(hookId);
+    if (!record?.contractId || record.enabled) return;
+    let props: GatekeeperHookLoopbackProps = {
+      overseerId: this.ctx.id.toString(),
+      hookId,
+    };
+    await record.controller.enable(
+        this.ctx.exports.GatekeeperHookLoopback({props}) as unknown as
+          Fetcher<HookInitiator<RpcTarget>>,
+        {
+          workspaceId: this.ctx.id.toString(),
+          ...(record.gadgetId !== undefined ? {gadgetId: record.gadgetId} : {}),
+        });
+    let fresh = this.storage.boundHooks.get(hookId);
+    if (!fresh || fresh.contractId !== record.contractId ||
+        !this.storage.contracts.get(record.contractId)) {
+      try {
+        await record.controller.disable();
+      } catch (error) {
+        this.logger.warn("failed to disable Contract hook after concurrent retraction", {
+          event: "contract.hook.enable.retraction-race.failed",
+          gadgetId: String(record.contractId),
+          operation: `hook:${hookId}`,
+          error,
+        });
+      }
+      return;
+    }
+    fresh.enabled = true;
+    this.storage.boundHooks.put(fresh);
+    let action = this.storage.actions.get(fresh.actionId);
+    if (action?.type === "bindHook") {
+      action.enabled = true;
+      this.storage.actions.put(action);
+    }
   }
 
   // What is the last active time that we know the user DO has been made aware of?
@@ -3684,7 +4496,8 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
-  // Describe a workpiece -- a gadget or a gatekeeper -- reachable as `envName` in a chat's env,
+  // Describe a workpiece -- a Gadget, installed Contract, or privileged raw Source -- reachable as
+  // `envName` in a chat's env,
   // for the agent's describeBinding tool.
   async describeBinding(envName: string, id: WorkpieceId): Promise<string> {
     let gadget = this.storage.gadgets.get(id);
@@ -3695,6 +4508,14 @@ class OverseerImpl implements AgentHooks {
           `Gadget ${JSON.stringify(gadget.title)}. Calling a method on the stub invokes the ` +
           `same-named method on the class exported by the Gadget's server.js (read that file to ` +
           `learn the API it offers).`;
+    }
+    let contract = this.storage.contracts.get(id);
+    if (contract) {
+      return `Binding: ${envName}\n` +
+          `Title: ${contract.title}\n` +
+          `TypeScript type: ContractBinding\n\n` +
+          `This is an installed, reviewed Contract capability. Its public API is:\n\n` +
+          `\`\`\`typescript\n${contract.publicTypes}\n\`\`\`\n`;
     }
     let gatekeeper = this.storage.gatekeepers.get(id);
     if (!gatekeeper) {
@@ -3729,8 +4550,9 @@ class OverseerImpl implements AgentHooks {
   // the chat log via `addedBindings`, which sequence-stamps it (see addChatMessages()).
   addGadgetBinding(gadgetId: WorkpieceId, name: string, target: WorkpieceId,
                    chatId: number): void {
-    if (!this.storage.gatekeepers.get(target)) {
-      throw new Error("This resource is no longer available.");
+    if (!this.storage.contracts.get(target)) {
+      throw new Error(
+          "Only an installed Contract can be bound into a Gadget; raw Sources are Manager-only.");
     }
     // Validate the gadget exists and is visible to this chat.
     let gadget = this.getGadgetRecord(
@@ -4298,8 +5120,10 @@ class OverseerImpl implements AgentHooks {
       output: gadget.output,
       bindings: this.visibleBindings(gadget, forChatId).map(([name, edge]) => ({
         name,
-        title: this.storage.gatekeepers.get(edge.target)?.resourceTitle || "(title unavailable)",
+        title: this.storage.contracts.get(edge.target)?.title ??
+          this.storage.gatekeepers.get(edge.target)?.resourceTitle ?? "(title unavailable)",
         target: edge.target,
+        kind: this.storage.contracts.get(edge.target) ? "contract" as const : "source" as const,
       })),
     }));
   }
@@ -4344,7 +5168,7 @@ class OverseerImpl implements AgentHooks {
       if (currentAccountId.get(gk.creationSpec.vendorId) === gk.creationSpec.accountId) {
         bound.add(gk.creationSpec.vendorId);
       } else {
-        this.removeGatekeeper(gk.id);
+        await this.removeGatekeeper(gk.id);
       }
     }
     let toAdd = accounts.filter(account => !bound.has(account.vendorId));
@@ -4569,7 +5393,8 @@ class OverseerImpl implements AgentHooks {
         } else {
           // Drop entries whose targets no longer exist.
           for (let [name, target] of Object.entries(env)) {
-            if (this.storage.gadgets.get(target) || this.storage.gatekeepers.get(target)) {
+            if (this.storage.gadgets.get(target) || this.storage.contracts.get(target) ||
+                this.storage.gatekeepers.get(target)) {
               seed[name] = target;
             }
           }
@@ -4797,6 +5622,11 @@ class OverseerImpl implements AgentHooks {
         result.push({name, target, title: gadget.title, isGadget: true});
         continue;
       }
+      let contract = this.storage.contracts.get(target);
+      if (contract) {
+        result.push({name, target, title: contract.title, isGadget: false});
+        continue;
+      }
       let gk = this.storage.gatekeepers.get(target);
       if (!gk) continue;
       let info: SeedBindingInfo =
@@ -4856,6 +5686,13 @@ class OverseerImpl implements AgentHooks {
     }> = [];
 
     for (let [bindingName, edge] of edges) {
+      if (this.storage.contracts.get(edge.target)) {
+        throw new Error(
+          `Cannot create a blueprint while binding "${bindingName}" points to an installed ` +
+          `Contract. Blueprints cannot yet represent the reviewed artifact and private Source ` +
+          `installation ceremony.`,
+        );
+      }
       let gk = this.storage.gatekeepers.get(edge.target);
       if (!gk) continue;  // dangling edge (gatekeeper destroyed)
 
@@ -4934,6 +5771,11 @@ class OverseerImpl implements AgentHooks {
           throw new Error(`Cannot create a blueprint: agent spawner binding "${bindingName}" ` +
               `gives its agents access to another gadget ("${envName}"), which blueprints ` +
               `cannot express yet.`);
+        }
+        if (this.storage.contracts.get(target)) {
+          throw new Error(`Cannot create a blueprint: agent spawner binding "${bindingName}" ` +
+              `gives its agents access to an installed Contract ("${envName}"), whose reviewed ` +
+              `artifact and private Source installation blueprints cannot express yet.`);
         }
         let targetGk = this.storage.gatekeepers.get(target);
         if (!targetGk) {
@@ -5656,6 +6498,112 @@ class OverseerImpl implements AgentHooks {
     return result;
   }
 
+  async proposeContract(chatId: number, input: {
+    sourceGatekeeperId: WorkpieceId;
+    targetGadgetId: WorkpieceId;
+    title: string;
+    bindingName: string;
+    sourceCode: string;
+    publicTypes: string;
+    dependencies: ContractDependency[];
+    artifactHash: string;
+    sourceTypeHash: string;
+    sourceRootType: string;
+    compatibilityDate: string;
+    runtimeHarnessVersion: string;
+    sharedStateKey?: string;
+  }): Promise<{requestId: string; artifactHash: string}> {
+    validateBindingName(input.bindingName);
+    let source = this.storage.gatekeepers.get(input.sourceGatekeeperId);
+    if (!source) throw new Error("The selected Source is no longer available.");
+    let gadget = this.getGadgetRecord(input.targetGadgetId);
+    if (gadget.bindings[input.bindingName]) {
+      throw new Error(`The target Gadget already has a binding named ${input.bindingName}.`);
+    }
+    if (!/\b(?:interface|type|class)\s+ContractBinding\b/.test(input.publicTypes) &&
+        !/\bexport\s+(?:type\s+)?\{[^}]*\bContractBinding\b[^}]*\}/s.test(input.publicTypes)) {
+      throw new Error("Contract public declarations must define ContractBinding.");
+    }
+    let importSpecifiers = [
+      ...input.sourceCode.matchAll(/\bfrom\s+["']([^"']+)["']/g),
+      ...input.sourceCode.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g),
+    ].map(match => match[1]!);
+    let unbundled = importSpecifiers.find(specifier => specifier !== "cloudflare:workers");
+    if (unbundled) {
+      throw new Error(
+          `Contract executable still imports ${unbundled}; submit the compiler's bundled module.`);
+    }
+    let dependencies = input.dependencies
+        .toSorted((left, right) => left.name.localeCompare(right.name));
+    if (!isWorkerCompatibilityDate(input.compatibilityDate)) {
+      throw new Error(`Invalid Workers compatibility date: ${input.compatibilityDate}`);
+    }
+
+    let sourceFacet = this.getGatekeeperFacet(input.sourceGatekeeperId);
+    let [description, sourceTypes] = await Promise.all([
+      sourceFacet.describe(),
+      sourceFacet.getTypeScriptTypes(),
+    ]);
+    let currentSourceTypeHash = await hashSourceTypes(sourceTypes);
+    if (input.sourceRootType !== description.tsType ||
+        input.sourceTypeHash !== currentSourceTypeHash) {
+      throw new Error("Contract artifact was compiled against different Source types.");
+    }
+    contractHarnessForVersion(input.runtimeHarnessVersion);
+    let authority = {
+      mainModule: "contract.js",
+      modules: {"contract.js": input.sourceCode},
+      publicTypes: input.publicTypes,
+      publicRootType: "ContractBinding" as const,
+      sourceTypeHash: input.sourceTypeHash,
+      sourceRootType: input.sourceRootType,
+      dependencies,
+      compatibilityDate: input.compatibilityDate,
+      runtimeHarnessVersion: input.runtimeHarnessVersion,
+    };
+    let computedHash = await hashArtifact(authority);
+    if (input.artifactHash !== computedHash) {
+      throw new Error("Submitted Contract artifact hash does not match its reviewed contents.");
+    }
+    let artifact: ContractArtifact = {
+      hash: input.artifactHash,
+      ...authority,
+      createdAt: new Date().toISOString(),
+    };
+    await this.validateContractArtifactPolicy(artifact);
+    await this.validateContractArtifact(artifact);
+
+    let requestId = `${chatId}:${crypto.randomUUID()}`;
+    let body: AiChatMessageBody = {
+      type: "contractRequest",
+      requestId,
+      sourceGatekeeperId: input.sourceGatekeeperId,
+      sourceTitle: source.resourceTitle || description.title,
+      sourceUrl: source.resourceUrl || description.url,
+      artifactHash: artifact.hash,
+      runtimeHarnessVersion: artifact.runtimeHarnessVersion,
+      title: input.title.trim() || "Contract",
+      publicTypes: artifact.publicTypes,
+      sourceCode: input.sourceCode,
+      bindingName: input.bindingName,
+      targetGadgetId: input.targetGadgetId,
+      targetGadgetTitle: gadget.title,
+      dependencySummary: dependencies,
+      sourceTypeHash: artifact.sourceTypeHash,
+      sourceRootType: artifact.sourceRootType,
+      compatibilityDate: artifact.compatibilityDate,
+      ...(input.sharedStateKey ? {sharedStateKey: input.sharedStateKey} : {}),
+      state: "pending",
+    };
+    let list = this.#capturedConnectionRequests.get(chatId);
+    if (!list) {
+      list = [];
+      this.#capturedConnectionRequests.set(chatId, list);
+    }
+    list.push(body);
+    return {requestId, artifactHash: artifact.hash};
+  }
+
   // --- Blueprint hooks for the agent ---
 
   // List the blueprints the turn's initiator could instantiate with createGadget: their own
@@ -6249,7 +7197,7 @@ class OverseerImpl implements AgentHooks {
 
   restore(params: OverseerRestoreParams): Fetcher<DurableObject> | Fetcher<CodeModeEntrypoint> {
     if (params.type !== "gadget") {
-      throw new TypeError("Unknown restore params type: " + params.type);
+      throw new TypeError("Unknown restore params type: " + (params as {type: string}).type);
     }
 
     if (params.codeId) {
@@ -6649,9 +7597,27 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  async startGatekeeperSession(
+  async startBindingSession(
       target: BindingLoopbackTarget, caller: GatekeeperCaller): Promise<any> {
-    return this.impl.startGatekeeperSession(target, caller);
+    return this.impl.startBindingSession(target, caller);
+  }
+
+  async startManagerSourceSession(
+      gatekeeperId: WorkpieceId, caller: GatekeeperCaller): Promise<any> {
+    return this.impl.startManagerSourceSession(gatekeeperId, caller);
+  }
+
+  async invokeContractMethod(
+      contractId: WorkpieceId, caller: GatekeeperCaller,
+      methodName: string, args: unknown[]): Promise<unknown> {
+    return this.impl.invokeContractMethod(contractId, caller, methodName, args);
+  }
+
+  async invokeRestoredContractMethod(
+      contractId: WorkpieceId, restorationId: string, caller: GatekeeperCaller,
+      methodName: string, args: unknown[]): Promise<unknown> {
+    return this.impl.invokeRestoredContractMethod(
+        contractId, restorationId, caller, methodName, args);
   }
 
   startGatekeeperHook(id: number): NativeRpcStub<RpcTarget> {
@@ -6677,10 +7643,23 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       throw new Error("Gatekeeper is disabled.");
     }
 
-    return {
-      callback: record.callback,
-      approvalQueue: new ApprovalQueueImpl(this.impl, record.gatekeeperId, {from: "hook"}),
-    };
+    let approvalQueue: ApprovalQueue;
+    if (record.contractId !== undefined) {
+      let contract = this.impl.requireContract(record.contractId);
+      let call: ContractCallContext = {
+        callId: crypto.randomUUID(),
+        contractId: contract.id,
+        artifactHash: contract.artifactHash,
+        sourceGatekeeperId: record.gatekeeperId,
+        caller: {from: "hook"},
+        startedAt: new Date(),
+      };
+      approvalQueue = new ContractSourceApprovalQueueImpl(
+          this.impl, call, {type: "preapproved"});
+    } else {
+      approvalQueue = new ApprovalQueueImpl(this.impl, record.gatekeeperId, {from: "hook"});
+    }
+    return {callback: record.callback, approvalQueue};
   }
 
   async deliverGadgetLogs(chatId: number | null, logs: ConsoleLogEvent[]) {
@@ -6745,6 +7724,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     let bindings: Record<string, WorkpieceId> = Object.create(null);
     for (let [name, target] of Object.entries(config.env)) {
       if (this.impl.storage.gadgets.get(target) ||
+          this.impl.storage.contracts.get(target) ||
           this.impl.storage.gatekeepers.get(target)) {
         bindings[name] = target;
       }
@@ -6813,7 +7793,7 @@ type GatekeeperCaller = {
   from: "hook";
 };
 
-type GatekeeperLoopbackProps = {
+type BindingLoopbackProps = {
   overseerId: string;
 
   target: BindingLoopbackTarget;
@@ -6822,29 +7802,74 @@ type GatekeeperLoopbackProps = {
 };
 
 type BindingLoopbackTarget = {
-  type: "gadget" | "gatekeeper";
+  type: "gadget";
+  id: WorkpieceId;
+} | {
+  type: "contract";
   id: WorkpieceId;
 };
 
+type ContractCapabilityLoopbackProps = {
+  overseerId: string;
+  contractId: WorkpieceId;
+  restorationId: string;
+  caller: GatekeeperCaller;
+};
+
+// Persistent, method-transparent lifecycle proxy for a Contract-restored capability. Every call
+// returns to the Manager, which checks that the Contract record still exists before asking the
+// facet to restore and invoke the approved capability.
+export class ContractCapabilityLoopback extends
+    WorkerEntrypoint<Cloudflare.Env, ContractCapabilityLoopbackProps> {
+  constructor(ctx: ExecutionContext<ContractCapabilityLoopbackProps>, env: Cloudflare.Env) {
+    super(ctx, env);
+    let ns = ctx.exports.OverseerDurableObject;
+    let stub: DurableObjectStub<OverseerDurableObject> =
+        ns.get(ns.idFromString(ctx.props.overseerId));
+    return new Proxy(this, {
+      get(target, prop) {
+        if (prop === "then") return undefined;
+        if (typeof prop !== "string") return Reflect.get(target, prop, target);
+        return (...args: unknown[]) => stub.invokeRestoredContractMethod(
+            ctx.props.contractId, ctx.props.restorationId, ctx.props.caller, prop, args);
+      },
+      getPrototypeOf() { return WorkerEntrypoint.prototype; },
+    });
+  }
+
+  dummyMethodToWorkAroundValidatorBug() {}
+}
+
 // Horrible hack: At present the `env` of a dynamic isolate can contain ServiceStubs but cannot
 // contain RpcStubs. But if we ask the gatekeeper to open a session, we get an RpcStub. So we
-// actually initialize each binding to be a `ServiceStub` pointing at a `GatekeeperLoopback` whose
+// actually initialize each binding to be a `ServiceStub` pointing at a `BindingLoopback` whose
 // props identify the overseer and target workpiece, so that on each method call it can resolve the
 // target session.
 //
-// TODO(multi-gadget): Rename to BindingLoopback. Stubs to this entrypoint aren't stored anywhere,
-// so a rename should be safe.
-export class GatekeeperLoopback extends WorkerEntrypoint<Cloudflare.Env, GatekeeperLoopbackProps> {
-  constructor(ctx: ExecutionContext<GatekeeperLoopbackProps>, env: Cloudflare.Env) {
+export class BindingLoopback extends WorkerEntrypoint<Cloudflare.Env, BindingLoopbackProps> {
+  constructor(ctx: ExecutionContext<BindingLoopbackProps>, env: Cloudflare.Env) {
     super(ctx, env);
 
     let ns = ctx.exports.OverseerDurableObject;
     let stub: DurableObjectStub<OverseerDurableObject> =
         ns.get(ns.idFromString(ctx.props.overseerId));
 
+    if (ctx.props.target.type === "contract") {
+      return new Proxy(this, {
+        get(target, prop) {
+          if (prop === "then") return undefined;
+          if (typeof prop !== "string") return Reflect.get(target, prop, target);
+          return (...args: unknown[]) => stub.invokeContractMethod(
+              ctx.props.target.id, ctx.props.caller, prop, args);
+        },
+        getPrototypeOf() {
+          return WorkerEntrypoint.prototype;
+        },
+      });
+    }
+
     // @ts-ignore: LSP-only RPC types bug, "type instantiation is excessively deep"
-    let session = stub.startGatekeeperSession(
-        this.ctx.props.target, this.ctx.props.caller);
+    let session = stub.startBindingSession(ctx.props.target, ctx.props.caller);
 
     return new Proxy(session, {
       get(target, prop, receiver) {
@@ -6860,6 +7885,34 @@ export class GatekeeperLoopback extends WorkerEntrypoint<Cloudflare.Env, Gatekee
 
   // We need to declare a method otherwise the validator won't even report this class as existing
   // and so the loopback binding won't be created.
+  dummyMethodToWorkAroundValidatorBug() {}
+}
+
+type ManagerSourceLoopbackProps = {
+  overseerId: string;
+  gatekeeperId: WorkpieceId;
+  caller: GatekeeperCaller;
+};
+
+// Separate privileged path used only in the Manager agent's authoring environment.
+export class ManagerSourceLoopback
+    extends WorkerEntrypoint<Cloudflare.Env, ManagerSourceLoopbackProps> {
+  constructor(ctx: ExecutionContext<ManagerSourceLoopbackProps>, env: Cloudflare.Env) {
+    super(ctx, env);
+    let ns = ctx.exports.OverseerDurableObject;
+    let stub: DurableObjectStub<OverseerDurableObject> =
+        ns.get(ns.idFromString(ctx.props.overseerId));
+    let session = stub.startManagerSourceSession(ctx.props.gatekeeperId, ctx.props.caller);
+    return new Proxy(session, {
+      get(target, prop) {
+        return Reflect.get(target, prop, target);
+      },
+      getPrototypeOf() {
+        return WorkerEntrypoint.prototype;
+      },
+    });
+  }
+
   dummyMethodToWorkAroundValidatorBug() {}
 }
 
@@ -7103,6 +8156,11 @@ function joinSessionPresence(
     leave?.();
   };
 }
+
+const contractAcceptanceRuns = new WeakMap<
+  OverseerImpl,
+  Map<string, Promise<ContractRecord>>
+>();
 
 @validateRpc()
 class OverseerClientInterface extends RpcTarget implements Overseer {
@@ -7498,7 +8556,8 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
           throw new Error(`Agent spawner env entry "${name}" references gadget ${target}, ` +
               `which is still pending in a chat.`);
         }
-      } else if (!this.impl.storage.gatekeepers.get(target)) {
+      } else if (!this.impl.storage.contracts.get(target) &&
+                 !this.impl.storage.gatekeepers.get(target)) {
         throw new Error(`Agent spawner env entry "${name}" references workpiece ${target}, ` +
             `which does not exist.`);
       }
@@ -7553,6 +8612,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     if (action.type === "observation") {
       throw new Error("Observations can't have 'pending' state.");
     }
+    this.impl.assertContractChildNotIndividuallyDecidable(action);
 
     // Resolve the approver's identity before applying, so a failed profile fetch can't leave the
     // action applied in the world but still "pending" in storage.
@@ -7574,6 +8634,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     let defaultGadgetId = this.impl.defaultGadgetId;
     let result: BoundHookInfo[] = [];
     for (let record of this.impl.storage.boundHooks.list()) {
+      if (this.#isPendingContractChildHook(record)) continue;
       let gatekeeper = this.impl.storage.gatekeepers.get(record.gatekeeperId);
       result.push({
         id: record.id,
@@ -7591,9 +8652,22 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     return result;
   }
 
+  #isPendingContractChildHook(record: BoundHookRecord): boolean {
+    let action = this.impl.storage.actions.get(record.actionId);
+    return action?.type === "bindHook" && action.state === "pending" &&
+      action.contractAttribution?.contractOperationId !== undefined;
+  }
+
+  #assertHookIndividuallyManageable(record: BoundHookRecord): void {
+    if (this.#isPendingContractChildHook(record)) {
+      throw new Error("Contract child hooks can only be decided through their parent operation.");
+    }
+  }
+
   async enableHook(id: number): Promise<void> {
     let record = this.impl.storage.boundHooks.get(id);
     if (!record) throw new Error("Invalid hook ID.");
+    this.#assertHookIndividuallyManageable(record);
 
     if (!record.enabled) {
       let props: GatekeeperHookLoopbackProps = {
@@ -7628,6 +8702,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   async disableHook(id: number): Promise<void> {
     let record = this.impl.storage.boundHooks.get(id);
     if (!record) throw new Error("Invalid hook ID.");
+    this.#assertHookIndividuallyManageable(record);
 
     if (record.enabled) {
       await record.controller.disable();
@@ -7644,6 +8719,9 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async deleteHook(id: number): Promise<void> {
+    let record = this.impl.storage.boundHooks.get(id);
+    if (!record) return;
+    this.#assertHookIndividuallyManageable(record);
     return this.impl.deleteHook(id);
   }
 
@@ -7701,6 +8779,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     if (action.type !== "action") {
       throw new Error(`Can't reject an observation: ${id}`);
     }
+    this.impl.assertContractChildNotIndividuallyDecidable(action);
 
     let gatekeeper = this.impl.getGatekeeperFacet(action.gatekeeperId);
 
@@ -7806,6 +8885,17 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     throw new Error(`No such connection request: ${requestId}`);
   }
 
+  #findContractRequest(requestId: string): AiChatMessage & {type: "contractRequest"} {
+    let colonIdx = requestId.indexOf(":");
+    if (colonIdx < 0) throw new Error(`Malformed Contract request id: ${requestId}`);
+    let chatId = Number(requestId.slice(0, colonIdx));
+    if (!Number.isFinite(chatId)) throw new Error(`Malformed Contract request id: ${requestId}`);
+    for (let msg of this.impl.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
+      if (msg.type === "contractRequest" && msg.requestId === requestId) return msg;
+    }
+    throw new Error(`No such Contract request: ${requestId}`);
+  }
+
   // Restart a suspended agent turn after its outcome is recorded in chat history (accepted
   // connection, or all awaited actions approved). Denials intentionally don't call this.
   async #resumeSuspendedAgent(chatId: number): Promise<void> {
@@ -7879,6 +8969,131 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // request; leaving it ended lets the user say what they want done instead, rather than forcing
     // the agent to guess from a bare "denied" signal. The denial is recorded in history and the
     // agent sees it the next time the user sends a message (see the connectionRequest history case).
+  }
+
+  async acceptContractRequest(requestId: string): Promise<void> {
+    let msg = this.#findContractRequest(requestId);
+    if (msg.state === "accepted") return;
+    if (msg.state !== "pending") {
+      throw new Error(`Contract request is not pending: ${requestId}`);
+    }
+    if (!msg.accepting) {
+      msg.accepting = true;
+      this.impl.storage.chats.put(msg);
+    }
+    let artifact: ContractArtifact = {
+      hash: msg.artifactHash,
+      mainModule: "contract.js",
+      modules: {"contract.js": msg.sourceCode},
+      publicTypes: msg.publicTypes,
+      publicRootType: "ContractBinding",
+      sourceTypeHash: msg.sourceTypeHash,
+      sourceRootType: msg.sourceRootType,
+      dependencies: msg.dependencySummary,
+      compatibilityDate: msg.compatibilityDate,
+      runtimeHarnessVersion: msg.runtimeHarnessVersion,
+      createdAt: new Date(msg.timestamp).toISOString(),
+    };
+    let runs = contractAcceptanceRuns.get(this.impl);
+    if (!runs) {
+      runs = new Map();
+      contractAcceptanceRuns.set(this.impl, runs);
+    }
+    let run = runs.get(requestId);
+    if (!run) {
+      run = (async () => {
+        let installed = [...this.impl.storage.contracts.list()].find(
+          contract => contract.installationRequestId === requestId);
+        if (installed) {
+          let expectedTitle = msg.title.trim() || "Contract";
+          if (installed.artifactHash !== msg.artifactHash ||
+              installed.runtimeHarnessVersion !== msg.runtimeHarnessVersion ||
+              installed.sourceGatekeeperId !== msg.sourceGatekeeperId ||
+              installed.title !== expectedTitle || installed.publicTypes !== msg.publicTypes ||
+              installed.sharedStateKey !== msg.sharedStateKey) {
+            throw new Error("Interrupted Contract installation does not match the reviewed request.");
+          }
+          let gadget = this.impl.getGadgetRecord(msg.targetGadgetId);
+          let edge = gadget.bindings[msg.bindingName];
+          if (!edge) {
+            this.impl.bindWorkpiece(msg.targetGadgetId, msg.bindingName, installed.id);
+          } else if (edge.target !== installed.id) {
+            throw new Error("Reviewed Contract binding name is occupied by another workpiece.");
+          }
+          return installed;
+        }
+
+        let profile = await this.#getClientProfile();
+        return await this.impl.createContract(
+            artifact, msg.sourceGatekeeperId, msg.title,
+            `${profile.type}:${profile.id}`, msg.targetGadgetId, msg.bindingName,
+            msg.sharedStateKey, requestId);
+      })();
+      runs.set(requestId, run);
+    }
+    try {
+      let contract = await run;
+      let fresh = this.#findContractRequest(requestId);
+      if (fresh.state === "denied") {
+        throw new Error("Contract request was denied while acceptance was in progress.");
+      }
+      fresh.state = "accepted";
+      fresh.contractId = contract.id;
+      delete fresh.accepting;
+      fresh.timestamp = this.impl.getChatTimestamp();
+      this.impl.storage.chats.put(fresh);
+      await this.#resumeSuspendedAgent(fresh.chatId);
+    } catch (error) {
+      let fresh = this.#findContractRequest(requestId);
+      if (fresh.state === "pending") {
+        delete fresh.accepting;
+        this.impl.storage.chats.put(fresh);
+      }
+      throw error;
+    } finally {
+      if (runs.get(requestId) === run) runs.delete(requestId);
+    }
+  }
+
+  async denyContractRequest(requestId: string): Promise<void> {
+    let msg = this.#findContractRequest(requestId);
+    if (msg.state !== "pending") {
+      throw new Error(`Contract request is not pending: ${requestId}`);
+    }
+    if (msg.accepting) {
+      throw new Error(`Contract request acceptance is already in progress: ${requestId}`);
+    }
+    msg.state = "denied";
+    msg.timestamp = this.impl.getChatTimestamp();
+    this.impl.storage.chats.put(msg);
+  }
+
+  async listContractOperations(): Promise<ContractOperationSummary[]> {
+    return [...this.impl.storage.contractOperations.list()].map(operation => ({
+      id: operation.id,
+      contractId: operation.contractId,
+      artifactHash: operation.artifactHash,
+      caller: operation.caller,
+      title: operation.title,
+      description: operation.description,
+      state: operation.state,
+      childActionIds: [...operation.childActionIds],
+      approvalKey: operation.approvalKey,
+      createdAt: operation.createdAt,
+      decidedAt: operation.decidedAt,
+    }));
+  }
+
+  async approveContractOperation(operationId: string): Promise<void> {
+    await this.impl.approveContractOperation(operationId, await this.#getClientProfile());
+  }
+
+  async rejectContractOperation(operationId: string): Promise<void> {
+    await this.impl.rejectContractOperation(operationId, await this.#getClientProfile());
+  }
+
+  deleteContract(contractId: WorkpieceId): Promise<void> {
+    return this.impl.deleteContract(contractId);
   }
 
   async subscribeToActions(subscriber: RpcStub<ActionsSubscriber>, startAfter?: Date)
@@ -8898,6 +10113,12 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
   }
   async acceptConnectionRequest(_requestId: string, _result: {gatekeeperId: number}): Promise<void> { this.#deny(); }
   async denyConnectionRequest(_requestId: string): Promise<void>  { this.#deny(); }
+  async acceptContractRequest(_requestId: string): Promise<void> { this.#deny(); }
+  async denyContractRequest(_requestId: string): Promise<void> { this.#deny(); }
+  async listContractOperations(): Promise<ContractOperationSummary[]> { this.#deny(); }
+  async approveContractOperation(_operationId: string): Promise<void> { this.#deny(); }
+  async rejectContractOperation(_operationId: string): Promise<void> { this.#deny(); }
+  async deleteContract(_contractId: WorkpieceId): Promise<void> { this.#deny(); }
   async subscribeToActions(
       subscriber: RpcStub<ActionsSubscriber>, _startAfter?: Date): Promise<RpcStub<{}>> {
     // Inert: "use" sessions have no visibility into the action log. Signal a settled, empty log
@@ -9066,10 +10287,12 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
     // Edges pending in other chats are those chats' unaccepted proposals, so they aren't listed.
     return this.impl.visibleBindings(record, chatId).map(([name, edge]) => {
       let gatekeeper = this.impl.storage.gatekeepers.get(edge.target);
+      let contract = this.impl.storage.contracts.get(edge.target);
       return {
         name,
         target: edge.target,
-        resourceTitle: gatekeeper?.resourceTitle || "(title unavailable)",
+        targetType: contract ? "contract" as const : "source" as const,
+        resourceTitle: contract?.title || gatekeeper?.resourceTitle || "(title unavailable)",
         vendorId: gatekeeper?.creationSpec?.type === "gatekeeper"
             ? gatekeeper.creationSpec.vendorId
             : undefined,
@@ -9114,21 +10337,21 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
       return existing[0];
     }
 
-    let description = await this.impl.getGatekeeperFacet(target).describe();
-    let suggestedName = description.suggestedBindingName;
-    let i = 1;
-    // Re-read the record after the describe() await, in case bindings changed meanwhile. Dedupe
-    // against ALL edges, including other chats' pending ones (which occupy their names).
-    record = this.impl.getGadgetRecord(this.id);
-    while (record.bindings[suggestedName] !== undefined) {
-      suggestedName = `${description.suggestedBindingName}_${++i}`;
-    }
+    let contract = this.impl.requireContract(target);
+    let suggestedName = fallbackBindingName(
+        contract.title || "CONTRACT", name => record.bindings[name] !== undefined);
     await this.bind(suggestedName, target, chatId);
     return suggestedName;
   }
 
   async unbind(name: string): Promise<void> {
-    this.impl.unbindWorkpiece(this.id, name);
+    let edge = this.impl.getGadgetRecord(this.id).bindings[name];
+    if (!edge) throw new Error(`No such binding: ${name}`);
+    if (this.impl.storage.contracts.get(edge.target)) {
+      await this.impl.deleteContract(edge.target);
+    } else {
+      this.impl.unbindWorkpiece(this.id, name);
+    }
   }
 
   async renameBinding(oldName: string, newName: string): Promise<void> {
@@ -9341,7 +10564,7 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
 
   async remove(): Promise<void> {
     let record = this.impl.storage.gatekeepers.get(this.id);
-    this.impl.removeGatekeeper(this.id);
+    await this.impl.removeGatekeeper(this.id);
     this.impl.recordGadgetAnalytics({
       event_name: "connection_removed",
       gatekeeper_id: this.id,
@@ -9401,6 +10624,80 @@ class SlashCommandAuthorizerImpl extends NativeRpcTarget implements ObservationA
 
   authorizeObservation(description: ObservationDescription): Promise<void> {
     return this.impl.authorizeObservation(this.gatekeeperId, description, this.caller);
+  }
+}
+
+@validateRpc()
+class ContractRestorerTarget extends NativeRpcTarget {
+  constructor(private impl: OverseerImpl, private call: ContractCallContext) {
+    super();
+  }
+
+  restore(restorationId: string) {
+    return this.impl.makeContractCapabilityLoopback(
+        this.call.contractId, restorationId, this.call.caller);
+  }
+}
+
+@validateRpc()
+class ContractApprovalTarget extends NativeRpcTarget {
+  constructor(private impl: OverseerImpl, private call: ContractCallContext) {
+    super();
+  }
+
+  manual(
+      description: ContractApprovalDescription,
+      operation: NativeRpcStub<(context: {source: unknown}) => Promise<unknown>>): Promise<unknown> {
+    return this.impl.runContractManual(this.call, description, operation);
+  }
+
+  require(description: ContractApprovalRequirement): void {
+    return this.impl.requireContractApproval(this.call, description);
+  }
+}
+
+@validateRpc()
+class ContractSharedStateTarget extends NativeRpcTarget {
+  constructor(private impl: OverseerImpl, private namespace: string) {
+    super();
+  }
+
+  get(key: string): Promise<unknown> {
+    return this.impl.getContractSharedState(this.namespace, key);
+  }
+
+  put(key: string, value: unknown): Promise<void> {
+    return this.impl.putContractSharedState(this.namespace, key, value);
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.impl.deleteContractSharedState(this.namespace, key);
+  }
+}
+
+@validateRpc()
+class ContractSourceApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
+  constructor(
+      private impl: OverseerImpl,
+      private call: ContractCallContext,
+      private mode: ContractSourceApprovalMode) {
+    super();
+  }
+
+  authorizeObservation(description: ObservationDescription): Promise<void> {
+    return this.impl.authorizeContractObservation(this.call, description);
+  }
+
+  submitAction(action: number, description: ActionDescription): Promise<void> {
+    return this.impl.submitContractAction(this.call, this.mode, action, description);
+  }
+
+  bindHook<Hook extends RpcTarget>(
+      controller: Fetcher<HookController<Hook>>, callback: NativeRpcStub<Hook>,
+      description: HookDescription): Promise<void> {
+    return this.impl.bindHook(
+        this.call.sourceGatekeeperId, controller, callback, description,
+        this.call.caller, this.call, this.mode);
   }
 }
 

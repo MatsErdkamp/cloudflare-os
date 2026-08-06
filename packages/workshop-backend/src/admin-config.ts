@@ -8,9 +8,13 @@
 // changed by a compromised admin session. Everything here is enabled by default; the admin UI opts
 // things *out*.
 
-import { AmbientGatekeeperMode, BannerConfig, BlueprintBinding, BlueprintMetadata, BlueprintOutput, DEFAULT_BANNER_COLOR, OutputFormatOffer, isAmbientGatekeeperMode, isBannerColor, isOutputIcon } from "@gadgets/workshop-shared/api";
+import { AmbientGatekeeperMode, BannerConfig, BlueprintBinding, BlueprintMetadata, BlueprintOutput, ContractorsDependencyPolicy, DEFAULT_BANNER_COLOR, OutputFormatOffer, isAmbientGatekeeperMode, isBannerColor, isOutputIcon } from "@gadgets/workshop-shared/api";
 import { SupportedResource } from "@gadgets/workshop-shared/gatekeeper";
 import { ADMIN_CONFIG_KEY, BlueprintKvEnv, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive.js";
+import {
+  isContractPackageName,
+  isExactContractDependencyVersion,
+} from "@gadgets/contractors/runtime";
 
 export type AdminConfig = {
   // Whether new account signups are allowed (default true). Note: this is an access toggle, not
@@ -46,6 +50,8 @@ export type AdminConfig = {
   // any user can publish a blueprint calling itself a Document, but only this list decides what
   // the deployment offers.
   formats: FormatCuration[];
+  // Controls which bundled npm authority may appear in proposed Contract artifacts.
+  contractors: ContractorsDependencyPolicy;
 };
 
 // One promoted blueprint. The blueprint itself supplies the noun, plural and icon, so improving
@@ -77,6 +83,7 @@ export const DEFAULT_ADMIN_CONFIG: AdminConfig = {
   disabledGatekeepers: [],
   ambientGatekeeperModes: {},
   formats: [],
+  contractors: {},
 };
 
 // Longest `agentHint` a promoted format may carry. Every enabled format's hint goes into the
@@ -247,6 +254,89 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
+function parseContractorsPolicy(value: unknown): ContractorsDependencyPolicy {
+  if (!value || typeof value !== "object") return {};
+  let raw = value as ContractorsDependencyPolicy;
+  let cleanPackages = (candidate: unknown): string[] | undefined => {
+    if (!Array.isArray(candidate)) return undefined;
+    return [...new Set(strings(candidate).filter(isContractPackageName))];
+  };
+  let allowedPackages = cleanPackages(raw.allowedPackages);
+  let deniedPackages = cleanPackages(raw.deniedPackages);
+  let allowedVersions: Record<string, string> = {};
+  if (raw.allowedVersions && typeof raw.allowedVersions === "object") {
+    for (let [name, version] of Object.entries(raw.allowedVersions)) {
+      if (isContractPackageName(name) && typeof version === "string" &&
+          isExactContractDependencyVersion(version) && !deniedPackages?.includes(name)) {
+        allowedVersions[name] = version;
+      }
+    }
+  }
+  return {
+    ...(allowedPackages ? {allowedPackages} : {}),
+    ...(deniedPackages ? {deniedPackages} : {}),
+    ...(Object.keys(allowedVersions).length ? {allowedVersions} : {}),
+    ...(Number.isSafeInteger(raw.maxBundleBytes) && raw.maxBundleBytes! >= 0
+      ? {maxBundleBytes: raw.maxBundleBytes} : {}),
+  };
+}
+
+function validatedPackageList(name: string, value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) ||
+      value.some(item => typeof item !== "string" || !isContractPackageName(item))) {
+    throw new TypeError(`${name} must contain valid npm package names.`);
+  }
+  if (new Set(value).size !== value.length) {
+    throw new TypeError(`${name} must not contain duplicate package names.`);
+  }
+  return [...value];
+}
+
+/** Validates and clones dependency governance received through the admin RPC boundary. */
+export function validateContractorsDependencyPolicy(
+  policy: ContractorsDependencyPolicy,
+): ContractorsDependencyPolicy {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+    throw new TypeError("Contractors dependency policy must be an object.");
+  }
+  let allowedPackages = validatedPackageList("allowedPackages", policy.allowedPackages);
+  let deniedPackages = validatedPackageList("deniedPackages", policy.deniedPackages);
+  let allowedVersions: Record<string, string> | undefined;
+  if (policy.allowedVersions !== undefined) {
+    if (!policy.allowedVersions || typeof policy.allowedVersions !== "object" ||
+        Array.isArray(policy.allowedVersions)) {
+      throw new TypeError("allowedVersions must be a package-to-version object.");
+    }
+    allowedVersions = {};
+    for (let [name, version] of Object.entries(policy.allowedVersions)) {
+      if (!isContractPackageName(name) || typeof version !== "string" ||
+          !isExactContractDependencyVersion(version)) {
+        throw new TypeError("allowedVersions must map valid package names to exact versions.");
+      }
+      allowedVersions[name] = version;
+    }
+  }
+  let maxBundleBytes = policy.maxBundleBytes;
+  if (maxBundleBytes !== undefined &&
+      (!Number.isSafeInteger(maxBundleBytes) || maxBundleBytes < 0)) {
+    throw new TypeError("maxBundleBytes must be a non-negative safe integer.");
+  }
+  let denied = new Set(deniedPackages ?? []);
+  if (allowedPackages?.some(name => denied.has(name))) {
+    throw new TypeError("A package cannot be both allowed and denied.");
+  }
+  if (allowedVersions && Object.keys(allowedVersions).some(name => denied.has(name))) {
+    throw new TypeError("A denied package cannot also have an allowed version.");
+  }
+  return {
+    ...(allowedPackages ? {allowedPackages} : {}),
+    ...(deniedPackages ? {deniedPackages} : {}),
+    ...(allowedVersions ? {allowedVersions} : {}),
+    ...(maxBundleBytes !== undefined ? {maxBundleBytes} : {}),
+  };
+}
+
 export function parseAdminConfig(raw: string | null): AdminConfig {
   if (!raw) return { ...DEFAULT_ADMIN_CONFIG };
   try {
@@ -279,6 +369,7 @@ export function parseAdminConfig(raw: string | null): AdminConfig {
       disabledGatekeepers: strings(p.disabledGatekeepers).map(v => v.toLowerCase()),
       ambientGatekeeperModes,
       formats: parseFormats(p.formats),
+      contractors: parseContractorsPolicy(p.contractors),
     };
   } catch {
     return { ...DEFAULT_ADMIN_CONFIG };

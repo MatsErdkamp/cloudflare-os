@@ -1,4 +1,4 @@
-import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
+import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AiModelConfig, type ContractDependency, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
 import { PDF_MIME_TYPE, modelApiSupportsPdfAttachments } from './chat-attachment-pdf';
 import { AgentCatalog, ObservationDescription } from '@gadgets/workshop-shared/gatekeeper';
 import { createWorkshopLogger } from "./observability";
@@ -154,7 +154,7 @@ export type AgentGadgetInfo = {
   // gadget-name parameter is omitted. Only workspaces migrated from single-gadget days
   // (or created from a blueprint) have one.
   isDefault: boolean;
-  bindings: {name: string, title: string, target: WorkpieceId}[];
+  bindings: {name: string, title: string, target: WorkpieceId, kind: "contract" | "source"}[];
   // What instantiating this gadget's blueprint produces, when it came from one that declares it.
   output?: BlueprintOutput;
 };
@@ -347,6 +347,24 @@ export interface AgentHooks {
   // Drain connection requests captured during the current step so they can be appended to the chat
   // (analogous to consumeCapturedActions).
   consumeCapturedConnectionRequests(chatId: number): AiChatMessageBody[];
+
+  // Persist and surface a content-addressed Contract proposal. The source and target IDs have
+  // already been resolved from the chat's named environment by the tool implementation.
+  proposeContract(chatId: number, input: {
+    sourceGatekeeperId: WorkpieceId;
+    targetGadgetId: WorkpieceId;
+    title: string;
+    bindingName: string;
+    sourceCode: string;
+    publicTypes: string;
+    dependencies: ContractDependency[];
+    artifactHash: string;
+    sourceTypeHash: string;
+    sourceRootType: string;
+    compatibilityDate: string;
+    runtimeHarnessVersion: string;
+    sharedStateKey?: string;
+  }): Promise<{requestId: string; artifactHash: string}>;
 
   // Blueprint hooks for the agent.
   //
@@ -591,11 +609,11 @@ IMPORTANT: The objects found in \`env\` most likely do NOT implement any API you
 `.trim();
 
 let SET_GADGET_BINDING_TOOL_DESCRIPTION = `
-Wire a resource from your \`env\` into a Gadget's own \`env\`, so the Gadget's code can use it.
+Wire an installed Contract from your \`env\` into a Gadget's own \`env\`, so the Gadget's code can use it.
 
 The bindings in your \`env\` belong to this chat; a Gadget's code sees only the Gadget's own bindings, which are listed in the system prompt. Use this tool to add one of your bindings to a Gadget: \`gadget\` names the target Gadget (by its name in your env), \`source\` names the resource binding to wire in, and \`name\` is the name the Gadget's code will see it as (\`env.<name>\` in server.js), defaulting to the same name as \`source\`.
 
-The addition is part of your proposed changes: like code edits, it takes permanent effect when the user accepts your changes.
+Raw Source/Gatekeeper bindings are Manager-only and cannot be wired into Consumer Gadget code. A normal Contract proposal already installs its new instance on the exact Gadget and binding reviewed by the human, so do not call this tool after approval. One Contract instance cannot be reused or moved to another binding; propose a separately reviewed instance instead. This tool exists only for an installed Contract record that has no binding placement. The addition is part of your proposed changes: like code edits, it takes permanent effect when the user accepts your changes.
 
 NOTE: You do NOT need this tool to use a resource yourself with \`executeCode\` — your own bindings are already available there. ONLY use it when a Gadget's code needs the resource.
 `.trim();
@@ -607,7 +625,7 @@ The 'env' object contains this chat's named bindings:
 * An entry for each Gadget in the workspace, under the name given in the system prompt's gadget list (or the name you passed to \`createGadget\`): an RPC stub pointing at the Gadget's server-side Durable Object. If the user asks you to interact with a Gadget directly, or asks if you can "see" it, use this stub (read the Gadget's server code to learn what RPC methods it exposes).
 * An entry for each external resource available to this chat: those listed in the system prompt, those the user grants in messages (shown as \`[Resource Title](env.SOME_NAME)\`), and those you obtain with \`requestConnection\`.
 
-Note that this differs from the \`env\` a Gadget's own code sees: a Gadget's server.js sees only that Gadget's own bindings (listed in the system prompt's gadget list), which are wired up separately with \`setGadgetBinding\`. Your bindings and a Gadget's bindings may point at the same resource under the same or different names.
+Note that this differs from the \`env\` a Gadget's own code sees: a Gadget's server.js sees only installed Contract bindings. Your Manager env may also contain private raw Sources. Never wire a raw Source into Gadget code. A Contract proposal installs its new instance on the exact reviewed target automatically; never reuse that instance for another binding.
 
 When the user asks you to just do a task that can be done with these bindings, you should use executeCode to perform the task, instead of adding code to a gadget to do it.
 
@@ -619,7 +637,13 @@ List the resource types a gatekeeper vendor offers, so you can construct a resou
 `.trim();
 
 let REQUEST_CONNECTION_TOOL_DESCRIPTION = `
-Ask the user to connect a gatekeeper resource (e.g. a ClickHouse cluster, a GitHub repo). Pre-configure as much as you can: always pass vendorId, and pass resourceUrl when you can infer it (use listConnectableResources to learn the URL patterns). The request must resolve to a specific resource: if you pass a resourceUrl it must match one of the vendor's patterns, and if the vendor offers multiple resource types with no whole-instance option you MUST pass a matching resourceUrl. Otherwise the call is rejected with guidance and no card is shown — fix the request and try again. You also choose \`bindingName\`: the name the resource will have in your env once connected (you know why you want the resource, so pick a name that reflects its role). On success this shows the user an accept/deny card in the chat. It does NOT block: your turn ends after a successful call, and you will be resumed once the user accepts (the resource becomes available as \`env.<bindingName>\`, which you can describeBinding and use from executeCode; wire it into a Gadget with setGadgetBinding only if the Gadget's code needs it) or denies (your turn simply ends; wait for the user's next message).
+Ask the user to connect a private Source (for example a ClickHouse cluster or GitHub repo). Pre-configure it with vendorId and a matching resourceUrl when known. You choose \`bindingName\`, which becomes the Manager-only name in your env. A successful request shows an accept/deny card and ends your turn. If accepted, use the Source directly only for Manager work or author a Contract for Gadget use. Raw Sources cannot be wired into Consumer Gadget environments.
+`.trim();
+
+let PROPOSE_CONTRACT_TOOL_DESCRIPTION = `
+Propose a reviewed Contract that turns one private Source in your env into a deliberately designed public capability for a target Gadget. Raw Sources cannot be wired into Gadget code.
+
+Provide the compiler-produced executable ESM with a default Contract factory export, complete public TypeScript declarations defining ContractBinding, the compiler's artifact and Source-type hashes, Source root type, compatibility date, runtime harness version, the exact target and binding name, and every bundled dependency's exact version and integrity. The proposal boundary verifies those claims against the current Source before showing the content-addressed artifact to a human. Your turn ends after a successful proposal; you cannot approve your own proposal. Possession of an approved Contract preapproves every public method and any Source action it performs unless its code explicitly uses a manual approval policy.
 `.trim();
 
 let GIVE_UP_TOOL_DESCRIPTION = `
@@ -1684,6 +1708,7 @@ export async function runAgent(
                   break;
                 case "listBlueprints":
                 case "listConnectableResources":
+                case "proposeContract":
                 case "requestConnection":
                   toolOutput = {text: toolCall.output ?? ""};
                   break;
@@ -1905,8 +1930,8 @@ export async function runAgent(
                   `The user accepted your connection request for "${msg.vendorName}". ` +
                   `The resource is available as \`env.${name}\` for use in executeCode ` +
                   `in this conversation. Use describeBinding("${name}") to learn its API, then ` +
-                  `use it. If a Gadget's code needs it permanently, use setGadgetBinding to wire ` +
-                  `it into that gadget.`,
+                  `use it as a private Source. If Gadget code needs authority derived from it, ` +
+                  `author and propose a Contract; raw Sources cannot be wired into Gadgets.`,
               timestamp: msgTimestamp,
             });
           } else {
@@ -1927,6 +1952,33 @@ export async function runAgent(
             content:
                 `The user denied your connection request for "${msg.vendorName}". ` +
                 `Do not retry the same request; wait for the user to tell you how to proceed.`,
+            timestamp: msgTimestamp,
+          });
+        }
+        break;
+      }
+
+      case "contractRequest": {
+        if (msg.state === "pending") {
+          claimedNames.add(msg.bindingName);
+        } else if (msg.state === "accepted" && msg.contractId !== undefined) {
+          if (!chatBindings.has(msg.bindingName)) {
+            chatBindings.set(msg.bindingName, {type: "workpiece", id: msg.contractId});
+          }
+          modelMessages.push({
+            role: "user",
+            content:
+                `The user approved and installed Contract "${msg.title}" as ` +
+                `\`env.${msg.bindingName}\` on the target Gadget. The installed artifact is ` +
+                `\`${msg.artifactHash}\`.`,
+            timestamp: msgTimestamp,
+          });
+        } else if (msg.state === "denied") {
+          modelMessages.push({
+            role: "user",
+            content:
+                `The user denied the Contract proposal "${msg.title}". Do not install or ` +
+                `exercise that proposed authority.`,
             timestamp: msgTimestamp,
           });
         }
@@ -2007,7 +2059,7 @@ export async function runAgent(
   // *rejected* requestConnection call leaves this false so the agent can fix the request and retry
   // without the turn ending (which would strand it, since there'd be no card to accept/deny and
   // thus no resume).
-  let connectionRequested = false;
+  let authorityRequested = false;
 
   // Latched by the turn_end barrier when this step submitted an awaitDecision action.
   // shouldStopAfterTurn reads it afterwards to end the turn until approval resumes it.
@@ -2153,7 +2205,7 @@ export async function runAgent(
           lines.push(`This gadget's bindings (as its own code sees them):`,
                      ...info.bindings.map(b => {
             let chatName = chatNameFor(b.target);
-            return `* ${b.name}: ${b.title}` +
+            return `* ${b.name}: ${b.title} (${b.kind === "contract" ? "installed Contract" : "legacy raw Source"})` +
                 (chatName !== undefined
                     ? ` — in your env as \`env.${chatName}\``
                     : ` — (no binding for this in your env)`);
@@ -2504,7 +2556,7 @@ export async function runAgent(
         }),
         name: Type.Optional(Type.String({
           description:
-              "Name to bind the resource under within the gadget (`env.<name>` in the gadget's " +
+              "Name to bind the Contract under within the gadget (`env.<name>` in the gadget's " +
               "own code). Defaults to the same name as `source`. Style: ALL_CAPS_WITH_UNDERSCORES.",
         })),
       }),
@@ -2749,6 +2801,87 @@ export async function runAgent(
       }
     }),
 
+    proposeContract: defineTool({
+      name: "proposeContract",
+      label: "Propose Contract",
+      description: PROPOSE_CONTRACT_TOOL_DESCRIPTION,
+      parameters: Type.Object({
+        source: Type.String({description: "Env binding name of the private Source."}),
+        targetGadget: Type.String({description: "Env binding name of the target Gadget."}),
+        title: Type.String({description: "Human-facing title for the installed Contract."}),
+        bindingName: Type.String({
+          description: "Name exposed in the target Gadget env. Style: ALL_CAPS_WITH_UNDERSCORES.",
+        }),
+        sourceCode: Type.String({
+          description: "Complete executable ESM with a default Contract factory export.",
+        }),
+        publicTypes: Type.String({
+          description: "Complete public TypeScript declarations defining ContractBinding.",
+        }),
+        dependencies: Type.Optional(Type.Array(Type.Object({
+          name: Type.String(),
+          version: Type.String(),
+          integrity: Type.String({description: "Compiler-recorded package content integrity."}),
+        }))),
+        artifactHash: Type.String({description: "Compiler-produced content-addressed artifact hash."}),
+        sourceTypeHash: Type.String({description: "Compiler-recorded hash of the selected Source declarations."}),
+        sourceRootType: Type.String({description: "Compiler-recorded Source root type name."}),
+        compatibilityDate: Type.String({description: "Worker compatibility date used during compilation."}),
+        runtimeHarnessVersion: Type.String({description: "Contract runtime harness version included in the hash."}),
+        sharedStateKey: Type.Optional(Type.String({
+          description: "Explicit namespace shared with other configured Contract instances.",
+        })),
+      }),
+      execute: async (toolCallId, input) => {
+        try {
+          validateBindingName(input.bindingName);
+          let source = chatBindings.get(input.source);
+          if (!source || source.type !== "workpiece") {
+            throw new Error(`There is no Source named "${input.source}" in your env.`);
+          }
+          let target = chatBindings.get(input.targetGadget);
+          if (!target || target.type !== "workpiece") {
+            throw new Error(`There is no Gadget named "${input.targetGadget}" in your env.`);
+          }
+          let dependencies: ContractDependency[] = [];
+          let dependencyNames = new Set<string>();
+          for (let dependency of input.dependencies ?? []) {
+            if (dependencyNames.has(dependency.name)) {
+              throw new Error(`Dependency ${dependency.name} was listed more than once.`);
+            }
+            dependencyNames.add(dependency.name);
+            dependencies.push(dependency);
+          }
+          dependencies.sort((left, right) => left.name.localeCompare(right.name));
+          let result = await hooks.proposeContract(chatId, {
+            sourceGatekeeperId: source.id,
+            targetGadgetId: target.id,
+            title: input.title,
+            bindingName: input.bindingName,
+            sourceCode: input.sourceCode,
+            publicTypes: input.publicTypes,
+            dependencies,
+            artifactHash: input.artifactHash,
+            sourceTypeHash: input.sourceTypeHash,
+            sourceRootType: input.sourceRootType,
+            compatibilityDate: input.compatibilityDate,
+            runtimeHarnessVersion: input.runtimeHarnessVersion,
+            sharedStateKey: input.sharedStateKey,
+          });
+          authorityRequested = true;
+          claimedNames.add(input.bindingName);
+          let output = jsonToolResultText({
+            ...result,
+            status: "awaiting_human_approval",
+          });
+          return toolResult(output, {output} as Partial<AiToolCall>);
+        } catch (error) {
+          toolCallNotes.set(toolCallId, {error: toolErrorText(error)});
+          throw error;
+        }
+      },
+    }),
+
     requestConnection: defineTool({
       name: "requestConnection",
       label: "Request connection",
@@ -2795,10 +2928,10 @@ export async function runAgent(
 
           let result = await hooks.requestConnection(chatId, input);
           // Only end the turn if a request was actually created; a rejected request must let the
-          // agent retry within the same turn (see the connectionRequested flag /
+          // agent retry within the same turn (see the authorityRequested flag /
           // shouldStopAfterTurn).
           if (result.requested) {
-            connectionRequested = true;
+            authorityRequested = true;
             // The name is claimed in the chat's scope from request time (released only by
             // denial), so nothing else in this step can take it.
             claimedNames.add(input.bindingName);
@@ -3050,7 +3183,7 @@ export async function runAgent(
           // fresh turn; deny just leaves the turn ended.) A rejected requestConnection (e.g.
           // unresolvable resource) leaves this false so the agent can fix the request and retry
           // in the same turn.
-          connectionRequested ||
+          authorityRequested ||
           // Wait for approval before continuing against state that may not reflect the action.
           awaitingActionDecision ||
           // Auto-terminate when callback-initiated and all callbacks have been resolved/rejected.
