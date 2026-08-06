@@ -247,6 +247,47 @@ type ContractSessionInput = {
   contract: {id: string, artifactHash: string};
 };
 
+// A provider-owned Source stub cannot be forwarded through the Overseer as an RPC argument and
+// still be assumed to retain the native stub methods (notably dup()) in the Contract worker.
+// Re-export it from an Overseer-owned target so the Contract always receives a direct native stub.
+class ContractSourceBridge extends NativeRpcTarget {
+  constructor(private source: NativeRpcStub<NativeRpcTarget>) {
+    super();
+
+    return new Proxy(this, {
+      get(target, prop) {
+        if (prop === "then" || prop === "dup") return undefined;
+        if (typeof prop === "symbol") {
+          let value = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+
+        let method = Reflect.get(target.source, prop, target.source);
+        if (typeof method !== "function") return method;
+        return (...args: unknown[]) => Reflect.apply(method, target.source, args);
+      },
+      getPrototypeOf() {
+        return NativeRpcTarget.prototype;
+      },
+    });
+  }
+
+  [Symbol.dispose](): void {
+    this.source[Symbol.dispose]();
+  }
+}
+
+/**
+ * Re-exports a provider-owned Contract Source through an Overseer-owned native RPC capability.
+ * The returned stub owns `source`; callers must dispose only the returned stub.
+ */
+export function bridgeContractSource(
+    source: NativeRpcStub<NativeRpcTarget>): NativeRpcStub<NativeRpcTarget> {
+  // workerd does not reliably recognize a proxied RpcTarget as a top-level RPC value, so create
+  // the stub explicitly. The explicit stub also guarantees that the Contract receives dup().
+  return new NativeRpcStub(new ContractSourceBridge(source));
+}
+
 interface ContractFacetRpc extends DurableObject {
   startSession(session: ContractSessionInput): Promise<unknown>;
   restoreSession(session: ContractSessionInput, restorationId: string): Promise<unknown>;
@@ -2993,7 +3034,8 @@ class OverseerImpl implements AgentHooks {
       startedAt: new Date(),
       ...(methodName ? {methodName} : {}),
     };
-    let source = await this.openContractSourceSession(call, {type: "preapproved"});
+    let source = bridgeContractSource(
+        await this.openContractSourceSession(call, {type: "preapproved"}));
     let policy = {
       approval: new ContractApprovalTarget(this, call),
     };
@@ -3042,7 +3084,8 @@ class OverseerImpl implements AgentHooks {
       startedAt: new Date(),
       methodName,
     };
-    let source = await this.openContractSourceSession(call, {type: "preapproved"});
+    let source = bridgeContractSource(
+        await this.openContractSourceSession(call, {type: "preapproved"}));
     let policy = {approval: new ContractApprovalTarget(this, call)};
     let sharedState = contract.sharedStateKey
         ? new ContractSharedStateTarget(this, contract.sharedStateKey)
@@ -3094,7 +3137,8 @@ class OverseerImpl implements AgentHooks {
 
     let source: NativeRpcStub<NativeRpcTarget> | undefined;
     try {
-      source = await this.openContractSourceSession(call, {type: "manual", operationId});
+      source = bridgeContractSource(
+          await this.openContractSourceSession(call, {type: "manual", operationId}));
       return await operation({source});
     } catch (error) {
       try {

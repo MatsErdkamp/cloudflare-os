@@ -1,5 +1,6 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
 import { CONTRACT_HARNESS } from "@gadgets/contractors/runtime";
+import { bridgeContractSource } from "../src/overseer.js";
 
 const CONTRACT_MODULE = `
   import {DurableObject, RpcTarget, env} from "cloudflare:workers";
@@ -7,17 +8,6 @@ const CONTRACT_MODULE = `
   class Child extends RpcTarget {
     constructor(value) { super(); this.value = value; }
     read() { return this.value; }
-  }
-
-  class Source extends RpcTarget {
-    read() { return "source"; }
-    child() { return new Child("source-child"); }
-    cursor() { return new Child("cursor"); }
-    mappedChild() { return new Map([["child", new Child("mapped-child")]]); }
-  }
-
-  export class SourceFacet extends DurableObject {
-    startSession() { return new Source(); }
   }
 
   class ContractRoot extends RpcTarget {
@@ -66,13 +56,16 @@ const CONTRACT_MODULE = `
 
 const TEST_MAIN = `
   export {ContractFacet} from "contract-harness.js";
-  export {SourceFacet} from "contract.js";
 `;
 
-type FixtureEnv = Cloudflare.Env & {TEST_LOADER: WorkerLoader};
+type FixtureEnv = Cloudflare.Env & {
+  TEST_LOADER: WorkerLoader;
+  TEST_CONTRACT_SOURCE: {startSession(): Promise<any>};
+};
 
 class FixtureApproval extends RpcTarget {
   constructor(private readonly source: any) { super(); }
+  [Symbol.dispose](): void { this.source[Symbol.dispose](); }
   manual(_description: unknown, operation: (context: {source: unknown}) => unknown): unknown {
     return operation({source: this.source.dup()});
   }
@@ -118,13 +111,6 @@ export class ContractRetractionTestHost extends DurableObject<FixtureEnv> {
     }));
   }
 
-  #sourceFacet(): any {
-    return this.ctx.facets.get("source", () => ({
-      class: this.#worker().getDurableObjectClass("SourceFacet"),
-      id: "source",
-    }));
-  }
-
   #contractFacet(): any {
     return this.ctx.facets.get("contract", () => ({
       class: this.#worker().getDurableObjectClass("ContractFacet"),
@@ -133,7 +119,7 @@ export class ContractRetractionTestHost extends DurableObject<FixtureEnv> {
   }
 
   async #session() {
-    const source = await this.#sourceFacet().startSession();
+    const source = bridgeContractSource(await this.env.TEST_CONTRACT_SOURCE.startSession());
     return {
       source,
       policy: {approval: new FixtureApproval(source.dup())},

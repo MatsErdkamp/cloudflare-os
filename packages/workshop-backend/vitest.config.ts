@@ -21,6 +21,29 @@ export default defineConfig({
         kvNamespaces: ['BLUEPRINTS'],
         r2Buckets: ['BLUEPRINT_CONTENT'],
         workerLoaders: { TEST_LOADER: {}, LOADER: {} },
+        serviceBindings: {
+          TEST_CONTRACT_SOURCE: { name: 'contract-source', entrypoint: 'ContractSource' },
+        },
+        workers: [{
+          name: 'contract-source',
+          modules: true,
+          script: `
+            import {RpcTarget, WorkerEntrypoint} from "cloudflare:workers";
+            class Child extends RpcTarget {
+              constructor(value) { super(); this.value = value; }
+              read() { return this.value; }
+            }
+            class Source extends RpcTarget {
+              read() { return "source"; }
+              child() { return new Child("source-child"); }
+              cursor() { return new Child("cursor"); }
+              mappedChild() { return new Map([["child", new Child("mapped-child")]]); }
+            }
+            export class ContractSource extends WorkerEntrypoint {
+              startSession() { return new Source(); }
+            }
+          `,
+        }],
       },
     }),
   ],
