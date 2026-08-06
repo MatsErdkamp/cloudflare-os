@@ -157,6 +157,13 @@ test("worker entries carry the deploy contract", () => {
         namespace_id: "$KV_CONTEXT_COLLECTIONS_ID" });
   assert.deepEqual(context.inputs, []);
 
+  // gatekeeper-r2 provisions deployment-owned object storage and has no OAuth credentials.
+  const r2 = workers["gatekeeper-r2"];
+  assert.deepEqual(
+      r2.bindings.find((b) => b.name === "STORAGE"),
+      { type: "r2_bucket", name: "STORAGE", bucket_name: "$R2_STORAGE_NAME" });
+  assert.deepEqual(r2.inputs, []);
+
   // Module blobs are content-addressed.
   for (const [name, entry] of Object.entries(workers)) {
     assert.ok(entry.modules.some((m) => m.name === entry.mainModule),

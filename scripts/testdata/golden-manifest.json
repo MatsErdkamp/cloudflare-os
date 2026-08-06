@@ -661,6 +661,53 @@
         "BASE_URL": "$PUBLIC_BASE_URL/gatekeeper/notion"
       }
     },
+    "gatekeeper-r2": {
+      "bindings": [
+        {
+          "bucket_name": "$R2_STORAGE_NAME",
+          "name": "STORAGE",
+          "type": "r2_bucket"
+        }
+      ],
+      "compatibilityDate": "2026-08-06",
+      "compatibilityFlags": [
+        "allow_irrevocable_stub_storage",
+        "nodejs_als"
+      ],
+      "inputs": [],
+      "installable": true,
+      "kind": "gatekeeper",
+      "mainModule": "r2.js",
+      "migrations": [
+        {
+          "new_sqlite_classes": [
+            "R2AccountState",
+            "R2Gatekeeper"
+          ],
+          "tag": "v1"
+        }
+      ],
+      "modules": [
+        {
+          "name": "r2.js",
+          "r2Key": "blobs/modules/4b59673ad4f4f68740396949d0ade6300029d854a3ad8467cacab64a27e06f50",
+          "sha256": "4b59673ad4f4f68740396949d0ade6300029d854a3ad8467cacab64a27e06f50",
+          "size": 55,
+          "type": "esm"
+        }
+      ],
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": {
+          "invocation_logs": false
+        }
+      },
+      "shortName": "r2",
+      "vars": {
+        "BASE_URL": "$PUBLIC_BASE_URL/gatekeeper/r2"
+      }
+    },
     "gatekeeper-scheduler": {
       "bindings": [],
       "compatibilityDate": "2026-02-02",
