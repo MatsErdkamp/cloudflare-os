@@ -81,8 +81,12 @@ The generation-tagged, uniquely named association through which one Consumer pos
 _Avoid_: Grant, permission
 
 **Authority Event**:
-An append-only audit fact recording a decision or lifecycle transition within Workspace Authority.
-_Avoid_: Log line
+An immutable, workspace-sequenced audit fact written atomically with the local authority decision or lifecycle transition it records. It is an audit projection of authority state, not an operational log or the source of truth.
+_Avoid_: Log line, Source Action
+
+**Authority Operation**:
+An idempotent causal group containing every Authority Event produced while carrying one requested change or recovery step across local state and external effects.
+_Avoid_: Request ID, transaction
 
 **Graduation**:
 Creation of Project-owned Contract Instances equivalent to a Gadget's approved bindings, with lineage back to the Gadget and without changing the Gadget's live security identity.
