@@ -120,6 +120,10 @@ _Avoid_: Permission grant, verifier capability
 The generation-tagged, uniquely named association through which one Consumer possesses the capability produced by one Contract Instance.
 _Avoid_: Grant, permission
 
+**Legacy Compatibility Binding**:
+A preserved Gadget-only binding created before identity-bound Sources and canonical Contract-only Bindings existed. It retains historical behavior but cannot authorize Projects, Development Sessions, Workloads, or Graduation.
+_Avoid_: Canonical Binding, migration grant
+
 **Authority Event**:
 An immutable, workspace-sequenced audit fact written atomically with the local authority decision or lifecycle transition it records. It is an audit projection of authority state, not an operational log or the source of truth.
 _Avoid_: Log line, Source Action
