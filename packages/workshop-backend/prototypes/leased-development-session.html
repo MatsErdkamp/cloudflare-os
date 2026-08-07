@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PROTOTYPE — Leased development session</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#64748b; --line:#dbe2ea; --paper:#f6f8fb; --accent:#315cdd; --danger:#b42318; --ok:#147d64; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:15px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; color:var(--ink); background:var(--paper); }
+    main { width:min(1180px,calc(100% - 32px)); margin:28px auto 60px; }
+    h1,h2,h3 { line-height:1.15; margin:0 0 12px; }
+    h1 { font-size:28px; } h2 { font-size:18px; } h3 { font-size:15px; }
+    p { margin:0 0 12px; }
+    .eyebrow { color:var(--accent); font-weight:750; letter-spacing:.08em; text-transform:uppercase; font-size:12px; }
+    .intro,.panel { background:white; border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:0 2px 10px #17202a0a; }
+    .intro { margin-bottom:16px; }
+    .grid { display:grid; grid-template-columns:1.3fr .9fr; gap:16px; align-items:start; }
+    .panel { margin-bottom:16px; }
+    .fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+    .field { min-height:72px; padding:10px; border:1px solid var(--line); border-radius:8px; }
+    .label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+    .value { font-weight:650; overflow-wrap:anywhere; }
+    .ok { color:var(--ok); } .bad { color:var(--danger); } .muted { color:var(--muted); }
+    button { border:1px solid var(--line); border-radius:8px; background:white; color:var(--ink); padding:9px 12px; cursor:pointer; font:inherit; text-align:left; }
+    button:hover { border-color:var(--accent); }
+    button.primary { color:white; background:var(--accent); border-color:var(--accent); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .buttons { display:flex; flex-wrap:wrap; gap:8px; }
+    .binding { border:1px solid var(--line); border-radius:8px; padding:11px; margin-top:8px; }
+    .binding-head { display:flex; justify-content:space-between; gap:12px; }
+    .pill { border-radius:999px; padding:2px 8px; background:#eef2ff; color:#324bb3; font-size:12px; white-space:nowrap; }
+    .pill.bad { background:#fff1f0; color:var(--danger); }
+    pre { margin:0; padding:12px; border-radius:8px; background:#111827; color:#e5e7eb; overflow:auto; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; }
+    .tabs { display:flex; gap:6px; border-bottom:1px solid var(--line); margin-bottom:14px; overflow:auto; }
+    .tab { border:0; border-radius:0; color:var(--muted); border-bottom:2px solid transparent; }
+    .tab.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:700; }
+    .step { display:flex; gap:10px; align-items:center; margin-top:8px; }
+    .step span { width:24px; height:24px; border-radius:50%; background:#eef2ff; display:grid; place-items:center; font-size:12px; flex:none; }
+    .step button { flex:1; }
+    .step.done { opacity:.45; }
+    .notice { padding:10px 12px; border-left:3px solid var(--accent); background:#f3f6ff; margin-top:12px; }
+    ul { margin:8px 0 0; padding-left:20px; }
+    @media (max-width:850px) { .grid { grid-template-columns:1fr; } .fields { grid-template-columns:1fr 1fr; } }
+    @media (max-width:520px) { .fields { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="intro">
+    <div class="eyebrow">Throwaway logic prototype</div>
+    <h1>Leased development capability session</h1>
+    <p><strong>Question:</strong> Can <code>contractors login</code>, <code>dev</code>, <code>status</code>, and <code>disconnect</code> feel predictable while the workspace keeps every credential, Source, selection rule, and Contract policy server-side?</p>
+    <p class="muted">Assumption: this is a state-model question, not a visual-design exercise. The demo exposes the full authority-facing state after every action. It never models a raw Source or credential in the local daemon.</p>
+  </section>
+
+  <div class="grid">
+    <div>
+      <section class="panel">
+        <h2>Current session</h2>
+        <div id="fields" class="fields"></div>
+        <div id="notice" class="notice"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Resolved capability environment</h2>
+        <p class="muted">Only active Contract capabilities cross the session seam. Required failures make the session unready; optional failures remain diagnostics.</p>
+        <div id="bindings"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Generated TypeScript</h2>
+        <pre id="types"></pre>
+      </section>
+    </div>
+
+    <div>
+      <section class="panel">
+        <h2>Free play</h2>
+        <div id="actions" class="buttons"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Guided walkthroughs</h2>
+        <div id="tabs" class="tabs"></div>
+        <div id="scenario"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Authority events</h2>
+        <p class="muted">Only durable changes appear. Transport loss and rejected reconnects stay operational diagnostics.</p>
+        <pre id="events"></pre>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script>
+// Portable prototype module. It knows nothing about the DOM.
+const LeasedSession = (() => {
+  const initial = () => ({
+    authenticatedPrincipal: null,
+    requested: { project: "project:ledger", environment: "development", bindingSet: "dev@3" },
+    session: null,
+    nextSession: 1,
+    nextEventSequence: 41,
+    operations: {},
+    events: [],
+    lastOutcome: "Signed out. Login establishes the human principal; repository values remain requests only."
+  });
+
+  const definitions = {
+    storage: { required: true, mode: "shared", type: "R2Bucket", status: "unresolved", generation: null, contract: null, reason: "awaiting-resolution" },
+    issues: { required: false, mode: "personal", type: "GitHubIssues", status: "unresolved", generation: null, contract: null, reason: "awaiting-resolution" }
+  };
+
+  function event(state, family, subject, detail) {
+    state.events.push({ sequence: state.nextEventSequence++, family, subject, detail });
+  }
+
+  function clone(state) { return structuredClone(state); }
+
+  function readiness(session) {
+    if (!session || session.lifecycle !== "active") return "unavailable";
+    return Object.values(session.bindings).some(b => b.required && b.status !== "active") ? "blocked" : "ready";
+  }
+
+  function reduce(current, action) {
+    const state = clone(current);
+    const s = state.session;
+    switch (action.type) {
+      case "RESET": return initial();
+      case "LOGIN":
+        if (state.authenticatedPrincipal) return {...state, lastOutcome:"Already signed in; no durable state changed."};
+        state.authenticatedPrincipal = "person:mat";
+        state.lastOutcome = "Authenticated as person:mat. No workspace authority has been granted yet.";
+        return state;
+      case "START": {
+        if (!state.authenticatedPrincipal) return {...state, lastOutcome:"Denied: login is required before requesting a Development Session."};
+        const key = action.idempotencyKey || "cli:start:demo";
+        if (state.operations[key]) return {...state, lastOutcome:`Idempotent replay: returned existing ${state.operations[key]}; no second lease was minted.`};
+        if (s && ["active","transportLost"].includes(s.lifecycle)) return {...state, lastOutcome:"Denied: this client already owns a live lease. Use status or reconnect."};
+        const id = `dev-session:${state.nextSession++}`;
+        state.session = {
+          id, consumerGeneration:1, leaseId:`lease:${id.split(":")[1]}`, leaseGeneration:1,
+          lifecycle:"active", remainingMinutes:15, principal:state.authenticatedPrincipal,
+          project:state.requested.project, environment:state.requested.environment,
+          bindingSet:state.requested.bindingSet, bindings:clone(definitions)
+        };
+        state.operations[key] = id;
+        event(state,"consumer.created",id,"development lease issued for exact project/environment/binding-set tuple");
+        event(state,"consumer.binding-set.assigned",id,state.requested.bindingSet);
+        state.lastOutcome = `Created ${id}. The lease exists but is blocked until the required storage binding resolves.`;
+        return state;
+      }
+      case "RESOLVE_STORAGE":
+        if (!s || s.lifecycle !== "active") return {...state,lastOutcome:"Ignored: an active lease is required."};
+        if (s.bindings.storage.status === "active") return {...state,lastOutcome:"No-op: storage already resolves to the same Contract generation."};
+        s.bindings.storage = {...s.bindings.storage,status:"active",generation:7,contract:"contract-instance:r2-17",reason:null};
+        event(state,"binding.activated",s.id,"storage → contract-instance:r2-17 @ generation 7");
+        event(state,"consumer.readiness.changed",s.id,"blocked → ready");
+        state.lastOutcome = "The required storage binding is active. The daemon receives only its Contract capability.";
+        return state;
+      case "AMBIGUOUS_ISSUES":
+        if (!s || s.lifecycle !== "active") return {...state,lastOutcome:"Ignored: an active lease is required."};
+        s.bindings.issues = {...s.bindings.issues,status:"ambiguous",reason:"two eligible personal Sources; explicit user consent/selection required"};
+        event(state,"resolution.blocked",s.id,"optional issues binding is ambiguous");
+        state.lastOutcome = "Two candidates remain ambiguous. Optional readiness stays ready; no Source capability crosses to the daemon.";
+        return state;
+      case "RENEW":
+        if (!s || s.lifecycle !== "active") return {...state,lastOutcome:"Denied: only a connected, unexpired lease can renew."};
+        s.leaseGeneration += 1; s.remainingMinutes = 15;
+        event(state,"consumer.lease.renewed",s.id,`lease generation ${s.leaseGeneration}`);
+        state.lastOutcome = "Renewed the same session identity with a new lease generation. Binding identities did not change.";
+        return state;
+      case "DROP_TRANSPORT":
+        if (!s || s.lifecycle !== "active") return {...state,lastOutcome:"No live transport to drop."};
+        s.lifecycle = "transportLost";
+        state.lastOutcome = "The WebSocket was lost. Durable authority is unchanged and the local Contract stubs are disposed immediately.";
+        return state;
+      case "RECONNECT":
+        if (!s || s.lifecycle !== "transportLost") return {...state,lastOutcome:"Reconnect denied: there is no resumable disconnected lease."};
+        if (s.remainingMinutes <= 0) return {...state,lastOutcome:"Reconnect denied: the lease expired. A new session identity is required."};
+        s.lifecycle = "active";
+        state.lastOutcome = `Resumed ${s.id} with the same immutable assignment and lease generation ${s.leaseGeneration}; fresh Contract stubs were minted.`;
+        return state;
+      case "EXPIRE":
+        if (!s || ["expired","closed"].includes(s.lifecycle)) return {...state,lastOutcome:"No live lease to expire."};
+        s.remainingMinutes = 0; s.lifecycle = "expired"; s.consumerGeneration += 1;
+        for (const binding of Object.values(s.bindings)) if (binding.status === "active") binding.status = "retracted";
+        event(state,"consumer.expired",s.id,`consumer generation ${s.consumerGeneration}`);
+        event(state,"binding.retracted",s.id,"all local session capabilities released");
+        state.lastOutcome = "The lease expired. Local capability stubs are disposed; reconnect cannot resurrect this identity.";
+        return state;
+      case "RETRACT_STORAGE":
+        if (!s || !["active","transportLost"].includes(s.lifecycle)) return {...state,lastOutcome:"No live session depends on storage."};
+        if (s.bindings.storage.status !== "active") return {...state,lastOutcome:"No-op: storage is not active."};
+        s.bindings.storage.status = "retracted"; s.bindings.storage.generation += 1; s.bindings.storage.contract = null; s.bindings.storage.reason = "Source retired locally";
+        event(state,"binding.retracted",s.id,"storage capability revoked before remote cleanup");
+        event(state,"consumer.readiness.changed",s.id,"ready → blocked");
+        state.lastOutcome = "Storage was retracted locally first. The daemon loses the Contract capability immediately; cleanup may retry later.";
+        return state;
+      case "DISCONNECT":
+        if (!s || ["closed","expired"].includes(s.lifecycle)) return {...state,lastOutcome:"Disconnect is idempotent; no live session remains."};
+        s.lifecycle = "closed"; s.consumerGeneration += 1; s.remainingMinutes = 0;
+        for (const binding of Object.values(s.bindings)) if (binding.status === "active") binding.status = "retracted";
+        event(state,"consumer.disconnected",s.id,`consumer generation ${s.consumerGeneration}`);
+        event(state,"binding.retracted",s.id,"all local session capabilities released");
+        state.lastOutcome = "Disconnected durably and disposed every local stub. A future dev command creates a new session identity.";
+        return state;
+      default: return {...state,lastOutcome:`Unknown action ${action.type}`};
+    }
+  }
+
+  function view(state) {
+    const s = state.session;
+    return {
+      principal: state.authenticatedPrincipal || "signed out",
+      sessionId: s?.id || "none",
+      lifecycle: s?.lifecycle || "none",
+      readiness: readiness(s),
+      assignment: s ? `${s.project} / ${s.environment} / ${s.bindingSet}` : "not assigned",
+      lease: s ? `${s.leaseId} · generation ${s.leaseGeneration} · ${s.remainingMinutes} min` : "none",
+      consumerGeneration: s?.consumerGeneration || "—",
+      bindings: s?.bindings || clone(definitions),
+      events: state.events,
+      outcome: state.lastOutcome
+    };
+  }
+
+  return { initial, reduce, view };
+})();
+
+const actions = [
+  ["Login",{type:"LOGIN"}], ["Start dev session",{type:"START",idempotencyKey:"cli:start:demo"}],
+  ["Replay start",{type:"START",idempotencyKey:"cli:start:demo"}], ["Resolve required storage",{type:"RESOLVE_STORAGE"}],
+  ["Find two optional candidates",{type:"AMBIGUOUS_ISSUES"}], ["Renew lease",{type:"RENEW"}],
+  ["Lose transport",{type:"DROP_TRANSPORT"}], ["Reconnect",{type:"RECONNECT"}],
+  ["Retract storage Source",{type:"RETRACT_STORAGE"}], ["Expire lease",{type:"EXPIRE"}],
+  ["Disconnect",{type:"DISCONNECT"}], ["Reset",{type:"RESET"}]
+];
+
+const scenarios = [
+  {name:"Happy path",description:"Authenticate, request one exact environment, resolve the required capability, and renew the same identity.",steps:["Login","Start dev session","Resolve required storage","Renew lease"]},
+  {name:"Reconnect",description:"A transport failure disposes local stubs but does not destroy durable authority. Reconnect resumes only the same live lease.",steps:["Login","Start dev session","Resolve required storage","Lose transport","Reconnect"]},
+  {name:"Expiry",description:"After durable expiry, reconnect cannot resurrect the session. Starting again mints a new identity.",steps:["Login","Start dev session","Resolve required storage","Expire lease","Reconnect","Start dev session"]},
+  {name:"Retraction",description:"Terminal Source retirement removes the capability locally first and makes required readiness blocked even if cleanup is pending.",steps:["Login","Start dev session","Resolve required storage","Retract storage Source"]},
+  {name:"Ambiguity",description:"Multiple personal candidates never cause an automatic pick. Because the binding is optional, readiness stays ready after storage resolves.",steps:["Login","Start dev session","Resolve required storage","Find two optional candidates"]},
+  {name:"Replay",description:"Retrying the same CLI operation returns its first result instead of minting a second lease.",steps:["Login","Start dev session","Replay start"]}
+];
+
+let state = LeasedSession.initial();
+let activeScenario = 0;
+let step = 0;
+
+function dispatch(action) { state = LeasedSession.reduce(state,action); render(); }
+function actionByLabel(label) { return actions.find(([name]) => name === label)[1]; }
+function startScenario(index) { activeScenario=index; step=0; state=LeasedSession.initial(); render(); }
+function runStep(index) { if(index!==step) return; dispatch(actionByLabel(scenarios[activeScenario].steps[index])); step++; render(); }
+
+function render() {
+  const v=LeasedSession.view(state);
+  const fieldData=[
+    ["Authenticated principal",v.principal],["Development Session",v.sessionId],["Lifecycle",v.lifecycle],
+    ["Readiness",v.readiness],["Exact assignment",v.assignment],["Lease",v.lease],["Consumer generation",v.consumerGeneration]
+  ];
+  document.querySelector("#fields").innerHTML=fieldData.map(([k,val])=>`<div class="field"><span class="label">${k}</span><div class="value">${val}</div></div>`).join("");
+  document.querySelector("#notice").textContent=v.outcome;
+  document.querySelector("#bindings").innerHTML=Object.entries(v.bindings).map(([name,b])=>`<div class="binding"><div class="binding-head"><strong>${name}: ${b.type}</strong><span class="pill ${["retracted","ambiguous"].includes(b.status)?"bad":""}">${b.required?"required":"optional"} · ${b.mode} · ${b.status}</span></div><div class="muted">${b.contract?`${b.contract} · binding generation ${b.generation}`:b.reason}</div></div>`).join("");
+  const active=Object.entries(v.bindings).filter(([,b])=>b.status==="active");
+  document.querySelector("#types").textContent=active.length ? `// Generated for ${v.sessionId}; never includes a Source or credential.\nexport interface DevEnvironment {\n${active.map(([n,b])=>`  readonly ${n}: RpcStub<${b.type}>; // binding generation ${b.generation}`).join("\n")}\n}\n\n// Dispose every stub on disconnect, expiry, retraction, or transport loss.` : "// No active Contract capabilities.\nexport interface DevEnvironment {}";
+  document.querySelector("#events").textContent=v.events.length ? v.events.map(e=>`${e.sequence}  ${e.family}\n    ${e.subject}: ${e.detail}`).join("\n") : "No durable authority events yet.";
+  document.querySelector("#actions").innerHTML="";
+  for(const [label,action] of actions){ const b=document.createElement("button"); b.textContent=label; if(label==="Start dev session") b.className="primary"; b.onclick=()=>dispatch(action); document.querySelector("#actions").appendChild(b); }
+  document.querySelector("#tabs").innerHTML="";
+  scenarios.forEach((s,i)=>{ const b=document.createElement("button"); b.className=`tab ${i===activeScenario?"active":""}`; b.textContent=s.name; b.onclick=()=>startScenario(i); document.querySelector("#tabs").appendChild(b); });
+  const scenario=scenarios[activeScenario];
+  document.querySelector("#scenario").innerHTML=`<p>${scenario.description}</p>`;
+  scenario.steps.forEach((label,i)=>{ const row=document.createElement("div"); row.className=`step ${i<step?"done":""}`; const num=document.createElement("span"); num.textContent=i+1; const b=document.createElement("button"); b.textContent=label; b.disabled=i!==step; b.onclick=()=>runStep(i); row.append(num,b); document.querySelector("#scenario").appendChild(row); });
+}
+render();
+</script>
+</body>
+</html>
