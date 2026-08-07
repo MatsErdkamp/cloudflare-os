@@ -12,6 +12,10 @@ _Avoid_: Manager when referring to the domain concept
 A named workspace member whom the owner has explicitly granted `manageAuthority`. An Authority Manager may make workspace authority decisions but gains no build rights from that permission.
 _Avoid_: Builder, Admin
 
+**Authority Session**:
+An ephemeral RPC capability minted for the workspace owner or one Authority Manager and bound to that principal's authenticated session, current permission generation, and workspace authority epoch. It is a revocable façade over Workspace Authority, not a durable grant or decision.
+_Avoid_: Login session, Authority Operation, permission record
+
 **Authority Proposal**:
 A requested change that would expand or redirect a Consumer's authority and therefore requires an Authority Manager's explicit decision before it takes effect.
 _Avoid_: Approved change, automatic grant

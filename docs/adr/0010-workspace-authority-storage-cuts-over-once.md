@@ -26,7 +26,7 @@ The workspace Durable Object remains the only authority database. Authority reco
 
 ### Schema control and audit
 
-`authoritySchema` is a singleton containing the active schema version, minimum writer version, authority mode (`legacy`, `backfilling`, or `active`), migration ID, checkpoint, and cutover digest. An incompatible old binary must refuse authority mutations rather than silently write an older shape.
+`authoritySchema` is a singleton containing the active schema version, minimum writer version, authority mode (`legacy`, `backfilling`, or `active`), workspace authority epoch, migration ID, checkpoint, and cutover digest. The owner can increment the authority epoch to invalidate every minted Authority Session without changing already-committed decisions. An incompatible old binary must refuse authority mutations rather than silently write an older shape.
 
 `authorityEventSequence` is the next workspace-local Authority Event sequence. `authorityEvents` is keyed by sequence and indexed by event family, operation ID, actor principal, and every typed subject reference. An event stores the fixed event envelope, exact typed subjects, before/after generation or revision where applicable, and bounded non-secret details. Events are append-only and are never the source of truth.
 

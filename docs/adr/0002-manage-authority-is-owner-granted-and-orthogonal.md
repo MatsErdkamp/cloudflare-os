@@ -4,6 +4,8 @@ Workspace authority administration will use a distinct `manageAuthority` permiss
 
 Authority-expanding and authority-redirecting operations are exposed through a separately minted, revocable authority capability. Revoking a grant invalidates capabilities minted from that grant without waiting for the user to reopen the workspace. The owner remains the recovery principal and is the only principal allowed to grant or revoke `manageAuthority`, transfer ownership, or perform a destructive workspace-level break-glass action.
 
+The capability is an ephemeral Authority Session bound to the authenticated principal, permission generation, and workspace authority epoch. Every call revalidates those epochs in Workspace Authority; revocation does not depend on restarting the workspace Durable Object. Revocation prevents new decisions but does not silently revoke decisions that committed while the grant was live. Their exact effects may still be reconciled unless the owner separately suspends or retracts them.
+
 ## Considered options
 
 - Treating `build` as authority administration was rejected because repository editing and credential-backed capability placement are different trust decisions.
