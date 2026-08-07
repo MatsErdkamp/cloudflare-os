@@ -33,8 +33,16 @@ A workspace-owned provenance and lifecycle record for one provider resource deri
 _Avoid_: Credential record
 
 **Credential Health**:
-The latest non-secret availability assessment reported by a Gatekeeper for an Account. It is separate from Account ownership, Source lifecycle, and Consumer eligibility.
+The latest generation-bound, non-secret assessment reported by a Gatekeeper for an Account: healthy, unknown, or attention required. It is evidence used by eligibility rules, not Account ownership, Source lifecycle, or permission.
 _Avoid_: Permission, authorization policy
+
+**Provider Account Identity**:
+The stable tuple of Gatekeeper vendor, provider issuer, and provider-issued account subject that anchors Account continuity across credential replacement.
+_Avoid_: Display name, email address, connected-account row ID
+
+**Provider Resource Identity**:
+The stable tuple of Gatekeeper vendor, provider issuer, resource type, and provider-issued resource key that anchors a Source to one external resource.
+_Avoid_: Canonical URL, resource title, Source ID
 
 **Project**:
 A stable workspace-owned identity that groups Repository Claims, named Environments, Development Sessions, and Workloads for one body of software.
@@ -75,6 +83,10 @@ _Avoid_: Source type, automatic fallback
 **Binding Resolution**:
 Workspace Authority's immutable result for one Consumer and one Binding Requirement version, recording the exact Source, verification result, Installation Decision, Contract Instance, and expected Binding generation.
 _Avoid_: Candidate, best match
+
+**Verification Receipt**:
+A bounded, expiring Gatekeeper result proving that one generation of a verifier principal independently satisfied a declared access check for one exact Provider Resource Identity.
+_Avoid_: Permission grant, verifier capability
 
 **Binding**:
 The generation-tagged, uniquely named association through which one Consumer possesses the capability produced by one Contract Instance.
