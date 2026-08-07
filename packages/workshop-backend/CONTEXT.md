@@ -60,6 +60,14 @@ _Avoid_: App when the distinction matters
 A short-lived leased Consumer belonging to one Project and resolving one Environment for the lifetime of its lease.
 _Avoid_: Local daemon, developer machine
 
+**Development Session Grant**:
+An Authority Manager's revocable authorization for one named developer to mint short-lived Development Sessions for one exact Project, Environment, and Binding Set version. It authorizes repetition within that fixed envelope, not new placement choices.
+_Avoid_: Session, build permission, blanket development access
+
+**Development Lease**:
+The bounded, renewable lifetime of one Development Session. Expiry invalidates that Consumer and every capability derived for it even if cleanup or an alarm runs later.
+_Avoid_: Login session, transport connection
+
 **Workload**:
 A stable Project-owned Consumer whose deployed caller is authenticated by a trusted provider-specific identity adapter and resolves one Environment.
 _Avoid_: Project ID, deployment claim

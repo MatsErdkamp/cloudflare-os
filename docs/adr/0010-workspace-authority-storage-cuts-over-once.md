@@ -60,6 +60,8 @@ The workspace Durable Object remains the only authority database. Authority reco
 
 Consumer identity, Environment, and exact Binding Set assignment are never inferred from repository, branch, display, or deployment labels.
 
+`developmentSessionGrants` stores Grant ID, named developer principal, exact Project/Environment/Binding Set version, grant generation, issuing Authority Manager and permission generation, lifecycle, revision, optional expiry, and maximum lease duration. Active `(developer principal, Project, Environment, Binding Set version)` is unique. A grant authorizes repeated short leases only inside that immutable envelope; changing any member requires another authority decision. Its generation is included in every Development Session and capability check, so revocation invalidates live sessions immediately. A Personal Source Grant remains separate and must name the same developer where personal mode is used.
+
 ### Binding policy, resolution, and installation
 
 `bindingSetHeads` stores Binding Set ID, owning Environment, latest version, lifecycle, and revision. `bindingSetVersions` is immutable and stores `(Binding Set ID, version)`, definition hash, creator, creation time, and optional predecessor. `bindingRequirements` is an immutable membership collection keyed by `(Binding Set ID, set version, binding name)` and stores Requirement ID/version, required or optional readiness, Authority Mode, exact Artifact Approval epoch, Source-type and identity constraints, verifier policy, and definition hash. A unique index enforces one binding name per set version.
