@@ -100,6 +100,10 @@ _Avoid_: Log line, Source Action
 An idempotent causal group containing every Authority Event produced while carrying one requested change or recovery step across local state and external effects.
 _Avoid_: Request ID, transaction
 
+**Authority Generation**:
+A monotonic security epoch on an Account, grant, Source, Consumer, permission, Binding, or capability. A generation mismatch invalidates previously derived authority even when the stable identity is unchanged.
+_Avoid_: Record revision, schema version, display version
+
 **Graduation**:
 Creation of Project-owned Contract Instances equivalent to a Gadget's approved bindings, with lineage back to the Gadget and without changing the Gadget's live security identity.
 _Avoid_: Export, moving an instance
