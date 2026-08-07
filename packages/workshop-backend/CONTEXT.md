@@ -128,6 +128,18 @@ _Avoid_: Log line, Source Action
 An idempotent causal group containing every Authority Event produced while carrying one requested change or recovery step across local state and external effects.
 _Avoid_: Request ID, transaction
 
+**Authority Effect**:
+A durable, idempotent intent for one exact external step caused by a committed authority decision or lifecycle transition. An Effect records recovery responsibility but confers no authority by itself.
+_Avoid_: Background job, remote transaction, Authority Operation
+
+**Reconciliation**:
+The system process that advances or repairs already-committed authority by comparing canonical facts, executing exact Authority Effects, and reducing ineligible authority. It never selects a new Source, changes an Authority Mode, or substitutes for an Authority Manager decision.
+_Avoid_: Synchronization, auto-approval, best-effort healing
+
+**Consumer Readiness**:
+The generation-tagged result of evaluating one Consumer's exact Binding Set: all required requirements must have active eligible Bindings, while optional failures remain explicit diagnostics. Readiness never exposes a partial required capability environment.
+_Avoid_: Deployment health, transport connectivity, loading state
+
 **Authority Generation**:
 A monotonic security epoch on an Account, grant, Source, Consumer, permission, Binding, or capability. A generation mismatch invalidates previously derived authority even when the stable identity is unchanged.
 _Avoid_: Record revision, schema version, display version
