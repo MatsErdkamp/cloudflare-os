@@ -64,6 +64,10 @@ _Avoid_: Local daemon, developer machine
 An Authority Manager's revocable authorization for one named developer to mint short-lived Development Sessions for one exact Project, Environment, and Binding Set version. It authorizes repetition within that fixed envelope, not new placement choices.
 _Avoid_: Session, build permission, blanket development access
 
+**Development Placement Template**:
+An immutable, manager-approved placement envelope within a Development Session Grant that pins each requirement's Artifact Approval, Source, Authority Mode, and shared-state choice. It authorizes fresh per-Session installations only while every cited generation still matches.
+_Avoid_: Contract Instance, reusable capability
+
 **Development Lease**:
 The bounded, renewable lifetime of one Development Session. Expiry invalidates that Consumer and every capability derived for it even if cleanup or an alarm runs later.
 _Avoid_: Login session, transport connection
@@ -127,3 +131,15 @@ _Avoid_: Record revision, schema version, display version
 **Graduation**:
 Creation of Project-owned Contract Instances equivalent to a Gadget's approved bindings, with lineage back to the Gadget and without changing the Gadget's live security identity.
 _Avoid_: Export, moving an instance
+
+**Graduation Plan**:
+An immutable reviewed translation from one exact Gadget authority snapshot into proposed Project, Environment, Binding Set, requirement, Consumer, and placement records. It confers no authority until its independent decisions and activation preconditions succeed.
+_Avoid_: Gadget export, deployment plan
+
+**Graduation Lineage**:
+The immutable relationship between one captured Gadget binding and the Project requirement, resolution, Binding, and fresh Contract Instance created from it.
+_Avoid_: Copy, ownership transfer
+
+**Rollback**:
+A fresh replacement installation that intentionally restores one previously used, still-eligible authority tuple and records both the current predecessor and historical target. It never resurrects a Contract Instance or rewinds history.
+_Avoid_: Undo, restore instance

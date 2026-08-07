@@ -10,7 +10,7 @@ The throwaway state-machine prototype exercised ready, reconnect, expiry, Retrac
 - the environment contains only active Contract capabilities, while unresolved and optional conditions remain status diagnostics;
 - reconnect resumes an existing live Consumer, while expiry or explicit disconnect requires a new Consumer identity.
 
-It also exposed an ergonomics problem: requiring an Authority Manager to approve every 15-minute lease would make ordinary development unusable. Workspace Authority therefore has a `Development Session Grant`: an explicit, revocable decision authorizing one named developer to mint repeated leases for one exact Project, Environment, and Binding Set version. It cannot authorize another tuple or replace any Artifact, Source, verification, or installation decision.
+It also exposed an ergonomics problem: requiring an Authority Manager to approve every 15-minute lease would make ordinary development unusable. Workspace Authority therefore has a `Development Session Grant`: an explicit, revocable decision authorizing one named developer to mint repeated leases for one exact Project, Environment, and Binding Set version. Its immutable Development Placement Template pins every Artifact Approval, Source, Authority Mode, and shared-state choice. The system may materialize fresh per-Session Installation Decisions from that exact template, citing the original manager decision; it cannot make another selection or proceed through a generation mismatch.
 
 The prototype remains a primary-source artifact on branch `codex/prototype-leased-development-session`; its page state is illustrative, while this ADR is normative.
 
@@ -29,12 +29,12 @@ The command requires an exact workspace, Project, Environment, and Binding Set v
 Workspace Authority then follows this order:
 
 1. authenticate the developer and live workspace build permission;
-2. find a live Development Session Grant for that same principal and exact tuple;
+2. find a live Development Session Grant and exact Development Placement Template for that same principal and tuple;
 3. create or idempotently return the Development Session under that Grant generation;
 4. evaluate its pinned Binding Requirements without choosing ambiguous candidates or changing Authority Mode;
 5. expose status immediately, but open a capability environment only when every required binding is active.
 
-If no Grant exists, `dev` creates a bounded request for an Authority Manager and reports `grantRequired`; it does not self-approve. A manager can grant exactly the displayed tuple. Personal mode additionally requires a current user-owned Personal Source Grant for that developer. Optional failures do not block the environment and appear as diagnostics.
+If no Grant exists, `dev` creates a bounded request for an Authority Manager and reports `grantRequired`; it does not self-approve. A manager grants the displayed tuple and exact placement template. Personal mode additionally requires a current user-owned Personal Source Grant for that developer. Each Session receives new Contract Instances and Installation Decisions causally authorized by the template; changed Approval, Source, mode, shared state, or generation requires a new Grant/template decision. Optional failures do not block the environment and appear as diagnostics.
 
 `dev` is a foreground supervisor by default and may run a child command after `--`. It writes only a non-secret Session ID and exact tuple to the user's runtime directory, never the repository. Losing that file merely prevents convenient resume; it grants no authority.
 

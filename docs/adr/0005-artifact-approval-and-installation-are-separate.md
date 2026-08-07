@@ -13,6 +13,7 @@ Replacement and rollback create new Contract Instances and atomically redirect t
 ## Consequences
 
 - The same approved Artifact may be installed more than once, but every placement needs its own Installation Decision.
+- A Development Placement Template is the prior human decision authorizing a bounded family of exact per-Session placements. Each materialized Installation Decision cites that template, its Development Session Grant and manager generation, and the new Consumer; the system does not make a new selection.
 - Changing the Source or Consumer is a new installation even when the Artifact hash is unchanged.
 - Rollback installs a previously approved Artifact as a new instance and requires a fresh placement decision.
 - Runtime Approval Gates move from `context.policy.approval` to `context.approval` in a new harness version; old hashed Artifacts retain their historical interface.
