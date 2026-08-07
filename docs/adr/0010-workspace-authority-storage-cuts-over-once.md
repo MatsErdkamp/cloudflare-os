@@ -56,11 +56,13 @@ The workspace Durable Object remains the only authority database. Authority reco
 
 - a Gadget stores its existing numeric Gadget ID, uniquely indexed;
 - a Development Session stores the authenticated human principal, lease ID, lease generation, issuance and expiry, uniquely indexed by active lease ID;
-- a Workload stores registration ID, identity-adapter kind/version, trusted provider subject and issuer, and registration generation, uniquely indexed by active trusted provider identity.
+- a Workload stores its active Workload Registration ID and generation; provider credential subjects and rotation state live in the registration record rather than the Consumer.
 
 Consumer identity, Environment, and exact Binding Set assignment are never inferred from repository, branch, display, or deployment labels.
 
 `developmentSessionGrants` stores Grant ID, named developer principal, exact Project/Environment/Binding Set version, grant generation, issuing Authority Manager and permission generation, lifecycle, revision, optional expiry, and maximum lease duration. Active `(developer principal, Project, Environment, Binding Set version)` is unique. A grant authorizes repeated short leases only inside that immutable envelope; changing any member requires another authority decision. Its generation is included in every Development Session and capability check, so revocation invalidates live sessions immediately. A Personal Source Grant remains separate and must name the same developer where personal mode is used.
+
+`workloadRegistrations` stores Registration ID, Workload Consumer ID, adapter ID/version, normalized issuer, registration generation, lifecycle, revision, deployment trust-profile hash, and current credential subject/generation/fingerprint. It may hold one explicitly prepared next or retiring previous credential with an overlap deadline and provisioning/cleanup effect references. Active `(adapter, issuer, credential subject)` and active Workload are unique. Provider secrets, JWTs, headers, and raw evidence are never stored. Registration suspension invalidates attachments and suspends dependent Bindings; terminal Workload retirement retracts them. Rotation keeps the Workload identity stable, while a changed subject is accepted only through an explicit generation-checked Authority Operation.
 
 ### Binding policy, resolution, and installation
 

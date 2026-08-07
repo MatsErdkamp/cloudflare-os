@@ -72,6 +72,18 @@ _Avoid_: Login session, transport connection
 A stable Project-owned Consumer whose deployed caller is authenticated by a trusted provider-specific identity adapter and resolves one Environment.
 _Avoid_: Project ID, deployment claim
 
+**Workload Registration**:
+A workspace-owned, generation-bound mapping from one adapter-authenticated issuer and subject to one stable Workload. It records the deployment trust profile and credential lifecycle without treating deployment metadata as authority.
+_Avoid_: Worker configuration, repository registration
+
+**Workload Identity Evidence**:
+A bounded, short-lived fact produced after an adapter verifies provider-specific transport evidence. It identifies an adapter, issuer, subject, assurance kind, and freshness but never a Project, Environment, Binding Set, or permission.
+_Avoid_: Workload identity, authorization claim
+
+**Workload Attachment**:
+A transient capability session opened after Workload Identity Evidence matches a live Workload Registration. It carries one immutable generation snapshot and is not a durable Consumer or authority decision.
+_Avoid_: Workload, deployment, Development Session
+
 **Environment**:
 A stable, Project-owned authority target with a unique human-readable name, such as development, preview, or production. Branch names and deployment labels may suggest an Environment but never select one authoritatively.
 _Avoid_: Deployment when referring to the authority configuration
