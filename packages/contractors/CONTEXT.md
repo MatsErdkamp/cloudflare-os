@@ -9,11 +9,19 @@ An immutable, content-addressed executable whose public interface defines the ca
 _Avoid_: Policy object, grant
 
 **Contract Review Bundle**:
-Immutable, content-addressed evidence linking a Contract Artifact to its original source, trusted build recipe, toolchain, dependencies, declarations, and review comparisons.
+An immutable, content-addressed manifest linking a Contract Artifact to exact authoring inputs, Source declarations, dependency closure, trusted build recipe/toolchain, origin, and independent reproducibility evidence.
 _Avoid_: Artifact, semantic summary
 
+**Build Attestation**:
+A bounded record from one trusted isolated build identifying its exact inputs, recipe, toolchain, and resulting Contract Artifact. Two matching attestations establish reproducibility but do not grant approval.
+_Avoid_: Artifact Approval, CI log
+
+**Review Comparison**:
+A content-addressed, versioned presentation of exact and derived differences between a Contract Review Bundle and its declared baseline. It is mandatory review evidence but never executable authority.
+_Avoid_: Permission summary, approval
+
 **Artifact Approval**:
-A workspace decision accepting one exact Contract Artifact and Review Bundle for potential installation without granting it to any Consumer.
+A workspace decision accepting one exact Contract Artifact and Review Bundle for potential installation, while citing the exact Review Comparison shown, without granting it to any Consumer.
 _Avoid_: Installation, deployment
 
 **Installation Decision**:
