@@ -39,6 +39,7 @@ function RootComponent() {
   // Routes that don't require auth (public routes)
   const isSignup = pathname === '/signup'
   const isBlueprint = pathname.startsWith('/blueprint/')
+  const isAuthorityPrototype = import.meta.env.DEV && pathname === '/authority-prototype'
 
   // A standalone (no app shell) render is used only for signed-out visitors of public routes.
   // Signed-in users get the full app chrome so public pages (esp. the blueprint detail) feel
@@ -54,6 +55,20 @@ function RootComponent() {
     if (token) {
       login(token)
     }
+  }
+
+  // The throwaway authority prototype is deliberately independent of auth and
+  // onboarding so reviewers can open it with the single prototype command.
+  if (isAuthorityPrototype) {
+    return (
+      <NucleoIconProvider>
+        <TooltipProvider>
+          <Toaster>
+            <Outlet />
+          </Toaster>
+        </TooltipProvider>
+      </NucleoIconProvider>
+    )
   }
 
   // Loading state
