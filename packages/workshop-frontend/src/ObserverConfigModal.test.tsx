@@ -14,37 +14,23 @@ import type { AccountDescription, VendorDescription } from '@gadgets/workshop-sh
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-vi.mock('@cloudflare/kumo', () => {
-  const Dialog = Object.assign(
-    ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    {
-      Root: ({ children }: { children: ReactNode }) => <>{children}</>,
-      Title: ({ children }: { children: ReactNode }) => <h1>{children}</h1>,
-    },
-  )
-  const Select = Object.assign(
-    ({ children }: { children: ReactNode }) => <div data-testid="account-select">{children}</div>,
-    { Option: ({ children }: { children: ReactNode }) => <div>{children}</div> },
-  )
-  return {
-    Dialog,
-    Loader: () => <span>Loading</span>,
-    Select,
-    Text: ({ children }: { children: ReactNode }) => <p>{children}</p>,
-    useKumoToastManager: () => ({ add: vi.fn<(toast: unknown) => void>() }),
-  }
-})
-
-vi.mock('./components/WorkshopControls', () => ({
-  WorkshopButton: ({ children, ...props }: ComponentProps<'button'>) => (
-    <button type="button" {...props}>{children}</button>
-  ),
+vi.mock('@matser/ui', () => ({
+  Button: ({ children, ...props }: ComponentProps<'button'>) => <button type="button" {...props}>{children}</button>,
+  Dialog: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: ReactNode }) => <h1>{children}</h1>,
+  Select: ({ children }: { children: ReactNode }) => <div data-testid="account-select">{children}</div>,
+  SelectTrigger: ({ children }: { children: ReactNode }) => <button>{children}</button>,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SelectItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Spinner: () => <span>Loading</span>,
+  Text: ({ children }: { children: ReactNode }) => <p>{children}</p>,
+  useToast: () => ({ add: vi.fn<(toast: unknown) => void>() }),
 }))
-
 vi.mock('./components/Avatar', () => ({ default: () => <span data-testid="avatar" /> }))
 
 import ObserverConfigModal from './ObserverConfigModal'
-
 const VENDOR = {
   displayName: 'Google',
   color: '#4285f4',

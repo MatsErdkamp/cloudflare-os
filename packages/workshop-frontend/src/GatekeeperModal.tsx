@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Dialog, useKumoToastManager, type PortalContainer } from '@cloudflare/kumo'
+import {useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CaretDown,
   CaretLeft,
@@ -21,7 +20,6 @@ import {
 import { AccountDescription, SupportedResource, VendorDescription, matchesResourceUrlPattern } from '@gadgets/workshop-shared/gatekeeper'
 import { ResourceConfiguratorFrame } from '@gadgets/workshop-shared/gatekeeper'
 import { useAuthenticatedApi } from './AuthContext'
-import { WorkshopButton, WorkshopIconButton } from './components/WorkshopControls'
 import ResourceConfiguratorHost from './ResourceConfiguratorHost'
 import {
   AgentSpawnerConfigForm,
@@ -34,7 +32,7 @@ import { AccountChooser, AccountOption } from './gatekeeper-modal/AccountChooser
 import { matchesResourceUrl } from './resourceMatching'
 import { reportIssue } from './errorReporting'
 import { useSiteName } from './ServerConfigContext'
-
+import { Dialog, useToast, DialogContent, DialogTitle, DialogDescription, DialogClose, type PortalContainer, Button } from '@matser/ui'
 export interface GatekeeperModalProps {
   open: boolean
   onClose: () => void
@@ -86,7 +84,7 @@ type ConnectionType = {
   accent?: string
   // Fixed glyph color for icon-on-accent tiles. The `accent` background is a
   // hard-coded light color that doesn't flip with the theme, so a theme-aware
-  // token like `text-kumo-strong` (near-white in dark mode) would vanish on it.
+  // token like `text-foreground` (near-white in dark mode) would vanish on it.
   // Pin the glyph to a dark color that reads on the light tile in both themes.
   iconColor?: string
   resourceUrlPattern?: string
@@ -178,7 +176,7 @@ export default function GatekeeperModal({
   initialVendorId, initialResourceUrl, initialResourceUrlPattern,
 }: GatekeeperModalProps) {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [selectedConnectionId, setSelectedConnectionId] = useState<ConnectionTypeId | null>(null)
   const [searchText, setSearchText] = useState('')
@@ -384,7 +382,7 @@ export default function GatekeeperModal({
       if (cancelled) return
       console.error('Failed to load models:', err)
       reportIssue('gatekeeper.models-load', err)
-      toasts.add({ title: "Couldn't load AI models", variant: 'error' })
+      toasts.add({ title: "Couldn't load AI models", type: 'error' })
     })
 
     authenticatedApi.listGatekeeperVendors().then(vendors => {
@@ -394,7 +392,7 @@ export default function GatekeeperModal({
       if (cancelled) return
       console.error('Failed to load connection vendors:', err)
       reportIssue('gatekeeper.vendors-load', err)
-      toasts.add({ title: "Couldn't load connection options", variant: 'error' })
+      toasts.add({ title: "Couldn't load connection options", type: 'error' })
     })
 
     return () => {
@@ -607,11 +605,11 @@ export default function GatekeeperModal({
     try {
       const result = await authenticatedApi.connectAccount(vendorId, resourceUrlPatterns)
       window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      toasts.add({ title: 'Complete the account connection in the new tab.', type: 'success' })
     } catch (error) {
       console.error('Failed to initiate connection:', error)
       reportIssue('gatekeeper.connect-start', error, { gatekeeperVendorId: vendorId })
-      toasts.add({ title: 'Failed to start connection flow', variant: 'error' })
+      toasts.add({ title: 'Failed to start connection flow', type: 'error' })
     } finally {
       setConnectingVendor(null)
     }
@@ -629,7 +627,7 @@ export default function GatekeeperModal({
       const result = await authenticatedApi.ensureAccountResources(accountId, missing)
       if (result.url) {
         window.open(result.url, '_blank', 'noopener,noreferrer')
-        toasts.add({ title: 'Grant the additional access in the new tab.', variant: 'success' })
+        toasts.add({ title: 'Grant the additional access in the new tab.', type: 'success' })
       }
       // The new grant arrives via subscribeConnectedAccounts(); the account's flag then clears and
       // the configurator loads automatically.
@@ -638,7 +636,7 @@ export default function GatekeeperModal({
       reportIssue('gatekeeper.resource-grant', error, {
         gatekeeperVendorId: selectedConnection?.vendorId,
       })
-      toasts.add({ title: 'Failed to request additional access', variant: 'error' })
+      toasts.add({ title: 'Failed to request additional access', type: 'error' })
     } finally {
       setGrantingAccountId(null)
     }
@@ -649,13 +647,13 @@ export default function GatekeeperModal({
     try {
       const result = await authenticatedApi.reconnectAccount(accountId)
       window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account reconnect in the new tab.', variant: 'success' })
+      toasts.add({ title: 'Complete the account reconnect in the new tab.', type: 'success' })
     } catch (error) {
       console.error('Failed to initiate reconnect:', error)
       reportIssue('gatekeeper.reconnect-start', error, {
         gatekeeperVendorId: selectedConnection?.vendorId,
       })
-      toasts.add({ title: 'Failed to start reconnect flow', variant: 'error' })
+      toasts.add({ title: 'Failed to start reconnect flow', type: 'error' })
     } finally {
       setReconnectingAccountId(null)
     }
@@ -663,7 +661,7 @@ export default function GatekeeperModal({
 
   const handleCreateAiModel = async () => {
     if (!selectedModelId) {
-      toasts.add({ title: 'Please select an AI model', variant: 'warning' })
+      toasts.add({ title: 'Please select an AI model', type: 'warning' })
       return
     }
     setCreating(true)
@@ -677,11 +675,11 @@ export default function GatekeeperModal({
         transferred = true
         onClose()
       } else {
-        toasts.add({ title: 'Failed to create AI model connection', variant: 'error' })
+        toasts.add({ title: 'Failed to create AI model connection', type: 'error' })
       }
     } catch (err) {
       console.error('Failed to create AI model gatekeeper:', err)
-      toasts.add({ title: 'Failed to create AI model connection', variant: 'error' })
+      toasts.add({ title: 'Failed to create AI model connection', type: 'error' })
     } finally {
       if (gatekeeper && !transferred) gatekeeper[Symbol.dispose]()
       setCreating(false)
@@ -690,11 +688,11 @@ export default function GatekeeperModal({
 
   const handleCreateAgentSpawner = async () => {
     if (!spawnerDisplayName.trim()) {
-      toasts.add({ title: 'Please enter a display name', variant: 'warning' })
+      toasts.add({ title: 'Please enter a display name', type: 'warning' })
       return
     }
     if (spawnerEnvError) {
-      toasts.add({ title: spawnerEnvError, variant: 'warning' })
+      toasts.add({ title: spawnerEnvError, type: 'warning' })
       return
     }
     const config: AgentSpawnerConfig = {
@@ -714,11 +712,11 @@ export default function GatekeeperModal({
         transferred = true
         onClose()
       } else {
-        toasts.add({ title: 'Failed to create agent spawner connection', variant: 'error' })
+        toasts.add({ title: 'Failed to create agent spawner connection', type: 'error' })
       }
     } catch (err) {
       console.error('Failed to create agent spawner gatekeeper:', err)
-      toasts.add({ title: 'Failed to create agent spawner connection', variant: 'error' })
+      toasts.add({ title: 'Failed to create agent spawner connection', type: 'error' })
     } finally {
       if (gatekeeper && !transferred) gatekeeper[Symbol.dispose]()
       setCreating(false)
@@ -747,11 +745,11 @@ export default function GatekeeperModal({
         transferred = true
         onClose()
       } else {
-        toasts.add({ title: 'Failed to create connection', variant: 'error' })
+        toasts.add({ title: 'Failed to create connection', type: 'error' })
       }
     } catch (err) {
       console.error('Failed to create resource gatekeeper:', err)
-      toasts.add({ title: err instanceof Error && err.message ? err.message : 'Failed to create connection', variant: 'error' })
+      toasts.add({ title: err instanceof Error && err.message ? err.message : 'Failed to create connection', type: 'error' })
     } finally {
       if (gatekeeper && !transferred) gatekeeper[Symbol.dispose]()
       setCreating(false)
@@ -795,28 +793,28 @@ export default function GatekeeperModal({
     : 'Create connection'
 
   return (
-    <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <Dialog
-        className="!z-[1000] !top-[clamp(28px,10vh,96px)] !flex !max-h-[calc((100vh_-_clamp(28px,10vh,96px)_-_28px)_*_0.9)] !w-[min(760px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-kumo-base p-0"
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent
+        className="!z-[1000] !top-[clamp(28px,10vh,96px)] !flex !max-h-[calc((100vh_-_clamp(28px,10vh,96px)_-_28px)_*_0.9)] !w-[min(760px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-background p-0"
         style={dialogMinHeight > 0 ? { minHeight: `${dialogMinHeight}px` } : undefined}
         size="lg"
       >
-        <div ref={headerRef} className="shrink-0 flex items-start justify-between gap-4 border-b border-kumo-line px-5 py-4">
+        <div ref={headerRef} className="shrink-0 flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div className="min-w-0">
-            <Dialog.Title className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-kumo-default">
+            <DialogTitle className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-foreground">
               {selectedConnection ? selectedConnection.title : 'Create New Connection'}
-            </Dialog.Title>
-            <Dialog.Description className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+            </DialogTitle>
+            <DialogDescription className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
               {selectedConnection
                 ? selectedConnection.description
                 : 'Choose what this gadget should be able to use.'}
-            </Dialog.Description>
+            </DialogDescription>
           </div>
-          <Dialog.Close
+          <DialogClose
             render={(props) => (
-              <WorkshopIconButton {...props} aria-label="Close">
+              <Button {...props} aria-label="Close" className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                 <X size={16} />
-              </WorkshopIconButton>
+              </Button>
             )}
           />
         </div>
@@ -827,7 +825,7 @@ export default function GatekeeperModal({
               <button
                 type="button"
                 onClick={() => setSelectedConnectionId(null)}
-                className="mb-4 inline-flex cursor-pointer items-center gap-1.5 text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-subtle transition-colors hover:text-kumo-default"
+                className="mb-4 inline-flex cursor-pointer items-center gap-1.5 text-[12px] leading-4 font-medium tracking-[-0.2px] text-muted-foreground transition-colors hover:text-foreground"
               >
                 <CaretLeft size={13} />
                 All connection types
@@ -898,24 +896,24 @@ export default function GatekeeperModal({
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div className="shrink-0 border-b border-kumo-line bg-kumo-base px-5 py-4">
+            <div className="shrink-0 border-b border-border bg-background px-5 py-4">
               <div className="relative">
-                <MagnifyingGlass size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-kumo-inactive" />
+                <MagnifyingGlass size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
                   value={searchText}
                   onChange={(event) => setSearchText(event.target.value)}
                   placeholder="Search services, apps, data sources..."
                   autoFocus
-                  className="h-10 w-full rounded-xl border border-kumo-line bg-kumo-base pl-9 pr-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-default placeholder:text-kumo-inactive shadow-none outline-none transition-[border-color,box-shadow] focus:border-kumo-ring focus:ring-2 focus:ring-kumo-ring/10"
+                  className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none outline-none transition-[border-color,box-shadow] focus:border-ring focus:ring-2 focus:ring-ring/10"
                 />
               </div>
             </div>
 
             <div className="new-gatekeeper-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              <div className="overflow-hidden rounded-xl border border-kumo-line bg-kumo-base">
+              <div className="overflow-hidden rounded-xl border border-border bg-background">
                 {isSearching ? (
                   filteredConnections.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+                    <div className="px-4 py-8 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                       No matching connection types.
                     </div>
                   ) : filteredConnections.map((connection, index) => (
@@ -928,7 +926,7 @@ export default function GatekeeperModal({
                   ))
                 ) : (
                   groupedConnections.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+                    <div className="px-4 py-8 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                       No connection types available.
                     </div>
                   ) : groupedConnections.map((group, index) => (
@@ -950,24 +948,24 @@ export default function GatekeeperModal({
         )}
 
         {selectedConnection && (
-          <div ref={footerRef} className="shrink-0 flex items-center justify-between gap-3 border-t border-kumo-line px-5 py-3">
+          <div ref={footerRef} className="shrink-0 flex items-center justify-between gap-3 border-t border-border px-5 py-3">
             <div />
             <div className="flex shrink-0 items-center gap-2">
-              <WorkshopButton onClick={() => setSelectedConnectionId(null)} disabled={creating} className="!h-9">
+              <Button onClick={() => setSelectedConnectionId(null)} disabled={creating} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-9" variant="secondary">
                 Back
-              </WorkshopButton>
-              <WorkshopButton
-                tone="primary"
+              </Button>
+              <Button
+
                 onClick={handleCreate}
                 disabled={!canCreate || creating}
-              >
+               className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50" variant="primary">
                 {creating ? 'Creating...' : createLabel}
-              </WorkshopButton>
+              </Button>
             </div>
           </div>
         )}
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -987,10 +985,10 @@ function ConnectionTypeRow({
     <button
       type="button"
       onClick={onClick}
-      className={`group flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-kumo-elevated ${first ? '' : 'border-t border-kumo-line'}`}
+      className={`group flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-card ${first ? '' : 'border-t border-border'}`}
     >
       <div
-        className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-kumo-elevated"
+        className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-card"
         style={connection.accent ? { backgroundColor: connection.accent } : undefined}
       >
         {iconUrl ? (
@@ -999,22 +997,22 @@ function ConnectionTypeRow({
           <Icon
             size={19}
             weight="duotone"
-            className={connection.iconColor ? undefined : 'text-kumo-strong'}
+            className={connection.iconColor ? undefined : 'text-foreground'}
             style={connection.iconColor ? { color: connection.iconColor } : undefined}
           />
         ) : (
-          <Database size={19} weight="duotone" className="text-kumo-strong" />
+          <Database size={19} weight="duotone" className="text-foreground" />
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+        <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
           {connection.title}
         </p>
-        <p className="mt-0.5 line-clamp-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+        <p className="mt-0.5 line-clamp-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
           {connection.vendor} · {connection.description}
         </p>
       </div>
-      <CaretRight size={14} className="shrink-0 text-kumo-inactive transition-transform group-hover:translate-x-0.5 group-hover:text-kumo-default" />
+      <CaretRight size={14} className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
     </button>
   )
 }
@@ -1060,16 +1058,16 @@ function ConnectionGroupRow({
     : items.map(item => item.title).join(', ')
 
   return (
-    <div className={first ? '' : 'border-t border-kumo-line'}>
+    <div className={first ? '' : 'border-t border-border'}>
       <button
         type="button"
         onClick={handleClick}
         aria-expanded={expanded}
         aria-controls={panelId}
-        className="group flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-kumo-elevated"
+        className="group flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-card"
       >
         <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-kumo-elevated"
+          className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-card"
           style={representative.accent ? { backgroundColor: representative.accent } : undefined}
         >
           {iconUrl ? (
@@ -1078,54 +1076,54 @@ function ConnectionGroupRow({
             <Icon
               size={19}
               weight="duotone"
-              className={representative.iconColor ? undefined : 'text-kumo-strong'}
+              className={representative.iconColor ? undefined : 'text-foreground'}
               style={representative.iconColor ? { color: representative.iconColor } : undefined}
             />
           ) : (
-            <Database size={19} weight="duotone" className="text-kumo-strong" />
+            <Database size={19} weight="duotone" className="text-foreground" />
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
             {label}
           </p>
-          <p className="mt-0.5 line-clamp-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+          <p className="mt-0.5 line-clamp-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
             {subtitle}
           </p>
         </div>
         <CaretDown
           size={14}
-          className={`shrink-0 text-kumo-inactive transition-transform group-hover:text-kumo-default ${expanded ? 'rotate-180' : ''}`}
+          className={`shrink-0 text-muted-foreground transition-transform group-hover:text-foreground ${expanded ? 'rotate-180' : ''}`}
         />
       </button>
 
       {expanded && (
-        <div id={panelId} className="border-t border-kumo-line bg-kumo-elevated/30">
+        <div id={panelId} className="border-t border-border bg-card/30">
           {items.map(item => (
             <button
               key={item.id}
               type="button"
               onClick={() => onSelectItem(item)}
-              className="group flex w-full cursor-pointer items-center gap-3 border-t border-kumo-line/60 pl-10 pr-3 py-2.5 text-left transition-colors first:border-t-0 hover:bg-kumo-elevated"
+              className="group flex w-full cursor-pointer items-center gap-3 border-t border-border/60 pl-10 pr-3 py-2.5 text-left transition-colors first:border-t-0 hover:bg-card"
             >
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md bg-kumo-base">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background">
                 {item.iconUrl ? (
                   <img src={item.iconUrl} alt="" className="h-full w-full object-cover" />
                 ) : item.icon ? (
-                  <item.icon size={14} weight="duotone" className="text-kumo-strong" />
+                  <item.icon size={14} weight="duotone" className="text-foreground" />
                 ) : (
-                  <Database size={14} weight="duotone" className="text-kumo-strong" />
+                  <Database size={14} weight="duotone" className="text-foreground" />
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[12.5px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+                <p className="truncate text-[12.5px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                   {item.title}
                 </p>
-                <p className="mt-0.5 line-clamp-1 text-[11.5px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                <p className="mt-0.5 line-clamp-1 text-[11.5px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                   {item.description}
                 </p>
               </div>
-              <CaretRight size={13} className="shrink-0 text-kumo-inactive transition-transform group-hover:translate-x-0.5 group-hover:text-kumo-default" />
+              <CaretRight size={13} className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
             </button>
           ))}
         </div>

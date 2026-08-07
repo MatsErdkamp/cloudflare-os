@@ -18,7 +18,8 @@
     "baseUrl": ".",
     "paths": {
       "@gadgets/workshop-shared/*": ["../workshop-shared/src/*"],
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "#/*": ["../ui/src/*"]
     }
   },
   "include": ["src"],

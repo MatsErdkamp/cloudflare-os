@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Loader } from '@cloudflare/kumo'
 import {
   Code as CodeIcon,
   Database,
@@ -14,7 +13,7 @@ import {
   Clock,
 } from '@phosphor-icons/react'
 import type { ToolCall } from '../../data/chat'
-
+import { Spinner } from '@matser/ui'
 const iconMap: Record<string, React.ElementType> = {
   code: CodeIcon,
   database: Database,
@@ -29,13 +28,13 @@ const iconMap: Record<string, React.ElementType> = {
 function StatusIndicator({ status }: { status: string }) {
   switch (status) {
     case 'running':
-      return <Loader size="sm" />
+      return <Spinner size={16} />
     case 'complete':
-      return <CheckCircle size={14} weight="fill" className="text-kumo-success" />
+      return <CheckCircle size={14} weight="fill" className="text-status-success" />
     case 'error':
-      return <WarningCircle size={14} weight="fill" className="text-kumo-danger" />
+      return <WarningCircle size={14} weight="fill" className="text-destructive" />
     case 'waiting':
-      return <Clock size={14} className="text-kumo-subtle" />
+      return <Clock size={14} className="text-muted-foreground" />
     default:
       return null
   }
@@ -46,16 +45,16 @@ export default function ToolCallCard({ tool }: { tool: ToolCall }) {
   const Icon = iconMap[tool.icon] || Lightning
 
   return (
-    <div className="rounded-lg border border-kumo-line overflow-hidden">
+    <div className="rounded-lg border border-border overflow-hidden">
       {/* Custom trigger row */}
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-kumo-tint transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted transition-colors"
       >
-        <Icon size={14} weight="duotone" className="text-kumo-subtle flex-shrink-0" />
-        <span className="flex-1 text-xs text-kumo-default truncate">{tool.label}</span>
+        <Icon size={14} weight="duotone" className="text-muted-foreground flex-shrink-0" />
+        <span className="flex-1 text-xs text-foreground truncate">{tool.label}</span>
         {tool.duration != null && (
-          <span className="font-mono text-[11px] text-kumo-subtle tabular-nums flex-shrink-0">
+          <span className="font-mono text-[11px] text-muted-foreground tabular-nums flex-shrink-0">
             {tool.duration >= 1000
               ? `${(tool.duration / 1000).toFixed(1)}s`
               : `${tool.duration}ms`}
@@ -63,7 +62,7 @@ export default function ToolCallCard({ tool }: { tool: ToolCall }) {
         )}
         <StatusIndicator status={tool.status} />
         <svg
-          className={`w-3 h-3 text-kumo-subtle transition-transform ${open ? 'rotate-180' : ''}`}
+          className={`w-3 h-3 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -75,19 +74,19 @@ export default function ToolCallCard({ tool }: { tool: ToolCall }) {
 
       {/* Expandable detail */}
       {open && (
-        <div className="px-3 pb-3 pt-1 border-t border-kumo-line space-y-2">
+        <div className="px-3 pb-3 pt-1 border-t border-border space-y-2">
           {tool.input && (
             <div>
-              <span className="font-mono text-[10px] text-kumo-subtle uppercase tracking-wider">Input</span>
-              <pre className="text-xs font-mono text-kumo-subtle whitespace-pre-wrap leading-relaxed mt-1 bg-kumo-tint rounded-md px-2 py-1.5">
+              <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Input</span>
+              <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap leading-relaxed mt-1 bg-muted rounded-md px-2 py-1.5">
                 {JSON.stringify(tool.input, null, 2)}
               </pre>
             </div>
           )}
           {tool.output && (
             <div>
-              <span className="font-mono text-[10px] text-kumo-subtle uppercase tracking-wider">Output</span>
-              <p className="text-xs text-kumo-subtle mt-1">{tool.output}</p>
+              <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Output</span>
+              <p className="text-xs text-muted-foreground mt-1">{tool.output}</p>
             </div>
           )}
         </div>

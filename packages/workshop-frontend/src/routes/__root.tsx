@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { createRootRoute, Outlet, useRouterState } from '@tanstack/react-router'
-import { TooltipProvider, Toasty } from '@cloudflare/kumo'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
 import { useRpcStub, useConnectionLost } from '../RpcContext'
@@ -13,14 +12,14 @@ import AppShell from '../components/AppShell/AppShell'
 import LoginPage from '../LoginPage'
 import OnboardingWizard from '../OnboardingWizard'
 import AccountSelectionModal from '../components/billing/AccountSelectionModal'
-
+import { NucleoIconProvider, TooltipProvider, Toaster } from '@matser/ui'
 export const Route = createRootRoute({
   component: RootComponent,
 })
 
 function ConnectionLostBanner() {
   return (
-    <div className="sticky top-0 z-[100] bg-kumo-warning-tint border-b border-kumo-warning/30 px-4 py-2 text-center text-sm text-kumo-warning">
+    <div className="sticky top-0 z-[100] bg-status-warning-muted border-b border-status-warning/30 px-4 py-2 text-center text-sm text-status-warning">
       Connection lost — reconnecting…
     </div>
   )
@@ -60,10 +59,10 @@ function RootComponent() {
   // Loading state
   if (isLoading && !standalone) {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-kumo-base">
+      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-background">
         {connectionLost && <ConnectionLostBanner />}
-        <div className="w-8 h-8 border-2 border-kumo-brand border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm text-kumo-subtle">{connectionLost ? 'Waiting for server…' : 'Loading...'}</p>
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-muted-foreground">{connectionLost ? 'Waiting for server…' : 'Loading...'}</p>
       </div>
     )
   }
@@ -71,11 +70,11 @@ function RootComponent() {
   // Auth error
   if (error && !standalone) {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-kumo-base p-6">
-        <p className="text-sm text-kumo-danger">Authentication error: {error}</p>
+      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-background p-6">
+        <p className="text-sm text-destructive">Authentication error: {error}</p>
         <button
           onClick={() => window.location.reload()}
-          className="px-4 py-2 text-sm font-medium text-kumo-inverse bg-kumo-brand rounded-lg hover:bg-kumo-brand-hover transition-colors"
+          className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary transition-colors"
         >
           Retry
         </button>
@@ -86,28 +85,36 @@ function RootComponent() {
   // CF Access mode: show spinner while pipelined auth resolves
   if (!isAuthenticated && CF_ACCESS_MODE && !standalone) {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-kumo-base">
-        <div className="w-8 h-8 border-2 border-kumo-brand border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm text-kumo-subtle">Authenticating...</p>
+      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-background">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-muted-foreground">Authenticating...</p>
       </div>
     )
   }
 
   // Not authenticated and not a public route — show login
   if (!isAuthenticated && !standalone) {
-    return <LoginPage rpcStub={rpcStub} onLoginSuccess={handleLoginSuccess} />
+    // LoginPage uses the UI package's Spinner, which resolves the configured
+    // loader icon through NucleoIconProvider.
+    return (
+      <NucleoIconProvider>
+        <LoginPage rpcStub={rpcStub} onLoginSuccess={handleLoginSuccess} />
+      </NucleoIconProvider>
+    )
   }
 
   // Signed-out visitors of public routes render without the auth wrapper / app shell.
   if (standalone) {
     const showHeader = !isSignup
     return (
-      <TooltipProvider>
-        <Toasty>
-          {showHeader && <Header />}
-          <Outlet />
-        </Toasty>
-      </TooltipProvider>
+      <NucleoIconProvider>
+        <TooltipProvider>
+          <Toaster>
+            {showHeader && <Header />}
+            <Outlet />
+          </Toaster>
+        </TooltipProvider>
+      </NucleoIconProvider>
     )
   }
 
@@ -118,15 +125,17 @@ function RootComponent() {
   return (
     <AuthProvider authenticatedApi={authenticatedApi} onLogout={logout}>
       <FeatureFlagsProvider>
-        <TooltipProvider>
-          <Toasty>
-            <AuthenticatedShell
-              authenticatedApi={authenticatedApi}
-              connectionLost={connectionLost}
-              isWorkspaceEditor={isWorkspaceEditor}
-            />
-          </Toasty>
-        </TooltipProvider>
+        <NucleoIconProvider>
+          <TooltipProvider>
+            <Toaster>
+              <AuthenticatedShell
+                authenticatedApi={authenticatedApi}
+                connectionLost={connectionLost}
+                isWorkspaceEditor={isWorkspaceEditor}
+              />
+            </Toaster>
+          </TooltipProvider>
+        </NucleoIconProvider>
       </FeatureFlagsProvider>
     </AuthProvider>
   )
@@ -164,8 +173,8 @@ function AuthenticatedShell({
   // Still checking onboarding status
   if (onboardingNeeded === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-kumo-base">
-        <div className="w-8 h-8 border-2 border-kumo-brand border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-background">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }

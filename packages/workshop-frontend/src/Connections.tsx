@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react'
-import { Dialog, Tooltip, useKumoToastManager } from '@cloudflare/kumo'
+import {useState, useEffect } from 'react'
 import {
   Pencil,
   Trash,
@@ -13,7 +12,6 @@ import type { WorkpieceId } from '@gadgets/workshop-shared/api'
 import { GatekeeperIcon } from './components/GatekeeperIcon'
 import { HookToggle } from './components/HookToggle'
 import { useVendorBranding } from './useVendorBranding'
-import { WorkshopButton, WorkshopIconButton, WorkshopInput } from './components/WorkshopControls'
 import { EmptyState } from './components/EmptyState'
 import {
   BindingCardData,
@@ -21,7 +19,7 @@ import {
   loadBindingCardData,
 } from './components/BlueprintBindingCard'
 import { reportIssue } from './errorReporting'
-
+import { Dialog, Tooltip, useToast, DialogContent, DialogTitle, DialogDescription, DialogClose, TooltipContent, TooltipTrigger, Button, Input} from '@matser/ui'
 interface ConnectionsProps {
   overseer: RpcStub<Overseer>
   gadget: RpcStub<GadgetClient>
@@ -53,7 +51,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
   const [deleteHookTarget, setDeleteHookTarget] = useState<{ id: number; title: string } | null>(null)
   const [togglingHooks, setTogglingHooks] = useState<Set<number>>(new Set())
   const [annotationTarget, setAnnotationTarget] = useState<GadgetBindingInfo | null>(null)
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const loadGatekeepers = async () => {
     try {
@@ -72,7 +70,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
     } catch (err) {
       console.error('Failed to load gatekeepers:', err)
       reportIssue('connections.load', err)
-      toasts.add({ title: 'Failed to load connections', variant: 'error' })
+      toasts.add({ title: 'Failed to load connections', type: 'error' })
     } finally {
       setLoading(false)
     }
@@ -91,7 +89,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
       await loadGatekeepers()
     } catch (err) {
       console.error('Failed to toggle hook:', err)
-      toasts.add({ title: `Failed to ${enabled ? 'enable' : 'disable'} hook`, variant: 'error' })
+      toasts.add({ title: `Failed to ${enabled ? 'enable' : 'disable'} hook`, type: 'error' })
       // Revert optimistic update.
       setHooks((prev) => prev.map((h) => (h.id === id ? { ...h, enabled: !enabled } : h)))
     } finally {
@@ -110,7 +108,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
       await loadGatekeepers()
     } catch (err) {
       console.error('Failed to delete hook:', err)
-      toasts.add({ title: 'Failed to delete hook', variant: 'error' })
+      toasts.add({ title: 'Failed to delete hook', type: 'error' })
     } finally {
       setDeleteHookTarget(null)
     }
@@ -135,7 +133,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
   const handleEditSave = async (name: string) => {
     const newName = editValue.trim()
     if (!newName) {
-      toasts.add({ title: 'Binding name cannot be empty', variant: 'error' })
+      toasts.add({ title: 'Binding name cannot be empty', type: 'error' })
       return
     }
     if (newName === name) {
@@ -149,7 +147,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
       onConnectionsChange?.()
     } catch (err) {
       console.error('Failed to rename binding:', err)
-      toasts.add({ title: 'Failed to update binding name', variant: 'error' })
+      toasts.add({ title: 'Failed to update binding name', type: 'error' })
     } finally {
       setEditingBinding(null)
     }
@@ -172,29 +170,29 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
       onConnectionsChange?.()
     } catch (err) {
       console.error('Failed to remove binding:', err)
-      toasts.add({ title: 'Failed to remove connection', variant: 'error' })
+      toasts.add({ title: 'Failed to remove connection', type: 'error' })
     } finally {
       setDeleteTarget(null)
     }
   }
 
   return (
-    <div className="h-full overflow-auto bg-kumo-base">
+    <div className="h-full overflow-auto bg-background">
       <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-4 py-5 sm:px-6">
         <section>
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <h2 className="m-0 text-[17px] leading-6 font-medium tracking-[-0.35px] text-kumo-default">
+              <h2 className="m-0 text-[17px] leading-6 font-medium tracking-[-0.35px] text-foreground">
                 Connections
               </h2>
-              <p className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+              <p className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                 Reviewed Contract capabilities this gadget can use.
               </p>
             </div>
           </div>
 
           {loading ? (
-            <div className="rounded-xl border border-kumo-line bg-kumo-base px-4 py-6 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+            <div className="rounded-xl border border-border bg-background px-4 py-6 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
               Loading connections...
             </div>
           ) : bindings.length === 0 ? (
@@ -203,7 +201,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
               description="Ask the Manager in chat to turn a private Source into a reviewed capability for this Gadget."
             />
           ) : (
-            <div className="overflow-hidden rounded-xl border border-kumo-line bg-kumo-base">
+            <div className="overflow-hidden rounded-xl border border-border bg-background">
               {bindings.map((gk, index) => {
                 const isEditing = editingBinding === gk.name
                 const isDeleting = deleteTarget?.name === gk.name
@@ -214,36 +212,36 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                 return (
                   <div
                     key={gk.name}
-                    className={`px-3 py-3 ${index > 0 ? 'border-t border-kumo-line' : ''} ${isDeleting ? 'bg-kumo-danger-tint/40' : ''}`}
+                    className={`px-3 py-3 ${index > 0 ? 'border-t border-border' : ''} ${isDeleting ? 'bg-destructive-muted/40' : ''}`}
                   >
                     {isDeleting ? (
                       <div className="flex flex-wrap items-center gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-danger">
+                          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-destructive">
                             Delete {gk.resourceTitle}?
                           </p>
-                          <p className="truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                          <p className="truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                             {gk.targetType === 'contract'
                               ? 'Its bindings, callbacks, facet storage, and pending operations will be retracted.'
                               : <>The legacy Source binding <span className="font-mono">{gk.name}</span> will be removed.</>}
                           </p>
                         </div>
-                        <WorkshopButton
-                          tone="danger"
-                          className="min-w-[68px]"
+                        <Button
+
+                          className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 bg-destructive px-3 text-white enabled:hover:opacity-90 disabled:opacity-50 min-w-[68px]"
                           onClick={handleDeleteConfirm}
-                        >
+                         variant="destructive">
                           Delete
-                        </WorkshopButton>
-                        <WorkshopButton
+                        </Button>
+                        <Button
                           onClick={() => setDeleteTarget(null)}
-                        >
+                         className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40" variant="secondary">
                           Cancel
-                        </WorkshopButton>
+                        </Button>
                       </div>
                     ) : isEditing ? (
                       <div className="flex items-center gap-2">
-                        <WorkshopInput
+                        <Input
                           value={editValue}
                           onChange={(e) => setEditValue(e.target.value)}
                           onKeyDown={(e) => {
@@ -253,21 +251,21 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                           placeholder="Binding name"
                           aria-label="Binding name"
                           autoFocus
-                          className="min-w-0 flex-1 font-mono"
+                          className="!h-9 rounded-lg border border-border bg-background px-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/15 min-w-0 flex-1 font-mono"
                         />
-                        <WorkshopButton
-                          tone="primary"
-                          className="!h-8"
+                        <Button
+
+                          className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 !h-8"
                           onClick={() => handleEditSave(gk.name)}
                           disabled={!editValue.trim()}
-                        >
+                         variant="primary">
                           Save
-                        </WorkshopButton>
-                        <WorkshopButton
+                        </Button>
+                        <Button
                           onClick={handleEditCancel}
-                        >
+                         className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40" variant="secondary">
                           Cancel
-                        </WorkshopButton>
+                        </Button>
                       </div>
                     ) : (
                       <div className="flex items-center gap-3">
@@ -277,45 +275,48 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                           {...(gk.vendorId ? vendorBranding.get(gk.vendorId) : undefined)}
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="flex items-center gap-2 truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+                          <p className="flex items-center gap-2 truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                             <span className="min-w-0 truncate">{gk.resourceTitle}</span>
-                            <span className="flex-shrink-0 rounded-full bg-kumo-tint px-1.5 py-0.5 text-[10px] leading-none font-medium text-kumo-subtle">
+                            <span className="flex-shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none font-medium text-muted-foreground">
                               {gk.targetType === 'contract' ? 'Contract' : gk.targetType === 'source' ? 'Source · legacy' : 'Gadget'}
                             </span>
                             {isPending && (
-                              <Tooltip content="Added in this chat; kept when you accept the chat's changes" asChild>
-                                <span className="flex-shrink-0 rounded-full bg-kumo-fill px-1.5 py-0.5 text-[10px] leading-none font-medium text-kumo-subtle">
+                              <Tooltip>
+                                <TooltipTrigger render={<span className="flex-shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] leading-none font-medium text-muted-foreground">
                                   Draft
-                                </span>
+                                </span>} />
+                                <TooltipContent>{"Added in this chat; kept when you accept the chat's changes"}</TooltipContent>
                               </Tooltip>
                             )}
                           </p>
-                          <p className="mt-0.5 truncate text-[11px] leading-4 tracking-[-0.1px] text-kumo-inactive">
-                            Referenced in code as: <span className="font-mono text-kumo-subtle">{gk.name}</span>
+                          <p className="mt-0.5 truncate text-[11px] leading-4 tracking-[-0.1px] text-muted-foreground">
+                            Referenced in code as: <span className="font-mono text-muted-foreground">{gk.name}</span>
                           </p>
                         </div>
                         <div className="ml-auto flex shrink-0 items-center gap-1">
-                          <Tooltip content="Edit name used in code" asChild>
-                            <WorkshopIconButton
+                          <Tooltip>
+                            <TooltipTrigger render={<Button
                               onClick={() => handleEditStart(gk.name)}
                               aria-label="Edit name used in code"
-                            >
+                             className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                               <Pencil size={14} />
-                            </WorkshopIconButton>
+                            </Button>} />
+                            <TooltipContent>{"Edit name used in code"}</TooltipContent>
                           </Tooltip>
                           {!isPending && gk.targetType !== 'contract' && (
-                            <Tooltip content="Edit blueprint settings" asChild>
-                              <WorkshopIconButton
+                            <Tooltip>
+                              <TooltipTrigger render={<Button
                                 onClick={() => setAnnotationTarget(gk)}
                                 aria-label="Edit blueprint settings"
-                              >
+                               className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                                 <Blueprint size={14} />
-                              </WorkshopIconButton>
+                              </Button>} />
+                              <TooltipContent>{"Edit blueprint settings"}</TooltipContent>
                             </Tooltip>
                           )}
-                          <Tooltip content="Delete connection" asChild>
-                            <WorkshopIconButton
-                              danger
+                          <Tooltip>
+                            <TooltipTrigger render={<Button
+
                               onClick={() => setDeleteTarget({
                                 name: gk.name,
                                 target: gk.target,
@@ -323,9 +324,10 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                                 resourceTitle: gk.resourceTitle,
                               })}
                               aria-label={gk.targetType === 'contract' ? 'Retract Contract' : 'Delete connection'}
-                            >
+                             className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 text-muted-foreground enabled:hover:bg-destructive-muted enabled:hover:text-destructive" variant="ghost" size="icon-sm">
                               <Trash size={14} />
-                            </WorkshopIconButton>
+                            </Button>} />
+                            <TooltipContent>{"Delete connection"}</TooltipContent>
                           </Tooltip>
                         </div>
                       </div>
@@ -340,15 +342,15 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
         {!loading && hooks.length > 0 && (
           <section className="mt-8">
             <div className="mb-3">
-              <h2 className="m-0 text-[17px] leading-6 font-medium tracking-[-0.35px] text-kumo-default">
+              <h2 className="m-0 text-[17px] leading-6 font-medium tracking-[-0.35px] text-foreground">
                 Hooks
               </h2>
-              <p className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+              <p className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                 Callbacks that let connected resources wake up this gadget when events happen.
               </p>
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-kumo-line bg-kumo-base">
+            <div className="overflow-hidden rounded-xl border border-border bg-background">
               {hooks.map((hook, index) => {
                 const isDeleting = deleteHookTarget?.id === hook.id
                 const vendorId = bindings.find((b) => b.target === hook.gatekeeperId)?.vendorId
@@ -356,30 +358,30 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                 return (
                   <div
                     key={hook.id}
-                    className={`px-3 py-3 ${index > 0 ? 'border-t border-kumo-line' : ''} ${isDeleting ? 'bg-kumo-danger-tint/40' : ''}`}
+                    className={`px-3 py-3 ${index > 0 ? 'border-t border-border' : ''} ${isDeleting ? 'bg-destructive-muted/40' : ''}`}
                   >
                     {isDeleting ? (
                       <div className="flex flex-wrap items-center gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-danger">
+                          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-destructive">
                             Delete hook "{hook.description.title}"?
                           </p>
-                          <p className="truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                          <p className="truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                             This permanently removes the hook. Future events will stop being delivered.
                           </p>
                         </div>
-                        <WorkshopButton
-                          tone="danger"
-                          className="min-w-[68px]"
+                        <Button
+
+                          className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 bg-destructive px-3 text-white enabled:hover:opacity-90 disabled:opacity-50 min-w-[68px]"
                           onClick={handleDeleteHookConfirm}
-                        >
+                         variant="destructive">
                           Delete
-                        </WorkshopButton>
-                        <WorkshopButton
+                        </Button>
+                        <Button
                           onClick={() => setDeleteHookTarget(null)}
-                        >
+                         className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40" variant="secondary">
                           Cancel
-                        </WorkshopButton>
+                        </Button>
                       </div>
                     ) : (
                       <div className="flex items-center gap-3">
@@ -389,16 +391,16 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                           {...(vendorId ? vendorBranding.get(vendorId) : undefined)}
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+                          <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                             {hook.description.title}
                           </p>
                           {hook.description.description && (
-                            <p className="mt-0.5 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                            <p className="mt-0.5 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                               {hook.description.description}
                             </p>
                           )}
                           {hook.resourceTitle && (
-                            <p className="mt-0.5 truncate text-[11px] leading-4 tracking-[-0.1px] text-kumo-inactive">
+                            <p className="mt-0.5 truncate text-[11px] leading-4 tracking-[-0.1px] text-muted-foreground">
                               {hook.resourceTitle}
                             </p>
                           )}
@@ -409,14 +411,15 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                             disabled={togglingHooks.has(hook.id)}
                             onToggle={(enabled) => handleToggleHook(hook.id, enabled)}
                           />
-                          <Tooltip content="Delete hook" asChild>
-                            <WorkshopIconButton
-                              danger
+                          <Tooltip>
+                            <TooltipTrigger render={<Button
+
                               onClick={() => setDeleteHookTarget({ id: hook.id, title: hook.description.title })}
                               aria-label="Delete hook"
-                            >
+                             className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 text-muted-foreground enabled:hover:bg-destructive-muted enabled:hover:text-destructive" variant="ghost" size="icon-sm">
                               <Trash size={14} />
-                            </WorkshopIconButton>
+                            </Button>} />
+                            <TooltipContent>{"Delete hook"}</TooltipContent>
                           </Tooltip>
                         </div>
                       </div>
@@ -435,7 +438,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
         gadget={gadget}
         onClose={() => setAnnotationTarget(null)}
         onSaved={() => {
-          toasts.add({ title: 'Blueprint settings saved.', variant: 'success' })
+          toasts.add({ title: 'Blueprint settings saved.', type: 'success' })
           setAnnotationTarget(null)
         }}
       />
@@ -509,31 +512,31 @@ function BlueprintAnnotationModal({
 
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-        <Dialog className="!z-[1000] !w-[min(480px,calc(100vw-32px))] overflow-hidden bg-kumo-base p-0" size="lg">
-          <div className="flex items-start justify-between gap-4 border-b border-kumo-line px-4 py-4 sm:px-5">
+      <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+        <DialogContent className="!z-[1000] !w-[min(480px,calc(100vw-32px))] overflow-hidden bg-background p-0" size="lg">
+          <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-4 sm:px-5">
             <div className="min-w-0">
-              <Dialog.Title className="text-[15px] leading-5 font-medium tracking-[-0.3px] text-kumo-default">
+              <DialogTitle className="text-[15px] leading-5 font-medium tracking-[-0.3px] text-foreground">
                 Blueprint settings
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+              </DialogTitle>
+              <DialogDescription className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                 How this connection appears in blueprints.
-              </Dialog.Description>
+              </DialogDescription>
             </div>
-            <Dialog.Close
+            <DialogClose
               render={(props) => (
-                <WorkshopIconButton {...props} aria-label="Close">
+                <Button {...props} aria-label="Close" className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                   <X size={16} />
-                </WorkshopIconButton>
+                </Button>
               )}
             />
           </div>
 
           <div className="space-y-4 px-4 py-4 sm:px-5">
             {loadError ? (
-              <div className="text-[13px] text-kumo-subtle">{loadError}</div>
+              <div className="text-[13px] text-muted-foreground">{loadError}</div>
             ) : !data ? (
-              <div className="py-2 text-center text-[13px] text-kumo-subtle">Loading...</div>
+              <div className="py-2 text-center text-[13px] text-muted-foreground">Loading...</div>
             ) : (
               <>
                 <BlueprintBindingCard
@@ -546,31 +549,31 @@ function BlueprintAnnotationModal({
             )}
           </div>
 
-          <div className="border-t border-kumo-line px-4 py-3 sm:px-5">
+          <div className="border-t border-border px-4 py-3 sm:px-5">
             {saveError && (
-              <div className="mb-3 flex items-start gap-2 rounded-lg border border-l-2 border-l-kumo-brand border-y-kumo-line border-r-kumo-line bg-kumo-base px-3 py-2 text-[12px] leading-[18px] font-normal tracking-[-0.2px] text-kumo-default">
-                <Warning size={14} weight="fill" className="mt-0.5 shrink-0 text-kumo-brand" />
+              <div className="mb-3 flex items-start gap-2 rounded-lg border border-l-2 border-l-primary border-y-border border-r-border bg-background px-3 py-2 text-[12px] leading-[18px] font-normal tracking-[-0.2px] text-foreground">
+                <Warning size={14} weight="fill" className="mt-0.5 shrink-0 text-primary" />
                 <span>{saveError}</span>
               </div>
             )}
             <div className="flex items-center justify-end gap-2">
-              <WorkshopButton
+              <Button
                 onClick={onClose}
                 disabled={saving}
-              >
+               className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40" variant="secondary">
                 Cancel
-              </WorkshopButton>
-              <WorkshopButton
-                tone="primary"
+              </Button>
+              <Button
+
                 onClick={handleSave}
                 disabled={saving || !data}
-              >
+               className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50" variant="primary">
                 {saving ? 'Saving...' : 'Save'}
-              </WorkshopButton>
+              </Button>
             </div>
           </div>
-        </Dialog>
-      </Dialog.Root>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

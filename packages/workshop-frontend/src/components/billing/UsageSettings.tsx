@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CloudflareUsageInfo, CloudflareAccountOption } from '@gadgets/workshop-shared/api'
-import { Button, useKumoToastManager } from '@cloudflare/kumo'
 import { Lightning, CloudCheck, Warning } from '@phosphor-icons/react'
 import CloudflareLogo from '../auth/CloudflareLogo'
 import { useAuthenticatedApi } from '../../AuthContext'
 import { useCloudflareLimitsEnabled } from '../../ServerConfigContext'
 import { buildAddCreditsUrl } from './creditsUrl'
 import ResetCountdown from './ResetCountdown'
-
+import { Button, useToast } from '@matser/ui'
 // Shows the user's free-tier usage and Cloudflare connection / credit status on the profile page.
 // Renders nothing unless the Cloudflare limits flow is enabled server-side.
 export default function UsageSettings() {
   const limitsEnabled = useCloudflareLimitsEnabled()
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const [usage, setUsage] = useState<CloudflareUsageInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -61,7 +60,7 @@ export default function UsageSettings() {
       const { url } = await authenticatedApi.connectAccount('cloudflare')
       window.open(url, '_blank', 'noopener,noreferrer')
     } catch {
-      toasts.add({ title: 'Failed to start Cloudflare connection', variant: 'error' })
+      toasts.add({ title: 'Failed to start Cloudflare connection', type: 'error' })
     } finally {
       setBusy(false)
     }
@@ -71,12 +70,12 @@ export default function UsageSettings() {
     setSelecting(accountId)
     try {
       await authenticatedApi.selectCloudflareAccount(accountId)
-      toasts.add({ title: 'Cloudflare account selected', variant: 'success' })
+      toasts.add({ title: 'Cloudflare account selected', type: 'success' })
       setAccounts(null)
       refresh()
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to select account'
-      toasts.add({ title: msg, variant: 'error' })
+      toasts.add({ title: msg, type: 'error' })
     } finally {
       setSelecting(null)
     }
@@ -84,23 +83,23 @@ export default function UsageSettings() {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="px-1 text-[12px] font-medium uppercase tracking-[0.08em] text-kumo-inactive">
+      <h2 className="px-1 text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
         Usage &amp; billing
       </h2>
-      <div className="rounded-xl border border-kumo-line bg-kumo-base p-5">
+      <div className="rounded-xl border border-border bg-background p-5">
       {loading || !usage ? (
-        <p className="text-sm text-kumo-subtle">Loading usage…</p>
+        <p className="text-sm text-muted-foreground">Loading usage…</p>
       ) : (
         <div className="space-y-6">
           {/* Free daily allowance */}
           <div>
-            <p className="text-xs font-medium text-kumo-subtle mb-1">Free daily allowance</p>
-            <p className="text-sm text-kumo-default">
+            <p className="text-xs font-medium text-muted-foreground mb-1">Free daily allowance</p>
+            <p className="text-sm text-foreground">
               {usage.remaining} of {usage.dailyLimit}{' '}
               {usage.dailyLimit === 1 ? 'request' : 'requests'} remaining today
             </p>
             {usage.resetAt && (
-              <p className="text-xs text-kumo-subtle mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 Resets at 00:00 UTC, in{' '}
                 <ResetCountdown resetAt={usage.resetAt} onElapsed={refresh} />.
               </p>
@@ -109,14 +108,14 @@ export default function UsageSettings() {
 
           {/* Cloudflare connection / credits */}
           <div>
-            <p className="text-xs font-medium text-kumo-subtle mb-1">Cloudflare account</p>
+            <p className="text-xs font-medium text-muted-foreground mb-1">Cloudflare account</p>
             {!usage.connected ? (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-kumo-subtle">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <CloudflareLogo size={16} />
                   <span>Not connected</span>
                 </div>
-                <p className="text-sm text-kumo-subtle">
+                <p className="text-sm text-muted-foreground">
                   Connect your Cloudflare account to keep building once your free allowance runs
                   out. Usage beyond the free tier is billed to your own Cloudflare AI Gateway
                   credits.
@@ -131,18 +130,18 @@ export default function UsageSettings() {
             ) : usage.needsAccountSelection ? (
               // Connected, but multiple accounts — force the user to choose which one to bill.
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-kumo-default">
-                  <Warning size={18} weight="bold" className="text-kumo-warning" />
+                <div className="flex items-center gap-2 text-sm text-foreground">
+                  <Warning size={18} weight="bold" className="text-status-warning" />
                   <span>Choose which Cloudflare account to bill</span>
                 </div>
-                <p className="text-sm text-kumo-subtle">
+                <p className="text-sm text-muted-foreground">
                   Your connection has access to multiple Cloudflare accounts. Select the one whose
                   AI Gateway credits should be used.
                 </p>
                 {accounts === null ? (
-                  <p className="text-sm text-kumo-subtle">Loading accounts…</p>
+                  <p className="text-sm text-muted-foreground">Loading accounts…</p>
                 ) : accounts.length === 0 ? (
-                  <p className="text-sm text-kumo-subtle">
+                  <p className="text-sm text-muted-foreground">
                     No accounts available on this connection.
                   </p>
                 ) : (
@@ -165,19 +164,19 @@ export default function UsageSettings() {
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-kumo-default">
-                  <CloudCheck size={18} weight="bold" className="text-kumo-success" />
+                <div className="flex items-center gap-2 text-sm text-foreground">
+                  <CloudCheck size={18} weight="bold" className="text-status-success" />
                   <span>
                     Connected
                     {usage.accountName && <> — {usage.accountName}</>}
                   </span>
                 </div>
-                <p className="text-sm text-kumo-default">
+                <p className="text-sm text-foreground">
                   Account balance:{' '}
                   {usage.balance !== null ? (
                     <strong>${usage.balance.toFixed(2)}</strong>
                   ) : (
-                    <span className="text-kumo-subtle">unknown</span>
+                    <span className="text-muted-foreground">unknown</span>
                   )}
                 </p>
 
@@ -195,7 +194,7 @@ export default function UsageSettings() {
             )}
           </div>
 
-          <p className="text-xs text-kumo-subtle border-t border-kumo-line pt-3">
+          <p className="text-xs text-muted-foreground border-t border-border pt-3">
             Learn more about{' '}
             <a
               href="https://developers.cloudflare.com/ai-gateway/features/unified-billing/"

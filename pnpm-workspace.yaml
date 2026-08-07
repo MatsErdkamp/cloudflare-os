@@ -26,6 +26,7 @@ allowBuilds:
   '@google/genai': true
   core-js-pure: true
   esbuild: true
+  nucleo-ui-outline-duo-18: true
   protobufjs: true
   sharp: true
   workerd: true

@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Dialog, Button, Input, Select, SensitiveInput, Collapsible, useKumoToastManager } from '@cloudflare/kumo'
 import { AiChatAuthorInfo, AiModelConfig, AiModelProvider, AiGatewayInfo, SUGGESTED_MODELS } from '@gadgets/workshop-shared/api'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
-
+import { Dialog, Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SensitiveInput, Collapsible, CollapsibleDefaultPanel, CollapsibleDefaultTrigger, useToast, DialogContent, DialogTitle, DialogClose, Field, FieldLabel, FieldDescription, FieldError } from '@matser/ui'
 interface AddModelModalProps {
   visible: boolean
   onCancel: () => void
@@ -90,7 +89,7 @@ function buildOptions(gatewayMode: boolean, enabledProviders: Set<string> | null
 }
 
 export default function AddModelModal({ visible, onCancel, onSuccess, authenticatedApi, aiConfig }: AddModelModalProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [loading, setLoading] = useState(false)
   const [selection, setSelection] = useState<SelectionType | null>(null)
@@ -203,11 +202,11 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
       }
 
       await authenticatedApi.addModel(profile, config)
-      toasts.add({ title: 'AI model added successfully', variant: 'success' })
+      toasts.add({ title: 'AI model added successfully', type: 'success' })
       onSuccess()
     } catch (error: any) {
       console.error('Failed to add model:', error)
-      toasts.add({ title: 'Failed to add model', variant: 'error' })
+      toasts.add({ title: 'Failed to add model', type: 'error' })
     } finally {
       setLoading(false)
     }
@@ -232,136 +231,134 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
   }
 
   return (
-    <Dialog.Root open={visible} onOpenChange={(open) => { if (!open) onCancel() }}>
-      <Dialog className="p-6" size="lg">
-        <Dialog.Title className="text-lg font-semibold mb-4">
+    <Dialog open={visible} onOpenChange={(open) => { if (!open) onCancel() }}>
+      <DialogContent className="p-6" size="lg">
+        <DialogTitle className="text-lg font-semibold mb-4">
           Add AI Model
-        </Dialog.Title>
+        </DialogTitle>
 
         <div className="space-y-4">
           {/* Model / Provider selection */}
           <Select
-            label={gatewayMode ? 'Select Provider' : 'Select Model'}
-            className="w-full text-sm"
-            placeholder={gatewayMode ? 'Choose a provider...' : 'Choose an AI model...'}
             value={selectValue}
             onValueChange={(v) => handleModelSelect(v as string)}
-            error={errors.selection}
-            renderValue={(v) => {
-              const opt = options.find(o => o.value === v)
-              return opt?.label ?? String(v)
-            }}
           >
-            {groupedOptions.map((group, groupIndex) => (
-              <div key={group.provider}>
-                {groupIndex > 0 && (
-                  <div className="h-px bg-kumo-line my-1 mx-2" />
-                )}
-                <div className="px-3 py-1.5 text-xs font-medium text-kumo-subtle select-none">
-                  {PROVIDER_LABELS[group.provider as AiModelProvider] || group.provider}
-                </div>
-                {group.items.map(opt => (
-                  <Select.Option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </Select.Option>
-                ))}
-              </div>
-            ))}
+            <SelectTrigger className="w-full text-sm" aria-label={gatewayMode ? 'Select Provider' : 'Select Model'}>
+              <SelectValue placeholder={gatewayMode ? 'Choose a provider...' : 'Choose an AI model...'} />
+            </SelectTrigger>
+            <SelectContent>
+              {groupedOptions.flatMap((group) => group.items.map(opt => (
+                <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+              )))}
+            </SelectContent>
           </Select>
+          {errors.selection && <p className="text-xs text-destructive">{errors.selection}</p>}
 
           {/* Custom model fields */}
           {showCustomFields && (
             <>
-              <Input
-                label="Model ID"
-                placeholder={`e.g., ${example!.modelId}`}
-                description={`The model identifier as specified by the provider (e.g., '${example!.modelId}')`}
-                value={modelId}
-                onChange={(e) => { setModelId(e.target.value); setErrors(prev => ({ ...prev, modelId: '' })) }}
-                error={errors.modelId}
-                variant={errors.modelId ? 'error' : 'default'}
-              />
+              <Field>
+                <FieldLabel>Model ID</FieldLabel>
+                <Input
+                  placeholder={`e.g., ${example!.modelId}`}
+                  aria-invalid={Boolean(errors.modelId)}
+                  value={modelId}
+                  onChange={(e) => { setModelId(e.target.value); setErrors(prev => ({ ...prev, modelId: '' })) }}
+                />
+                <FieldDescription>The model identifier as specified by the provider (e.g., '{example!.modelId}')</FieldDescription>
+                {errors.modelId && <FieldError>{errors.modelId}</FieldError>}
+              </Field>
 
-              <Input
-                label="Display Name"
-                placeholder={`e.g., ${example!.name}`}
-                description="Human-readable name shown in the UI"
-                value={displayName}
-                onChange={(e) => { setDisplayName(e.target.value); setErrors(prev => ({ ...prev, displayName: '' })) }}
-                error={errors.displayName}
-                variant={errors.displayName ? 'error' : 'default'}
-              />
+              <Field>
+                <FieldLabel>Display Name</FieldLabel>
+                <Input
+                  placeholder={`e.g., ${example!.name}`}
+                  aria-invalid={Boolean(errors.displayName)}
+                  value={displayName}
+                  onChange={(e) => { setDisplayName(e.target.value); setErrors(prev => ({ ...prev, displayName: '' })) }}
+                />
+                <FieldDescription>Human-readable name shown in the UI</FieldDescription>
+                {errors.displayName && <FieldError>{errors.displayName}</FieldError>}
+              </Field>
             </>
           )}
 
           {/* Cloudflare account ID (the Workers AI REST endpoint is account-scoped) */}
           {showCredentials && isCloudflare && (
-            <Input
-              label="Cloudflare Account ID"
-              placeholder="e.g., 0123456789abcdef0123456789abcdef"
-              description="The Cloudflare account to bill for Workers AI usage"
-              value={accountId}
-              onChange={(e) => { setAccountId(e.target.value); setErrors(prev => ({ ...prev, accountId: '' })) }}
-              error={errors.accountId}
-              variant={errors.accountId ? 'error' : 'default'}
-            />
+            <Field>
+              <FieldLabel>Cloudflare Account ID</FieldLabel>
+              <Input
+                placeholder="e.g., 0123456789abcdef0123456789abcdef"
+                aria-invalid={Boolean(errors.accountId)}
+                value={accountId}
+                onChange={(e) => { setAccountId(e.target.value); setErrors(prev => ({ ...prev, accountId: '' })) }}
+              />
+              <FieldDescription>The Cloudflare account to bill for Workers AI usage</FieldDescription>
+              {errors.accountId && <FieldError>{errors.accountId}</FieldError>}
+            </Field>
           )}
 
           {/* API Token */}
           {showCredentials && selection && (
-            <SensitiveInput
-              label="API Token"
-              placeholder={API_TOKEN_PLACEHOLDERS[selection.provider]}
-              description={
-                isOllama
+            <Field>
+              <FieldLabel>API Token</FieldLabel>
+              <SensitiveInput
+                placeholder={API_TOKEN_PLACEHOLDERS[selection.provider]}
+                aria-invalid={Boolean(errors.apiToken)}
+                value={apiToken}
+                onChange={(e) => { setApiToken(e.target.value); setErrors(prev => ({ ...prev, apiToken: '' })) }}
+              />
+              <FieldDescription>
+                {isOllama
                   ? 'Optional for local Ollama access'
                   : isCloudflare
                   ? 'An API token with Workers AI Read + Edit permissions (in the dashboard: Workers AI > Use REST API > Create a Workers AI API Token)'
-                  : `Your ${PROVIDER_LABELS[selection.provider]} API token for billing`
-              }
-              value={apiToken}
-              onValueChange={(v) => { setApiToken(v); setErrors(prev => ({ ...prev, apiToken: '' })) }}
-              error={errors.apiToken}
-              variant={errors.apiToken ? 'error' : 'default'}
-            />
+                  : `Your ${PROVIDER_LABELS[selection.provider]} API token for billing`}
+              </FieldDescription>
+              {errors.apiToken && <FieldError>{errors.apiToken}</FieldError>}
+            </Field>
           )}
 
           {/* Ollama API URL (always visible for Ollama) */}
           {showCredentials && isOllama && (
-            <Input
-              label="API URL"
-              placeholder="http://localhost:11434"
-              description="URL of your Ollama server"
-              value={apiUrl}
-              onChange={(e) => { setApiUrl(e.target.value); setErrors(prev => ({ ...prev, apiUrl: '' })) }}
-              error={errors.apiUrl}
-              variant={errors.apiUrl ? 'error' : 'default'}
-            />
+            <Field>
+              <FieldLabel>API URL</FieldLabel>
+              <Input
+                placeholder="http://localhost:11434"
+                aria-invalid={Boolean(errors.apiUrl)}
+                value={apiUrl}
+                onChange={(e) => { setApiUrl(e.target.value); setErrors(prev => ({ ...prev, apiUrl: '' })) }}
+              />
+              <FieldDescription>URL of your Ollama server</FieldDescription>
+              {errors.apiUrl && <FieldError>{errors.apiUrl}</FieldError>}
+            </Field>
           )}
 
           {/* Advanced Settings for non-Ollama, non-Cloudflare providers */}
           {showCredentials && selection && !isOllama && !isCloudflare && (
-            <Collapsible.Root
+            <Collapsible
               open={advancedOpen}
               onOpenChange={setAdvancedOpen}
             >
-              <Collapsible.DefaultTrigger>Advanced Settings</Collapsible.DefaultTrigger>
-              <Collapsible.DefaultPanel>
-                <Input
-                  label="API URL"
-                  placeholder="https://..."
-                  description="Override the default API endpoint (useful for proxies like Cloudflare AI Gateway)"
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                />
-              </Collapsible.DefaultPanel>
-            </Collapsible.Root>
+              <CollapsibleDefaultTrigger>Advanced Settings</CollapsibleDefaultTrigger>
+              <CollapsibleDefaultPanel>
+                <Field>
+                  <FieldLabel>API URL</FieldLabel>
+                  <Input
+                    placeholder="https://..."
+                    value={apiUrl}
+                    onChange={(e) => setApiUrl(e.target.value)}
+                  />
+                  <FieldDescription>Override the default API endpoint (useful for proxies like Cloudflare AI Gateway)</FieldDescription>
+                </Field>
+              </CollapsibleDefaultPanel>
+            </Collapsible>
           )}
         </div>
 
         {/* Footer */}
         <div className="mt-6 flex justify-end gap-2">
-          <Dialog.Close render={(props) => (
+          <DialogClose render={(props) => (
             <Button variant="secondary" {...props} disabled={loading}>
               Cancel
             </Button>
@@ -375,7 +372,7 @@ export default function AddModelModal({ visible, onCancel, onSuccess, authentica
             Add Model
           </Button>
         </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -23,53 +23,25 @@ afterAll(() => {
   else testGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
 })
 
-vi.mock('@cloudflare/kumo', () => {
-  const Dialog = Object.assign(
-    ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    {
-      Root: ({ children }: { children: ReactNode }) => <>{children}</>,
-      Title: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
-      Description: ({ children }: { children: ReactNode }) => <p>{children}</p>,
-      Close: ({ render }: { render: (props: object) => ReactElement }) =>
-        render({ 'aria-label': 'Close' }),
-    },
-  )
-  const DropdownMenu = Object.assign(
-    ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    {
-      Trigger: ({ render }: { render: ReactElement }) => render,
-      Content: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-      Item: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => (
-        <button type="button" data-testid="role-option" onClick={onClick}>{children}</button>
-      ),
-    },
-  )
-  return {
-    Checkbox: ({ label }: { label: ReactNode }) => <label>{label}</label>,
-    Dialog,
-    DropdownMenu,
-    useKumoToastManager: () => ({ add: vi.fn<(toast: unknown) => void>() }),
-  }
-})
-
-vi.mock('./components/WorkshopControls', () => ({
-  WorkshopButton: ({ children, ...props }: ComponentProps<'button'>) => (
-    <button type="button" {...props}>{children}</button>
-  ),
-  WorkshopIconButton: ({ children, ...props }: ComponentProps<'button'>) => (
-    <button type="button" {...props}>{children}</button>
-  ),
+vi.mock('@matser/ui', () => ({
+  Button: ({ children, ...props }: ComponentProps<'button'>) => <button type="button" {...props}>{children}</button>,
+  Checkbox: ({ label }: { label: ReactNode }) => <label>{label}</label>,
+  Dialog: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
+  DialogDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,
+  DialogClose: ({ render }: { render: ReactElement }) => render,
+  DropdownMenu: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ render }: { render: ReactElement }) => render,
+  DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => <button type="button" data-testid="role-option" onClick={onClick}>{children}</button>,
+  useToast: () => ({ add: vi.fn<(toast: unknown) => void>() }),
 }))
-
-vi.mock('./components/PersonAvatar', () => ({
-  PersonAvatar: () => <span data-testid="avatar" />,
-}))
-
+vi.mock('./components/PersonAvatar', () => ({ PersonAvatar: () => <span data-testid="avatar" /> }))
 const copyToClipboard = vi.fn<(text: string) => Promise<boolean>>(async () => true)
 vi.mock('./clipboard', () => ({ copyToClipboard: (text: string) => copyToClipboard(text) }))
 
 import ShareModal from './ShareModal'
-
 const METADATA = { id: 'trip-planner', title: 'Trip planner' } as GadgetMetadata
 const WORKSPACE_URL = `${window.location.origin}/workspace/trip-planner`
 

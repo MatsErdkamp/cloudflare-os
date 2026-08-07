@@ -1,10 +1,8 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Desktop, Moon, Plug, Sun } from '@phosphor-icons/react'
-import { Tooltip } from '@cloudflare/kumo'
 import UserMenu from '../UserMenu'
 import { useTheme } from '../../ThemeContext'
 import type { ThemeMode } from '../../theme'
-
+import { Button, Icons, Tooltip, TooltipContent, TooltipTrigger } from '@matser/ui'
 const THEME_SEQUENCE: ThemeMode[] = ['system', 'light', 'dark']
 
 function nextThemeMode(mode: ThemeMode): ThemeMode {
@@ -19,25 +17,29 @@ function ThemeModeButton() {
   const nextMode = nextThemeMode(themeMode)
 
   return (
-    <Tooltip
-      content={`${label}. Switch to ${nextMode}.`}
-      render={(
-        <button
+    <Tooltip>
+      <TooltipTrigger
+        render={(
+        <Button
+          variant="ghost"
+          size="icon"
           type="button"
           aria-label={`${label}. Switch to ${nextMode}.`}
           onClick={() => setThemeMode(nextMode)}
-          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-kumo-inactive transition-colors hover:bg-kumo-tint hover:text-kumo-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kumo-ring focus-visible:ring-offset-2 focus-visible:ring-offset-kumo-elevated"
+          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
         >
           {themeMode === 'system' ? (
-            <Desktop size={15} />
+            <Icons.Monitor size={15} />
           ) : themeMode === 'dark' ? (
-            <Moon size={15} />
+            <Icons.Moon size={15} />
           ) : (
-            <Sun size={15} />
+            <Icons.Sun size={15} />
           )}
-        </button>
-      )}
-    />
+        </Button>
+        )}
+      />
+      <TooltipContent>{`${label}. Switch to ${nextMode}.`}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -56,19 +58,20 @@ function StripLink({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const active = pathname === to
   return (
-    <Tooltip content={label}>
-      <Link
+    <Tooltip>
+      <TooltipTrigger render={<Link
         to={to}
         aria-label={label}
         className={[
           'flex h-8 w-8 items-center justify-center rounded-md transition-colors',
           active
-            ? 'bg-kumo-fill text-kumo-brand'
-            : 'text-kumo-inactive hover:bg-kumo-tint hover:text-kumo-default',
+            ? 'bg-accent text-primary'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
         ].join(' ')}
       >
         {children}
-      </Link>
+      </Link>} />
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   )
 }
@@ -79,12 +82,12 @@ export default function SidebarUtilityStrip({ collapsed = false }: { collapsed?:
       className={[
         // shrink-0 + solid base so the strip is visually pinned above the scrolling rail body
         // and content can't bleed through it. Flat treatment — no top shadow.
-        'shrink-0 flex items-center gap-1 border-t border-kumo-line bg-kumo-elevated px-3 py-2',
+        'shrink-0 flex items-center gap-1 border-t border-border bg-card px-3 py-2',
         collapsed ? 'flex-col justify-center gap-2 px-1.5' : '',
       ].join(' ')}
     >
       <StripLink to="/gatekeepers" label="Gatekeepers">
-        <Plug size={15} />
+        <Icons.Plug size={15} />
       </StripLink>
       <div className={collapsed ? 'flex flex-col items-center gap-2' : 'ml-auto flex items-center gap-1'}>
         <ThemeModeButton />

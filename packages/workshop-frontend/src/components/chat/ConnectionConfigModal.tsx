@@ -1,9 +1,8 @@
 import { useState } from 'react'
-import { Dialog, Button, Input } from '@cloudflare/kumo'
 import { X } from '@phosphor-icons/react'
 import type { Connection, ConnectionResource } from '../../data/sample'
 import { logoComponents } from '../ConnectionLogos'
-
+import { Dialog, Button, Input, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@matser/ui'
 export default function ConnectionConfigModal({
   connection,
   open,
@@ -38,8 +37,8 @@ export default function ConnectionConfigModal({
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog size="base" className="p-0 overflow-hidden">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent size="md" className="p-0 overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-5 pt-5 pb-4">
           <div
@@ -49,18 +48,18 @@ export default function ConnectionConfigModal({
             {Logo && <Logo size={18} />}
           </div>
           <div className="flex-1 min-w-0">
-            <Dialog.Title className="text-sm font-semibold text-kumo-default">
+            <DialogTitle className="text-sm font-semibold text-foreground">
               {connection.name}
-            </Dialog.Title>
-            <Dialog.Description className="text-xs text-kumo-subtle">
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
               {connection.description}
-            </Dialog.Description>
+            </DialogDescription>
           </div>
-          <Dialog.Close
+          <DialogClose
             render={(props) => (
               <button
                 {...props}
-                className="p-1 text-kumo-subtle hover:text-kumo-default rounded-md hover:bg-kumo-tint transition-colors"
+                className="p-1 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted transition-colors"
               >
                 <X size={14} />
               </button>
@@ -68,7 +67,7 @@ export default function ConnectionConfigModal({
           />
         </div>
 
-        <div className="border-t border-kumo-fill" />
+        <div className="border-t border-accent" />
 
         {/* Add resource */}
         {config && (
@@ -76,7 +75,6 @@ export default function ConnectionConfigModal({
             <div className="flex gap-2">
               <div className="flex-1">
                 <Input
-                  size="sm"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.currentTarget.value)}
                   onKeyDown={(e) => {
@@ -101,7 +99,7 @@ export default function ConnectionConfigModal({
         {/* Resource list */}
         <div className="max-h-56 overflow-y-auto px-5 pb-4">
           {resources.length === 0 ? (
-            <p className="text-sm text-kumo-inactive text-center py-4">
+            <p className="text-sm text-muted-foreground text-center py-4">
               No resources added yet
             </p>
           ) : (
@@ -109,14 +107,14 @@ export default function ConnectionConfigModal({
               {resources.map((r) => (
                 <div
                   key={r.id}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-kumo-tint group"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted group"
                 >
-                  <span className="text-sm text-kumo-default flex-1 min-w-0 truncate">
+                  <span className="text-sm text-foreground flex-1 min-w-0 truncate">
                     {r.label}
                   </span>
                   <button
                     onClick={() => handleRemove(r.id)}
-                    className="p-0.5 text-kumo-inactive opacity-0 group-hover:opacity-100 hover:text-kumo-danger rounded transition-all"
+                    className="p-0.5 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive rounded transition-all"
                   >
                     <X size={12} />
                   </button>
@@ -127,8 +125,8 @@ export default function ConnectionConfigModal({
         </div>
 
         {/* Footer */}
-        <div className="border-t border-kumo-fill px-5 py-3 flex justify-end gap-2">
-          <Dialog.Close
+        <div className="border-t border-accent px-5 py-3 flex justify-end gap-2">
+          <DialogClose
             render={(props) => (
               <Button {...props} variant="outline" size="sm">
                 Cancel
@@ -146,7 +144,7 @@ export default function ConnectionConfigModal({
             Save
           </Button>
         </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }

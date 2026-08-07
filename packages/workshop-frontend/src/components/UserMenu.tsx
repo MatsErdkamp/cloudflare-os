@@ -1,9 +1,8 @@
 import { useNavigate } from '@tanstack/react-router'
-import { DropdownMenu } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from '../AuthContext'
 import { useAvatar } from '../useAvatar'
 import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER, MENU_POSITIONER_STYLE } from './menuStyles'
-
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@matser/ui'
 export default function UserMenu() {
   const { authenticatedApi, logout, currentUser, isAdmin } = useAuthenticatedApi()
   const navigate = useNavigate()
@@ -16,51 +15,51 @@ export default function UserMenu() {
 
   return (
     <DropdownMenu>
-      <DropdownMenu.Trigger
+      <DropdownMenuTrigger
         render={
           <button
-            className="w-7 h-7 cursor-pointer rounded-full flex items-center justify-center bg-kumo-tint hover:bg-kumo-fill transition-colors overflow-hidden"
+            className="w-7 h-7 cursor-pointer rounded-full flex items-center justify-center bg-muted hover:bg-accent transition-colors overflow-hidden"
             title="Open profile menu"
             aria-label="Open profile menu"
           >
             {avatarUrl ? (
               <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
             ) : (
-              <span className="text-xs font-medium text-kumo-strong">{initials}</span>
+              <span className="text-xs font-medium text-foreground">{initials}</span>
             )}
           </button>
         }
       />
-      <DropdownMenu.Content className={MENU_CONTENT} style={MENU_POSITIONER_STYLE}>
-        <DropdownMenu.Item
+      <DropdownMenuContent className={MENU_CONTENT} style={MENU_POSITIONER_STYLE}>
+        <DropdownMenuItem
           onClick={() => navigate({ to: '/profile' })}
           className={MENU_ITEM}
         >
           Profile
-        </DropdownMenu.Item>
-        <DropdownMenu.Item
+        </DropdownMenuItem>
+        <DropdownMenuItem
           onClick={() => navigate({ to: '/providers' })}
           className={MENU_ITEM}
         >
           Providers
-        </DropdownMenu.Item>
+        </DropdownMenuItem>
         {isAdmin && (
-          <DropdownMenu.Item
+          <DropdownMenuItem
             onClick={() => navigate({ to: '/admin' })}
             className={MENU_ITEM}
           >
             Admin
-          </DropdownMenu.Item>
+          </DropdownMenuItem>
         )}
-        <DropdownMenu.Separator />
-        <DropdownMenu.Item
-          variant="danger"
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
           onClick={logout}
           className={MENU_ITEM_DANGER}
         >
           Sign out
-        </DropdownMenu.Item>
-      </DropdownMenu.Content>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
     </DropdownMenu>
   )
 }

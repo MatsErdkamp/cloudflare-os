@@ -11,21 +11,18 @@ const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?
 const previousActEnvironment = testGlobal.IS_REACT_ACT_ENVIRONMENT
 testGlobal.IS_REACT_ACT_ENVIRONMENT = true
 afterAll(() => {
-  if (previousActEnvironment === undefined) {
-    delete testGlobal.IS_REACT_ACT_ENVIRONMENT
-  } else {
-    testGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
-  }
+  if (previousActEnvironment === undefined) delete testGlobal.IS_REACT_ACT_ENVIRONMENT
+  else testGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
 })
 
-vi.mock('@cloudflare/kumo', () => ({
+vi.mock('@matser/ui', () => ({
   Banner: () => null,
-  Loader: () => null,
+  Button: () => null,
+  Spinner: () => null,
   Text: ({ children }: { children: ReactNode }) => children,
 }))
 
 import GadgetUI from './GadgetUI'
-
 interface TestGadget {
   read(): string
   child(): TestChild

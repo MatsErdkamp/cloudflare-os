@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react'
-import { Button, Input, Textarea, useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import type { AdminApi, ContractorsDependencyPolicy } from '@gadgets/workshop-shared/api'
-
+import { Button, Input, Textarea, useToast } from '@matser/ui'
 interface AdminContractorsPanelProps {
   admin: RpcStub<AdminApi>
   policy: ContractorsDependencyPolicy
@@ -39,7 +38,7 @@ export default function AdminContractorsPanel({
   policy,
   onChanged,
 }: AdminContractorsPanelProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const [allowedPackages, setAllowedPackages] = useState(packageLines(policy.allowedPackages))
   const [deniedPackages, setDeniedPackages] = useState(packageLines(policy.deniedPackages))
   const [allowedVersions, setAllowedVersions] = useState(versionLines(policy.allowedVersions))
@@ -73,11 +72,11 @@ export default function AdminContractorsPanel({
     try {
       await admin.setContractorsDependencyPolicy(draft)
       onChanged(draft)
-      toasts.add({title: 'Contract dependency policy saved', variant: 'success'})
+      toasts.add({title: 'Contract dependency policy saved', type: 'success'})
     } catch (error) {
       toasts.add({
         title: error instanceof Error ? error.message : 'Failed to save dependency policy',
-        variant: 'error',
+        type: 'error',
       })
     } finally {
       setSaving(false)
@@ -85,52 +84,52 @@ export default function AdminContractorsPanel({
   }
 
   return (
-    <div className="bg-kumo-elevated border border-kumo-line rounded-xl p-6 space-y-5">
+    <div className="bg-card border border-border rounded-xl p-6 space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-kumo-strong">Contract dependency policy</h2>
-        <p className="text-sm text-kumo-subtle mt-1">
+        <h2 className="text-lg font-semibold text-foreground">Contract dependency policy</h2>
+        <p className="text-sm text-muted-foreground mt-1">
           Governs npm dependencies before a Contract can be proposed. Empty allow and deny lists
           permit any installed exact-version dependency.
         </p>
       </div>
 
       <label className="block">
-        <span className="block text-sm font-medium text-kumo-default mb-2">Allowed packages</span>
+        <span className="block text-sm font-medium text-foreground mb-2">Allowed packages</span>
         <Textarea
           className="w-full"
           value={allowedPackages}
-          onValueChange={setAllowedPackages}
+          onChange={(event) => setAllowedPackages(event.target.value)}
           rows={4}
           placeholder={'zod\n@acme/contract-utils'}
         />
-        <span className="block text-xs text-kumo-subtle mt-1">One npm package name per line.</span>
+        <span className="block text-xs text-muted-foreground mt-1">One npm package name per line.</span>
       </label>
 
       <label className="block">
-        <span className="block text-sm font-medium text-kumo-default mb-2">Denied packages</span>
+        <span className="block text-sm font-medium text-foreground mb-2">Denied packages</span>
         <Textarea
           className="w-full"
           value={deniedPackages}
-          onValueChange={setDeniedPackages}
+          onChange={(event) => setDeniedPackages(event.target.value)}
           rows={4}
           placeholder="left-pad"
         />
       </label>
 
       <label className="block">
-        <span className="block text-sm font-medium text-kumo-default mb-2">Allowed exact versions</span>
+        <span className="block text-sm font-medium text-foreground mb-2">Allowed exact versions</span>
         <Textarea
           className="w-full"
           value={allowedVersions}
-          onValueChange={setAllowedVersions}
+          onChange={(event) => setAllowedVersions(event.target.value)}
           rows={4}
           placeholder={'zod@4.2.0\n@acme/contract-utils@1.3.0'}
-          error={draftError?.startsWith('Expected') ? draftError : undefined}
+          aria-invalid={Boolean(draftError?.startsWith('Expected'))}
         />
       </label>
 
       <label className="block">
-        <span className="block text-sm font-medium text-kumo-default mb-2">Maximum bundle size (bytes)</span>
+        <span className="block text-sm font-medium text-foreground mb-2">Maximum bundle size (bytes)</span>
         <Input
           type="number"
           min={0}
@@ -142,7 +141,7 @@ export default function AdminContractorsPanel({
       </label>
 
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-kumo-danger">{draftError}</span>
+        <span className="text-xs text-destructive">{draftError}</span>
         <Button
           variant="primary"
           size="sm"

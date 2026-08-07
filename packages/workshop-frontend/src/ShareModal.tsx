@@ -1,6 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import { Checkbox, Dialog, DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
-import type { PortalContainer } from '@cloudflare/kumo'
+import {useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { CaretDown, Check, Copy, Link, PencilSimple, ShieldCheck, ShieldWarning, Trash, UserPlus, X } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
 import {
@@ -14,10 +12,9 @@ import {
   CollaboratorRole,
   ObserverBindingNeed,
 } from '@gadgets/workshop-shared/api'
-import { WorkshopButton, WorkshopIconButton } from './components/WorkshopControls'
 import { PersonAvatar } from './components/PersonAvatar'
 import { copyToClipboard } from './clipboard'
-
+import { Checkbox, Dialog, DropdownMenu, useToast, DialogContent, DialogTitle, DialogDescription, DialogClose, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, type PortalContainer, Button } from '@matser/ui'
 type CollaboratorRow =
   | { kind: 'owner'; profile: AiChatAuthorInfo }
   | { kind: 'collaborator'; info: CollaboratorInfo }
@@ -81,43 +78,43 @@ function RoleMenu({
 }) {
   return (
     <DropdownMenu>
-      <DropdownMenu.Trigger
+      <DropdownMenuTrigger
         disabled={disabled}
         render={
           <button
             type="button"
-            className="group inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[12px] leading-4 font-medium text-kumo-subtle transition-[background-color,color,transform] duration-150 ease-out hover:bg-kumo-tint hover:text-kumo-default focus-visible:bg-kumo-tint focus-visible:text-kumo-default focus-visible:outline-none active:scale-[0.97] data-[popup-open]:bg-kumo-tint data-[popup-open]:text-kumo-default disabled:cursor-not-allowed disabled:opacity-40"
+            className="group inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[12px] leading-4 font-medium text-muted-foreground transition-[background-color,color,transform] duration-150 ease-out hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none active:scale-[0.97] data-[popup-open]:bg-muted data-[popup-open]:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             aria-label={ariaLabel}
           >
             {roleLabel(value)}
-            <CaretDown size={11} weight="bold" className="text-kumo-inactive transition-transform duration-150 ease-out group-data-[popup-open]:rotate-180" />
+            <CaretDown size={11} weight="bold" className="text-muted-foreground transition-transform duration-150 ease-out group-data-[popup-open]:rotate-180" />
           </button>
         }
       />
-      <DropdownMenu.Content
+      <DropdownMenuContent
         container={container}
         align="end"
         sideOffset={6}
-        className="themed-floating-shadow-lg !z-[1100] !w-[300px] !min-w-0 rounded-2xl border border-kumo-line/70 bg-kumo-base p-1 !ring-kumo-line"
+        className="themed-floating-shadow-lg !z-[1100] !w-[300px] !min-w-0 rounded-2xl border border-border/70 bg-background p-1 !ring-border"
       >
         {ROLE_OPTIONS.map(role => (
-          <DropdownMenu.Item
+          <DropdownMenuItem
             key={role}
             onClick={() => onValueChange(role)}
-            className="!h-auto cursor-pointer rounded-xl !px-2.5 !py-2 text-kumo-default transition-colors data-highlighted:bg-kumo-tint/70"
+            className="!h-auto cursor-pointer rounded-xl !px-2.5 !py-2 text-foreground transition-colors data-highlighted:bg-muted/70"
           >
             <span className="min-w-0 flex-1">
               <span className="block text-[12px] leading-4 font-medium">{roleLabel(role)}</span>
-              <span className="mt-0.5 block text-[11px] leading-4 font-normal text-kumo-subtle">
+              <span className="mt-0.5 block text-[11px] leading-4 font-normal text-muted-foreground">
                 {ROLE_DESCRIPTIONS[role]}
               </span>
             </span>
             <span className="ml-2 flex h-4 w-4 shrink-0 items-center justify-center">
-              {value === role && <Check size={13} weight="bold" className="text-kumo-brand" />}
+              {value === role && <Check size={13} weight="bold" className="text-primary" />}
             </span>
-          </DropdownMenu.Item>
+          </DropdownMenuItem>
         ))}
-      </DropdownMenu.Content>
+      </DropdownMenuContent>
     </DropdownMenu>
   )
 }
@@ -128,8 +125,8 @@ function RoleBadge({ role }: { role: CollaboratorRole | undefined }) {
     <span
       className={`shrink-0 rounded-full border px-2.5 py-[3px] text-[11px] leading-4 font-medium tracking-[-0.1px] ${
         isBuild
-          ? 'border-kumo-line bg-kumo-tint/70 text-kumo-default'
-          : 'border-kumo-line/70 bg-kumo-base text-kumo-subtle'
+          ? 'border-border bg-muted/70 text-foreground'
+          : 'border-border/70 bg-background text-muted-foreground'
       }`}
     >
       {roleLabel(role)}
@@ -160,8 +157,8 @@ function InlineConfirm({
         disabled={busy}
         className={`inline-flex h-7 cursor-pointer items-center rounded-lg px-2.5 text-[12px] leading-4 font-medium tracking-[-0.1px] transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] disabled:opacity-60 ${
           tone === 'danger'
-            ? 'text-kumo-danger hover:bg-kumo-danger-tint'
-            : 'text-kumo-brand hover:bg-kumo-tint'
+            ? 'text-destructive hover:bg-destructive-muted'
+            : 'text-primary hover:bg-muted'
         }`}
       >
         {busy ? (busyLabel ?? `${label}…`) : label}
@@ -171,7 +168,7 @@ function InlineConfirm({
         onClick={onCancel}
         disabled={busy}
         aria-label="Cancel"
-        className="grid h-7 w-7 cursor-pointer place-items-center rounded-lg text-kumo-inactive transition-[background-color,color,transform] duration-150 ease-out hover:bg-kumo-tint hover:text-kumo-default active:scale-[0.96] disabled:opacity-60"
+        className="grid h-7 w-7 cursor-pointer place-items-center rounded-lg text-muted-foreground transition-[background-color,color,transform] duration-150 ease-out hover:bg-muted hover:text-foreground active:scale-[0.96] disabled:opacity-60"
       >
         <X size={14} />
       </button>
@@ -196,24 +193,24 @@ function DependentKeepList({
         <div
           key={dep.profile.id}
           className={`rounded-xl px-3 py-2 transition-colors ${
-            keepSet.has(dep.profile.id) ? 'bg-kumo-tint' : 'bg-kumo-elevated/50 hover:bg-kumo-elevated'
+            keepSet.has(dep.profile.id) ? 'bg-muted' : 'bg-card/50 hover:bg-card'
           }`}
         >
-          <Checkbox
-            label={(
-              <span className="flex min-w-0 items-baseline gap-1.5">
-                <span className="truncate text-[12px] font-medium text-kumo-default">{dep.profile.name}</span>
-                <span className="truncate text-[11px] text-kumo-subtle">{dep.profile.id}</span>
-              </span>
-            )}
-            checked={keepSet.has(dep.profile.id)}
-            onCheckedChange={(checked) => {
-              const next = new Set(keepSet)
-              if (checked) next.add(dep.profile.id)
-              else next.delete(dep.profile.id)
-              onKeepSetChange(next)
-            }}
-          />
+          <label className="inline-flex items-center gap-2">
+            <Checkbox
+              checked={keepSet.has(dep.profile.id)}
+              onCheckedChange={(checked) => {
+                const next = new Set(keepSet)
+                if (checked) next.add(dep.profile.id)
+                else next.delete(dep.profile.id)
+                onKeepSetChange(next)
+              }}
+            />
+            <span className="flex min-w-0 items-baseline gap-1.5">
+              <span className="truncate text-[12px] font-medium text-foreground">{dep.profile.name}</span>
+              <span className="truncate text-[11px] text-muted-foreground">{dep.profile.id}</span>
+            </span>
+          </label>
         </div>
       ))}
     </div>
@@ -239,7 +236,7 @@ function RecipientVerification({
   let body: ReactNode
   if (failed) {
     body = (
-      <p className="px-1 text-[12px] leading-[16px] tracking-[-0.15px] text-kumo-subtle">
+      <p className="px-1 text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground">
         Couldn’t check which connections recipients will be asked to verify.
       </p>
     )
@@ -248,20 +245,20 @@ function RecipientVerification({
     return null
   } else {
     body = (
-      <div className="rounded-2xl border border-kumo-line/80 bg-kumo-base px-3 py-2.5">
-        <p className="text-[12px] leading-[16px] tracking-[-0.15px] text-kumo-subtle">
+      <div className="rounded-2xl border border-border/80 bg-background px-3 py-2.5">
+        <p className="text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground">
           {role ? (
-            <>People with <span className="font-medium text-kumo-default">{roleLabel(role)}</span> access must</>
+            <>People with <span className="font-medium text-foreground">{roleLabel(role)}</span> access must</>
           ) : 'Recipients must'} prove their own account can reach:
         </p>
         <ul className="mt-1.5 max-h-32 space-y-1 overflow-y-auto">
           {requirements.map(requirement => (
             <li key={requirement.gatekeeperId} className="min-w-0">
-              <p className="truncate text-[12px] leading-4 font-medium tracking-[-0.15px] text-kumo-default">
+              <p className="truncate text-[12px] leading-4 font-medium tracking-[-0.15px] text-foreground">
                 {requirement.resourceTitle}
               </p>
               {requirement.resourceUrl && (
-                <p className="truncate font-mono text-[11px] leading-4 text-kumo-inactive">
+                <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground">
                   {requirement.resourceUrl}
                 </p>
               )}
@@ -275,8 +272,8 @@ function RecipientVerification({
   return (
     <section aria-labelledby={headingId} className="mt-4">
       <div className="mb-2 flex items-center gap-1.5 px-1">
-        <ShieldCheck size={13} className="text-kumo-inactive" />
-        <h3 id={headingId} className="text-[12px] leading-4 font-medium tracking-[-0.15px] text-kumo-subtle">
+        <ShieldCheck size={13} className="text-muted-foreground" />
+        <h3 id={headingId} className="text-[12px] leading-4 font-medium tracking-[-0.15px] text-muted-foreground">
           {heading}
         </h3>
       </div>
@@ -294,7 +291,7 @@ function sameRequirements(
 }
 
 export default function ShareModal({ open, onClose, overseer, metadata, currentUser, authenticatedApi }: Props) {
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const [collaborators, setCollaborators] = useState<CollaboratorInfo[]>([])
   const [shareLinks, setShareLinks] = useState<ShareLinkInfo[]>([])
   const [addUsername, setAddUsername] = useState('')
@@ -384,7 +381,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
       return { collaborators: collabs, shareLinks: keys }
     } catch (err) {
       console.error('Failed to load share data:', err)
-      toasts.add({ title: 'Failed to load sharing info', variant: 'error' })
+      toasts.add({ title: 'Failed to load sharing info', type: 'error' })
       return null
     }
   }, [overseer])
@@ -529,7 +526,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
     if (copied) {
       setNewShareLinkCopied(true)
     } else {
-      toasts.add({ title: 'Could not copy share link.', variant: 'error' })
+      toasts.add({ title: 'Could not copy share link.', type: 'error' })
     }
   }
 
@@ -541,7 +538,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
     if (await copyToClipboard(workspaceUrl)) {
       setInvitedLinkCopied(true)
     } else {
-      toasts.add({ title: 'Could not copy the workspace link.', variant: 'error' })
+      toasts.add({ title: 'Could not copy the workspace link.', type: 'error' })
     }
   }
 
@@ -565,7 +562,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
     try {
       const result = await overseer.addCollaborator(username, addRole, undefined)
       if (result === null) {
-        toasts.add({ title: 'No account found for that username.', variant: 'error' })
+        toasts.add({ title: 'No account found for that username.', type: 'error' })
       } else {
         const landedId = result.profile.id
         setAddUsername('')
@@ -573,10 +570,10 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
         setInvitedLinkCopied(false)
         await loadData()
         showLandedRow('person', landedId)
-        toasts.add({ title: `Added ${result.profile.name} as a collaborator.`, variant: 'success' })
+        toasts.add({ title: `Added ${result.profile.name} as a collaborator.`, type: 'success' })
       }
     } catch (err: any) {
-      toasts.add({ title: err.message || 'Failed to add collaborator.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to add collaborator.', type: 'error' })
     } finally {
       addingRef.current = false
       setAdding(false)
@@ -600,7 +597,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
       showLandedRow('shareLink', linkId)
     } catch (err: any) {
       // Keep the composer and its values open so the user can retry without re-entering them.
-      toasts.add({ title: err.message || 'Failed to create share link.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to create share link.', type: 'error' })
     } finally {
       creatingLinkRef.current = false
       setCreatingLink(false)
@@ -623,7 +620,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
       }
       const copied = await copyToClipboard(url)
       if (!copied) {
-        toasts.add({ title: 'Could not copy share link.', variant: 'error' })
+        toasts.add({ title: 'Could not copy share link.', type: 'error' })
         return
       }
       setCopiedLinkId(linkId)
@@ -633,9 +630,9 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
         setCopiedLinkId(current => (current === linkId ? null : current))
         copiedTimerRef.current = null
       }, 2000)
-      toasts.add({ title: 'Link copied to clipboard.', variant: 'success' })
+      toasts.add({ title: 'Link copied to clipboard.', type: 'success' })
     } catch (err: any) {
-      toasts.add({ title: err.message || 'Failed to copy share link.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to copy share link.', type: 'error' })
     } finally {
       copyingLinkRef.current = false
       setCopyingLinkId(null)
@@ -651,7 +648,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
         : current)
     } catch (err: any) {
       setConfirmationTarget(current => current?.kind === 'remove' && current.profileId === profileId ? null : current)
-      toasts.add({ title: err.message || 'Failed to preview collaborator removal.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to preview collaborator removal.', type: 'error' })
     }
   }
 
@@ -665,11 +662,11 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
         title: removed.length > 0
           ? 'Collaborator removed.'
           : 'Your direct grant was removed. This collaborator still has access through another source.',
-        variant: 'success',
+        type: 'success',
       })
       await loadData()
     } catch (err: any) {
-      toasts.add({ title: err.message || 'Failed to remove collaborator.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to remove collaborator.', type: 'error' })
     } finally {
       setConfirmationBusy(false)
     }
@@ -702,9 +699,9 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
       cancelRenameShareLink()
       await loadData()
       showLandedRow('shareLink', linkId)
-      toasts.add({ title: 'Share link renamed.', variant: 'success' })
+      toasts.add({ title: 'Share link renamed.', type: 'success' })
     } catch (err: any) {
-      toasts.add({ title: err.message || 'Failed to rename share link.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to rename share link.', type: 'error' })
     } finally {
       savingShareLinkNoteRef.current = false
       setSavingShareLinkNote(false)
@@ -721,7 +718,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
         : current)
     } catch (err: any) {
       setConfirmationTarget(current => current?.kind === 'revoke' && current.linkId === linkId ? null : current)
-      toasts.add({ title: err.message || 'Failed to preview share-link revocation.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to preview share-link revocation.', type: 'error' })
     }
   }
 
@@ -737,35 +734,35 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
         setNewShareLinkCopied(false)
         setShowLinkComposer(false)
       }
-      toasts.add({ title: 'Share link revoked.', variant: 'success' })
+      toasts.add({ title: 'Share link revoked.', type: 'success' })
       await loadData()
     } catch (err: any) {
-      toasts.add({ title: err.message || 'Failed to revoke share link.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to revoke share link.', type: 'error' })
     } finally {
       setConfirmationBusy(false)
     }
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <Dialog
-        className="!z-[1000] !top-[clamp(24px,10vh,80px)] !flex !max-h-[calc(100vh-clamp(24px,10vh,80px)-24px)] !w-[min(640px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-kumo-base p-0 !outline-none"
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent
+        className="!z-[1000] !top-[clamp(24px,10vh,80px)] !flex !max-h-[calc(100vh-clamp(24px,10vh,80px)-24px)] !w-[min(640px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-background p-0 !outline-none"
         size="lg"
       >
         <div className="flex shrink-0 items-start justify-between gap-4 overflow-hidden px-4 pb-4 pt-5 sm:px-6 sm:pt-6">
           <div className="min-w-0">
-            <Dialog.Title className="truncate text-[18px] leading-6 font-medium tracking-[-0.4px] text-kumo-default">
+            <DialogTitle className="truncate text-[18px] leading-6 font-medium tracking-[-0.4px] text-foreground">
               Share “{metadata.title}”
-            </Dialog.Title>
-            <Dialog.Description className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
+            </DialogTitle>
+            <DialogDescription className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-muted-foreground">
               Invite people or share a link.
-            </Dialog.Description>
+            </DialogDescription>
           </div>
-          <Dialog.Close
+          <DialogClose
             render={(props) => (
-              <WorkshopIconButton {...props} aria-label="Close">
+              <Button {...props} aria-label="Close" className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                 <X size={18} />
-              </WorkshopIconButton>
+              </Button>
             )}
           />
         </div>
@@ -776,30 +773,30 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
         >
           {sharingProhibited ? (
             <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
-              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-kumo-warning-tint text-kumo-warning">
+              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-status-warning-muted text-status-warning">
                 <ShieldWarning size={22} weight="duotone" />
               </div>
-              <p className="mt-3 text-[14px] leading-5 font-medium tracking-[-0.3px] text-kumo-default">
+              <p className="mt-3 text-[14px] leading-5 font-medium tracking-[-0.3px] text-foreground">
                 This workspace can’t be shared
               </p>
-              <p className="mt-1.5 max-w-[320px] text-balance text-[12px] leading-[18px] tracking-[-0.1px] text-kumo-subtle">
+              <p className="mt-1.5 max-w-[320px] text-balance text-[12px] leading-[18px] tracking-[-0.1px] text-muted-foreground">
                 It has observed sensitive data that can only be accessed by you, the owner.
               </p>
-              <p className="mt-2 max-w-[320px] text-balance text-[12px] leading-[18px] tracking-[-0.1px] text-kumo-subtle">
+              <p className="mt-2 max-w-[320px] text-balance text-[12px] leading-[18px] tracking-[-0.1px] text-muted-foreground">
                 To share something similar, create a blueprint from a gadget in this workspace, then use it to create a new workspace.
               </p>
             </div>
           ) : (
           <>
-          <div className={`sticky top-0 z-10 bg-kumo-base pb-3 transition-shadow duration-200 ${scrolled ? 'themed-bottom-shadow border-b border-kumo-line/60' : ''}`}>
+          <div className={`sticky top-0 z-10 bg-background pb-3 transition-shadow duration-200 ${scrolled ? 'themed-bottom-shadow border-b border-border/60' : ''}`}>
           <div
-            className="themed-compact-shadow grid min-h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-2xl border border-kumo-line/80 bg-kumo-base p-1.5 pl-3 transition-[border-color,box-shadow] focus-within:border-kumo-fill sm:flex sm:overflow-hidden"
+            className="themed-compact-shadow grid min-h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-2xl border border-border/80 bg-background p-1.5 pl-3 transition-[border-color,box-shadow] focus-within:border-accent sm:flex sm:overflow-hidden"
             data-keeper-ignore="true"
             data-1p-ignore="true"
             data-lpignore="true"
             data-bwignore="true"
           >
-            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-kumo-tint text-kumo-subtle">
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
               <UserPlus size={15} weight="duotone" />
             </div>
             <input
@@ -819,7 +816,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
               data-lpignore="true"
               data-bwignore="true"
               data-form-type="other"
-              className="h-9 min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-[14px] leading-5 tracking-[-0.25px] text-kumo-default outline-none placeholder:text-kumo-inactive disabled:cursor-not-allowed [&::-webkit-search-cancel-button]:hidden"
+              className="h-9 min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-[14px] leading-5 tracking-[-0.25px] text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed [&::-webkit-search-cancel-button]:hidden"
               disabled={sharingProhibited}
             />
             <RoleMenu
@@ -829,77 +826,77 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
               disabled={sharingProhibited}
               container={menuContainer}
             />
-            <WorkshopButton
-              tone="primary"
-              className="col-span-3 w-full !rounded-xl sm:col-span-1 sm:w-auto sm:min-w-[68px]"
+            <Button
+
+              className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 col-span-3 w-full !rounded-xl sm:col-span-1 sm:w-auto sm:min-w-[68px]"
               onClick={handleAddCollaborator}
               disabled={!addUsername.trim() || adding || sharingProhibited}
-            >
+             variant="primary">
               {adding ? 'Inviting…' : 'Invite'}
-            </WorkshopButton>
+            </Button>
           </div>
 
           {invitedName && (
-            <div className="themed-compact-shadow mt-2 flex flex-wrap items-center gap-3 rounded-2xl border border-kumo-line/80 bg-kumo-base px-3 py-2.5 share-fade-in">
-              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-kumo-tint text-kumo-subtle">
+            <div className="themed-compact-shadow mt-2 flex flex-wrap items-center gap-3 rounded-2xl border border-border/80 bg-background px-3 py-2.5 share-fade-in">
+              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
                 {invitedLinkCopied ? <Check size={15} weight="bold" /> : <UserPlus size={15} weight="duotone" />}
               </div>
               <div className="min-w-[160px] flex-1">
                 <div className="flex items-baseline gap-1.5">
-                  <p className="text-[13px] leading-[18px] font-medium text-kumo-default">
+                  <p className="text-[13px] leading-[18px] font-medium text-foreground">
                     Added {invitedName}
                   </p>
-                  <span className="text-[11px] leading-4 text-kumo-inactive">
+                  <span className="text-[11px] leading-4 text-muted-foreground">
                     {invitedLinkCopied ? 'Link copied to your clipboard' : 'Send them this link to open it'}
                   </span>
                 </div>
-                <p className="truncate font-mono text-[11px] leading-4 text-kumo-subtle">{workspaceUrl}</p>
+                <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground">{workspaceUrl}</p>
               </div>
-              <WorkshopButton tone="primary" onClick={copyWorkspaceUrl} className="gap-1.5 !rounded-xl">
+              <Button  onClick={copyWorkspaceUrl} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 gap-1.5 !rounded-xl" variant="primary">
                 {invitedLinkCopied ? <Check size={13} weight="bold" /> : <Copy size={13} />}
                 {invitedLinkCopied ? 'Copied' : 'Copy link'}
-              </WorkshopButton>
-              <WorkshopIconButton
+              </Button>
+              <Button
                 aria-label="Dismiss added collaborator"
                 onClick={() => { setInvitedName(null); setInvitedLinkCopied(false) }}
-              >
+               className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                 <X size={14} />
-              </WorkshopIconButton>
+              </Button>
             </div>
           )}
 
           <div className="mt-2">
             {(showLinkComposer || newShareLink) ? (
               newShareLink ? (
-                <div className="themed-compact-shadow flex flex-wrap items-center gap-3 rounded-2xl border border-kumo-line/80 bg-kumo-base px-3 py-2.5 share-fade-in">
-                    <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-kumo-tint text-kumo-subtle">
+                <div className="themed-compact-shadow flex flex-wrap items-center gap-3 rounded-2xl border border-border/80 bg-background px-3 py-2.5 share-fade-in">
+                    <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
                       {newShareLinkCopied ? <Check size={15} weight="bold" /> : <Link size={15} />}
                     </div>
                     <div className="min-w-[160px] flex-1">
                       <div className="flex items-baseline gap-1.5">
-                        <p className="text-[13px] leading-[18px] font-medium text-kumo-default">
+                        <p className="text-[13px] leading-[18px] font-medium text-foreground">
                           {newShareLinkCopied ? 'Link copied' : 'Link ready'}
                         </p>
-                        <span className="text-[11px] leading-4 text-kumo-inactive">
+                        <span className="text-[11px] leading-4 text-muted-foreground">
                           You can copy it again anytime from Share links
                         </span>
                       </div>
-                      <p className="truncate font-mono text-[11px] leading-4 text-kumo-subtle">{newShareLink}</p>
+                      <p className="truncate font-mono text-[11px] leading-4 text-muted-foreground">{newShareLink}</p>
                     </div>
-                    <WorkshopButton tone="primary" onClick={copyNewLink} className="w-[78px] gap-1.5 !rounded-xl">
+                    <Button  onClick={copyNewLink} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 w-[78px] gap-1.5 !rounded-xl" variant="primary">
                       {newShareLinkCopied ? <Check size={13} weight="bold" /> : <Copy size={13} />}
                       {newShareLinkCopied ? 'Copied' : 'Copy'}
-                    </WorkshopButton>
-                    <WorkshopIconButton
+                    </Button>
+                    <Button
                       aria-label="Dismiss created link"
                       onClick={() => { setNewShareLink(null); setNewShareLinkId(null); setNewShareLinkCopied(false); setShowLinkComposer(false) }}
-                    >
+                     className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                       <X size={14} />
-                    </WorkshopIconButton>
+                    </Button>
                 </div>
               ) : (
-                <div className="themed-compact-shadow flex h-12 items-center gap-2 overflow-hidden rounded-2xl border border-kumo-line/80 bg-kumo-base p-1.5 pl-3 transition-[border-color,box-shadow] focus-within:border-kumo-fill share-fade-in">
-                    <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-kumo-tint text-kumo-subtle">
+                <div className="themed-compact-shadow flex h-12 items-center gap-2 overflow-hidden rounded-2xl border border-border/80 bg-background p-1.5 pl-3 transition-[border-color,box-shadow] focus-within:border-accent share-fade-in">
+                    <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
                       <Link size={15} />
                     </div>
                     <input
@@ -909,7 +906,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
                       onKeyDown={(e) => { if (e.key === 'Enter') handleCreateShareLink() }}
                       placeholder="Name this link (optional)…"
                       aria-label="Share link name (optional)"
-                      className="h-9 min-w-0 flex-1 border-0 bg-transparent p-0 text-[14px] leading-5 tracking-[-0.25px] text-kumo-default outline-none placeholder:text-kumo-inactive"
+                      className="h-9 min-w-0 flex-1 border-0 bg-transparent p-0 text-[14px] leading-5 tracking-[-0.25px] text-foreground outline-none placeholder:text-muted-foreground"
                       disabled={creatingLink || sharingProhibited}
                     />
                     <RoleMenu
@@ -919,12 +916,12 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
                       disabled={creatingLink || sharingProhibited}
                       container={menuContainer}
                     />
-                    <WorkshopButton tone="primary" className="shrink-0 !rounded-xl" onClick={handleCreateShareLink} disabled={creatingLink || sharingProhibited}>
+                    <Button  className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 shrink-0 !rounded-xl" onClick={handleCreateShareLink} disabled={creatingLink || sharingProhibited} variant="primary">
                       {creatingLink ? 'Creating…' : 'Create link'}
-                    </WorkshopButton>
-                    <WorkshopIconButton aria-label="Cancel creating link" onClick={() => setShowLinkComposer(false)}>
+                    </Button>
+                    <Button aria-label="Cancel creating link" onClick={() => setShowLinkComposer(false)} className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                       <X size={14} />
-                    </WorkshopIconButton>
+                    </Button>
                 </div>
               )
             ) : (
@@ -932,7 +929,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
                 type="button"
                 onClick={() => setShowLinkComposer(true)}
                 disabled={sharingProhibited}
-                className="themed-compact-shadow flex h-12 w-full cursor-pointer items-center justify-center gap-1.5 rounded-2xl border border-kumo-line/80 bg-kumo-base px-3 text-[13px] font-medium text-kumo-subtle transition-[background-color,color,transform] duration-150 ease-out hover:bg-kumo-elevated/60 hover:text-kumo-default active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
+                className="themed-compact-shadow flex h-12 w-full cursor-pointer items-center justify-center gap-1.5 rounded-2xl border border-border/80 bg-background px-3 text-[13px] font-medium text-muted-foreground transition-[background-color,color,transform] duration-150 ease-out hover:bg-card/60 hover:text-foreground active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Link size={14} /> Create a share link
               </button>
@@ -944,11 +941,11 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
 
           <section aria-labelledby="people-heading" className="mt-4">
             <div className="mb-2 px-1">
-              <h3 id="people-heading" className="text-[12px] leading-4 font-medium tracking-[-0.15px] text-kumo-subtle">
+              <h3 id="people-heading" className="text-[12px] leading-4 font-medium tracking-[-0.15px] text-muted-foreground">
                 People with access
               </h3>
             </div>
-            <div className="overflow-hidden rounded-2xl border border-kumo-line/80 bg-kumo-base">
+            <div className="overflow-hidden rounded-2xl border border-border/80 bg-background">
               {collaboratorRows.map((row, index) => {
                 const profile = row.kind === 'owner' ? row.profile : row.info.profile
                 const key = row.kind === 'owner' ? '__owner__' : row.info.profile.id
@@ -957,19 +954,19 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
                   ? removeTarget.dependents.filter(dep => dep.profile.id !== profile.id)
                   : []
                 return (
-                  <div key={key} className={`group ${index > 0 ? 'border-t border-kumo-line/70' : ''} ${landedPersonId === profile.id ? 'share-row-land' : 'transition-colors duration-150 hover:bg-kumo-elevated/50'} px-3 py-2.5`}>
+                  <div key={key} className={`group ${index > 0 ? 'border-t border-border/70' : ''} ${landedPersonId === profile.id ? 'share-row-land' : 'transition-colors duration-150 hover:bg-card/50'} px-3 py-2.5`}>
                     <div className="flex items-center gap-3">
                       <PersonAvatar api={authenticatedApi} userId={profile.id} name={profile.name} size={32} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] leading-[17px] font-medium tracking-[-0.25px] text-kumo-default">
+                        <p className="truncate text-[13px] leading-[17px] font-medium tracking-[-0.25px] text-foreground">
                           {profile.name}{profile.id === currentUser?.id ? ' (you)' : ''}
                         </p>
-                        <p className="truncate text-[12px] leading-[15px] tracking-[-0.15px] text-kumo-subtle">
+                        <p className="truncate text-[12px] leading-[15px] tracking-[-0.15px] text-muted-foreground">
                           {row.kind === 'owner' ? profile.id : describeAccess(row.info)}
                         </p>
                       </div>
                       {row.kind === 'owner' ? (
-                        <span className="px-2 text-[12px] text-kumo-subtle">Owner</span>
+                        <span className="px-2 text-[12px] text-muted-foreground">Owner</span>
                       ) : isRemoving ? (
                         <InlineConfirm
                           label="Remove"
@@ -981,21 +978,21 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
                       ) : (
                         <>
                           <RoleBadge role={row.info.role} />
-                          <WorkshopIconButton
-                            danger
-                            className="!h-7 !w-7 opacity-35 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                          <Button
+
+                            className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 text-muted-foreground enabled:hover:bg-destructive-muted enabled:hover:text-destructive !h-7 !w-7 opacity-35 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                             onClick={() => handleStartRemoveCollaborator(row.info.profile.id)}
                             aria-label={`Remove ${profile.name}`}
                             disabled={confirmationBusy}
-                          >
+                           variant="ghost" size="icon-sm">
                             <Trash size={13} />
-                          </WorkshopIconButton>
+                          </Button>
                         </>
                       )}
                     </div>
                     {isRemoving && downstreamDependents.length > 0 && (
                       <div className="mt-2.5 share-expand-in">
-                        <p className="mb-1.5 text-[12px] leading-4 text-kumo-subtle">
+                        <p className="mb-1.5 text-[12px] leading-4 text-muted-foreground">
                           {downstreamDependents.length} other {downstreamDependents.length === 1 ? 'person loses' : 'people lose'} access through {profile.name}. Keep anyone?
                         </p>
                         <DependentKeepList
@@ -1018,19 +1015,19 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
           {shareLinks.length > 0 && (
           <section aria-labelledby="links-heading" className="mt-4">
             <div className="mb-2 px-1">
-              <h3 id="links-heading" className="text-[12px] leading-4 font-medium tracking-[-0.15px] text-kumo-subtle">
+              <h3 id="links-heading" className="text-[12px] leading-4 font-medium tracking-[-0.15px] text-muted-foreground">
                 Share links
               </h3>
             </div>
 
-              <div className="overflow-hidden rounded-2xl border border-kumo-line/80 bg-kumo-base">
+              <div className="overflow-hidden rounded-2xl border border-border/80 bg-background">
                 {sortedShareLinks.map((sk, index) => {
                   const isRevoking = revokeTarget?.linkId === sk.linkId
                   const isRenaming = editingShareLinkId === sk.linkId
                   return (
-                    <div key={sk.linkId} className={`group ${index > 0 ? 'border-t border-kumo-line/70' : ''} ${landedShareLinkId === sk.linkId ? 'share-row-land' : 'transition-colors duration-150 hover:bg-kumo-elevated/50'} px-3 py-2.5`}>
+                    <div key={sk.linkId} className={`group ${index > 0 ? 'border-t border-border/70' : ''} ${landedShareLinkId === sk.linkId ? 'share-row-land' : 'transition-colors duration-150 hover:bg-card/50'} px-3 py-2.5`}>
                       <div className="flex items-center gap-3">
-                        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-kumo-tint to-kumo-elevated text-kumo-subtle ring-1 ring-inset ring-kumo-line/60">
+                        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-muted to-card text-muted-foreground ring-1 ring-inset ring-border/60">
                           <Link size={14} />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -1045,13 +1042,13 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
                               }}
                               placeholder="Name this link…"
                               aria-label="Share link name"
-                              className="block w-full border-0 bg-transparent p-0 text-[13px] leading-[17px] font-medium tracking-[-0.25px] text-kumo-default outline-none shadow-[inset_0_-1px_0_0_var(--color-kumo-line)] transition-shadow placeholder:font-normal placeholder:text-kumo-inactive focus:shadow-[inset_0_-1px_0_0_var(--color-kumo-fill)]"
+                              className="block w-full border-0 bg-transparent p-0 text-[13px] leading-[17px] font-medium tracking-[-0.25px] text-foreground outline-none shadow-[inset_0_-1px_0_0_var(--color-border)] transition-shadow placeholder:font-normal placeholder:text-muted-foreground focus:shadow-[inset_0_-1px_0_0_var(--color-accent)]"
                               disabled={savingShareLinkNote}
                             />
                           ) : (
-                            <p className="truncate text-[13px] leading-[17px] font-medium tracking-[-0.25px] text-kumo-default">{sk.note || 'Untitled link'}</p>
+                            <p className="truncate text-[13px] leading-[17px] font-medium tracking-[-0.25px] text-foreground">{sk.note || 'Untitled link'}</p>
                           )}
-                          <p className="truncate text-[12px] leading-[15px] tracking-[-0.15px] text-kumo-subtle">Created by {sk.createdBy.name} · {formatRelativeTime(sk.created)}</p>
+                          <p className="truncate text-[12px] leading-[15px] tracking-[-0.15px] text-muted-foreground">Created by {sk.createdBy.name} · {formatRelativeTime(sk.created)}</p>
                         </div>
                         {isRenaming ? (
                           <InlineConfirm
@@ -1072,37 +1069,37 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
                         ) : (
                           <>
                             <RoleBadge role={sk.role} />
-                            <WorkshopIconButton
-                              className="!h-7 !w-7"
+                            <Button
+                              className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-7 !w-7"
                               onClick={() => handleCopyShareLink(sk.linkId)}
                               aria-label={`Copy ${sk.note || 'share link'}`}
                               disabled={confirmationBusy || copyingLinkId === sk.linkId || sharingProhibited}
-                            >
+                             variant="ghost" size="icon-sm">
                               {copiedLinkId === sk.linkId ? <Check size={13} weight="bold" /> : <Copy size={13} />}
-                            </WorkshopIconButton>
-                            <WorkshopIconButton
-                              className="!h-7 !w-7 opacity-35 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                            </Button>
+                            <Button
+                              className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-7 !w-7 opacity-35 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                               onClick={() => startRenameShareLink(sk)}
                               aria-label={`Rename ${sk.note || 'share link'}`}
                               disabled={confirmationBusy}
-                            >
+                             variant="ghost" size="icon-sm">
                               <PencilSimple size={13} />
-                            </WorkshopIconButton>
-                            <WorkshopIconButton
-                              danger
-                              className="!h-7 !w-7 opacity-35 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                            </Button>
+                            <Button
+
+                              className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 text-muted-foreground enabled:hover:bg-destructive-muted enabled:hover:text-destructive !h-7 !w-7 opacity-35 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                               onClick={() => handleStartRevokeShareLink(sk.linkId)}
                               aria-label={`Revoke ${sk.note || 'share link'}`}
                               disabled={confirmationBusy}
-                            >
+                             variant="ghost" size="icon-sm">
                               <Trash size={13} />
-                            </WorkshopIconButton>
+                            </Button>
                           </>
                         )}
                       </div>
                       {isRevoking && revokeTarget.dependents.length > 0 && (
                         <div className="mt-2.5 share-expand-in">
-                          <p className="mb-1.5 text-[12px] leading-4 text-kumo-subtle">
+                          <p className="mb-1.5 text-[12px] leading-4 text-muted-foreground">
                             {revokeTarget.dependents.length} {revokeTarget.dependents.length === 1 ? 'person loses' : 'people lose'} access through this link. Keep anyone?
                           </p>
                           <DependentKeepList
@@ -1125,7 +1122,7 @@ export default function ShareModal({ open, onClose, overseer, metadata, currentU
           </>
           )}
         </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -1,6 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useState, useEffect } from 'react'
-import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from '../AuthContext'
 import {
   AiChatAuthorInfo,
@@ -18,7 +17,7 @@ import {
 import AddModelModal from '../AddModelModal'
 import { useDocumentTitle } from '../useDocumentTitle'
 import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from '../components/menuStyles'
-
+import { DropdownMenu, useToast, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@matser/ui'
 export const Route = createFileRoute('/providers')({ component: ProvidersPage })
 
 // ─── constants ────────────────────────────────────────────────────────────────
@@ -26,7 +25,7 @@ export const Route = createFileRoute('/providers')({ component: ProvidersPage })
 const PROVIDER_ORDER = Object.keys(SUGGESTED_MODELS) as AiModelProvider[]
 
 const PRIMARY_BTN =
-  'press inline-flex h-9 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-kumo-brand px-3.5 text-[13px] font-medium tracking-[-0.25px] text-white transition-colors hover:bg-kumo-brand-hover'
+  'press inline-flex h-9 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3.5 text-[13px] font-medium tracking-[-0.25px] text-white transition-colors hover:bg-primary'
 
 // ─── model row ─────────────────────────────────────────────────────────────────
 
@@ -57,32 +56,32 @@ function ModelRow({
         }
       }}
       title={isQuick ? 'Quick model. Click to clear' : 'Click to set as quick model'}
-      className="group flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-150 ease-out hover:bg-kumo-tint"
+      className="group flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-150 ease-out hover:bg-muted"
     >
       {/* Neutral monogram — matches the sidebar/workspaces treatment */}
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-kumo-fill text-[12px] font-medium text-kumo-subtle">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-[12px] font-medium text-muted-foreground">
         {model.name[0]?.toUpperCase()}
       </div>
 
       {/* Info */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium tracking-[-0.25px] text-kumo-default">
+          <span className="truncate text-sm font-medium tracking-[-0.25px] text-foreground">
             {model.name}
           </span>
           {isBuiltIn && (
-            <span className="shrink-0 rounded-full bg-kumo-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-kumo-subtle">
+            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">
               built-in
             </span>
           )}
           {isQuick && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[rgba(255,72,1,0.10)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-kumo-brand">
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[rgba(255,72,1,0.10)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.4px] text-primary">
               <Lightning size={9} weight="fill" />
               quick
             </span>
           )}
         </div>
-        <span className="mt-0.5 block truncate font-mono text-[12px] tracking-[-0.1px] text-kumo-inactive">
+        <span className="mt-0.5 block truncate font-mono text-[12px] tracking-[-0.1px] text-muted-foreground">
           {model.id}
         </span>
       </div>
@@ -90,28 +89,28 @@ function ModelRow({
       {/* Actions */}
       <div onClick={(e) => { e.stopPropagation() }}>
         <DropdownMenu>
-          <DropdownMenu.Trigger
+          <DropdownMenuTrigger
             render={
               <button
                 aria-label="Provider actions"
-                className="cursor-pointer rounded-md p-1.5 text-kumo-subtle transition-colors hover:bg-kumo-fill hover:text-kumo-default focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
               >
                 <DotsThreeVertical size={16} />
               </button>
             }
           />
-          <DropdownMenu.Content className={MENU_CONTENT}>
-            <DropdownMenu.Item onClick={onSetQuick} className={MENU_ITEM}>
+          <DropdownMenuContent className={MENU_CONTENT}>
+            <DropdownMenuItem onClick={onSetQuick} className={MENU_ITEM}>
               <Lightning size={13} className="mr-2" weight={isQuick ? 'fill' : 'regular'} />
               {isQuick ? 'Clear quick model' : 'Set as quick model'}
-            </DropdownMenu.Item>
+            </DropdownMenuItem>
             {!isBuiltIn && (
-              <DropdownMenu.Item variant="danger" onClick={onDelete} className={MENU_ITEM_DANGER}>
+              <DropdownMenuItem variant="destructive" onClick={onDelete} className={MENU_ITEM_DANGER}>
                 <Trash size={13} className="mr-2" />
                 Delete provider
-              </DropdownMenu.Item>
+              </DropdownMenuItem>
             )}
-          </DropdownMenu.Content>
+          </DropdownMenuContent>
         </DropdownMenu>
       </div>
     </div>
@@ -122,7 +121,7 @@ function ModelRow({
 
 function Notice({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-kumo-line bg-kumo-tint px-4 py-3 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
+    <div className="flex items-start gap-3 rounded-xl border border-border bg-muted px-4 py-3 text-[13px] leading-[18px] tracking-[-0.25px] text-muted-foreground">
       {children}
     </div>
   )
@@ -134,7 +133,7 @@ function ProvidersPage() {
   useDocumentTitle('AI Providers')
 
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const [models, setModels] = useState<AiChatAuthorInfo[]>([])
   const [quickModel, setQuickModel] = useState<string | null>(null)
   const [aiConfig, setAiConfig] = useState<AiGatewayInfo | null>(null)
@@ -181,7 +180,7 @@ function ProvidersPage() {
       await fetchAll()
     } catch (err) {
       console.error('Failed to delete model:', err)
-      toasts.add({ title: 'Failed to delete provider', variant: 'error' })
+      toasts.add({ title: 'Failed to delete provider', type: 'error' })
     } finally {
       setDeletingId(null)
     }
@@ -195,7 +194,7 @@ function ProvidersPage() {
     } catch (err) {
       console.error('Failed to set quick model:', err)
       setQuickModel(quickModel) // revert
-      toasts.add({ title: 'Failed to update default model', variant: 'error' })
+      toasts.add({ title: 'Failed to update default model', type: 'error' })
     }
   }
 
@@ -209,8 +208,8 @@ function ProvidersPage() {
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-6 sm:px-10">
       <header className="flex items-end justify-between gap-4 px-3 pb-3 pt-10">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">AI providers</h1>
-          <p className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI providers</h1>
+          <p className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-muted-foreground">
             Configure the AI models available to your workspaces.
           </p>
         </div>
@@ -224,13 +223,13 @@ function ProvidersPage() {
       {!loading && !loadError && models.length > 0 && (
         <div className="mb-3 px-3">
           <div className="relative">
-            <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-kumo-inactive" />
+            <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search providers…"
-              className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-base pl-9 pr-4 text-[13px] tracking-[-0.25px] text-kumo-default placeholder:text-kumo-inactive transition-[border-color,box-shadow] duration-150 ease-out focus:border-kumo-ring focus:outline-none focus:ring-[3px] focus:ring-kumo-ring/15"
+              className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-4 text-[13px] tracking-[-0.25px] text-foreground placeholder:text-muted-foreground transition-[border-color,box-shadow] duration-150 ease-out focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring/15"
             />
           </div>
         </div>
@@ -242,9 +241,9 @@ function ProvidersPage() {
           <div className="flex flex-col gap-2.5 px-3 pb-2">
             {gatewayMode && (
               <Notice>
-                <Lightning size={15} className="mt-px shrink-0 text-kumo-brand" />
+                <Lightning size={15} className="mt-px shrink-0 text-primary" />
                 <span>
-                  <strong className="font-medium text-kumo-default">AI Gateway mode:</strong> built-in
+                  <strong className="font-medium text-foreground">AI Gateway mode:</strong> built-in
                   models are managed by your deployment. You can still add custom models with your own
                   API tokens.
                 </span>
@@ -253,9 +252,9 @@ function ProvidersPage() {
 
             {!gatewayMode && models.length > 0 && (
               <Notice>
-                <Lightning size={15} className="mt-px shrink-0 text-kumo-brand" />
+                <Lightning size={15} className="mt-px shrink-0 text-primary" />
                 <span>
-                  <strong className="font-medium text-kumo-default">Quick model:</strong>{' '}
+                  <strong className="font-medium text-foreground">Quick model:</strong>{' '}
                   {quickModel
                     ? `${models.find((m) => m.id === quickModel)?.name ?? quickModel}.`
                     : 'none set.'}{' '}
@@ -270,24 +269,24 @@ function ProvidersPage() {
         {loading ? (
           <div className="flex flex-col gap-0.5 px-3">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-[56px] animate-pulse rounded-xl bg-kumo-elevated" />
+              <div key={i} className="h-[56px] animate-pulse rounded-xl bg-card" />
             ))}
           </div>
         ) : loadError ? (
           <div className="py-12 text-center text-sm">
-            <p className="text-kumo-danger">Something went wrong loading your providers.</p>
-            <button type="button" onClick={fetchAll} className="mt-1 cursor-pointer text-kumo-brand underline">
+            <p className="text-destructive">Something went wrong loading your providers.</p>
+            <button type="button" onClick={fetchAll} className="mt-1 cursor-pointer text-primary underline">
               Try again
             </button>
           </div>
         ) : models.length === 0 ? (
           <div className="flex flex-col items-center gap-3 px-3 py-16 text-center">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-kumo-fill text-kumo-subtle">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-muted-foreground">
               <Lightning size={18} />
             </div>
             <div>
-              <p className="text-sm font-medium text-kumo-default">No AI providers yet</p>
-              <p className="mt-1 text-[13px] leading-[18px] text-kumo-subtle">
+              <p className="text-sm font-medium text-foreground">No AI providers yet</p>
+              <p className="mt-1 text-[13px] leading-[18px] text-muted-foreground">
                 Add a provider to start building workspaces with AI.
               </p>
             </div>
@@ -297,7 +296,7 @@ function ProvidersPage() {
             </button>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="py-12 text-center text-sm text-kumo-inactive">No providers found</div>
+          <div className="py-12 text-center text-sm text-muted-foreground">No providers found</div>
         ) : (
           filtered.map((model) => (
             <div

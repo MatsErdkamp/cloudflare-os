@@ -1,8 +1,6 @@
-import { Checkbox, Select, type PortalContainer } from '@cloudflare/kumo'
-import { AiChatAuthorInfo, WorkpieceId, validateBindingName } from '@gadgets/workshop-shared/api'
-import { WorkshopInput } from '../components/WorkshopControls'
+import {AiChatAuthorInfo, WorkpieceId, validateBindingName } from '@gadgets/workshop-shared/api'
 import { ConnectionConfigField } from './ConnectionConfigField'
-
+import { Checkbox, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, type PortalContainer, Input} from '@matser/ui'
 // One prospective entry of AgentSpawnerConfig.env: a workpiece the spawned agents may use, and
 // the name they see it under. Candidates are prefilled from the gadget the spawner is being
 // created for (its own bindings, plus the gadget itself); the user toggles them on or off and may
@@ -82,12 +80,12 @@ export function AgentSpawnerConfigForm({
         label="Display name"
         description="Name this agent capability for this connection."
       >
-        <WorkshopInput
+        <Input
           aria-label="Agent display name"
           placeholder="e.g. Email Responder"
           value={displayName}
           onChange={(e) => onDisplayNameChange(e.target.value)}
-          className="w-full"
+          className="!h-9 rounded-lg border border-border bg-background px-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/15 w-full"
         />
       </ConnectionConfigField>
 
@@ -96,27 +94,16 @@ export function AgentSpawnerConfigForm({
         description="Choose the model spawned agents will use."
       >
         <Select
-          aria-label="Agent model"
-          className="w-full text-sm [&_button]:!h-9"
-          container={selectContainer}
-          placeholder="Select a model"
           value={modelId}
           onValueChange={(v) => onModelIdChange(v as string | null)}
-          renderValue={(id) => {
-            if (id === null) return 'None (no agent)'
-            return availableModels.find((m) => m.id === id)?.name ?? String(id)
-          }}
         >
-          <Select.Option value={null as any}>
-            None (no agent)
-          </Select.Option>
-          {availableModels.map(model => (
-            <Select.Option key={model.id} value={model.id}>
-              {model.name}
-            </Select.Option>
-          ))}
+          <SelectTrigger className="w-full text-sm !h-9" aria-label="Agent model"><SelectValue placeholder="Select a model" /></SelectTrigger>
+          <SelectContent container={selectContainer}>
+            <SelectItem value={null as any}>None (no agent)</SelectItem>
+            {availableModels.map(model => <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>)}
+          </SelectContent>
         </Select>
-        <p className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+        <p className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
           Choose "None" to create conversations without an agent.
         </p>
       </ConnectionConfigField>
@@ -126,7 +113,7 @@ export function AgentSpawnerConfigForm({
         description="What spawned agents may use, and the names they see it under."
       >
         {env.length === 0 ? (
-          <p className="text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+          <p className="text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
             Nothing is available to offer spawned agents here. Create the agent from a gadget's
             Connections tab to give it access to that gadget and its resources.
           </p>
@@ -139,20 +126,20 @@ export function AgentSpawnerConfigForm({
                   checked={row.enabled}
                   onCheckedChange={(checked) => updateRow(index, { enabled: checked === true })}
                 />
-                <WorkshopInput
+                <Input
                   aria-label={`Binding name for ${row.targetTitle}`}
                   value={row.name}
                   disabled={!row.enabled}
                   onChange={(e) => updateRow(index, { name: e.target.value })}
-                  className="!h-8 w-[180px] min-w-0 font-mono"
+                  className="!h-9 rounded-lg border border-border bg-background px-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/15 !h-8 w-[180px] min-w-0 font-mono"
                 />
-                <span className="min-w-0 flex-1 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                <span className="min-w-0 flex-1 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                   {row.targetTitle}
                 </span>
               </div>
             ))}
             {envError && (
-              <p className="text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-danger">
+              <p className="text-[12px] leading-4 font-normal tracking-[-0.2px] text-destructive">
                 {envError}
               </p>
             )}

@@ -1,6 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import {
   MagnifyingGlass,
   ArrowsClockwise,
@@ -24,7 +23,7 @@ import {
 import { ConnectedAccountsSubscriber, GatekeeperVendorInfo } from '@gadgets/workshop-shared/api'
 import { useDocumentTitle } from '../useDocumentTitle'
 import { useSiteName } from '../ServerConfigContext'
-
+import { useToast } from '@matser/ui'
 export const Route = createFileRoute('/gatekeepers')({
   component: ConnectorsPage,
 })
@@ -60,12 +59,12 @@ function VendorIconTile({
   return (
     <div
       className={`relative grid shrink-0 place-items-center ${className}`}
-      style={{ backgroundColor: color ?? 'var(--color-kumo-tint)' }}
+      style={{ backgroundColor: color ?? 'var(--color-muted)' }}
     >
       {logoUrl ? (
         <img src={logoUrl} alt="" className="object-contain" style={{ width: size, height: size }} />
       ) : (
-        <span className="text-[15px] font-semibold text-kumo-strong">
+        <span className="text-[15px] font-semibold text-foreground">
           {fallback[0]?.toUpperCase() ?? '?'}
         </span>
       )}
@@ -113,12 +112,12 @@ function ConnectorCard({
   const statusDot =
     state === 'connected' ? (
       <span
-        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-kumo-success ring-2 ring-kumo-base"
+        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-status-success ring-2 ring-background"
         aria-hidden
       />
     ) : state === 'expired' ? (
       <span
-        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-kumo-danger ring-2 ring-kumo-base"
+        className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-destructive ring-2 ring-background"
         aria-hidden
       />
     ) : null
@@ -127,8 +126,8 @@ function ConnectorCard({
     <span
       className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-3 font-semibold uppercase tracking-[0.4px] ${
         badge.tone === 'new'
-          ? 'bg-[rgba(255,72,1,0.10)] text-kumo-brand'
-          : 'bg-kumo-tint text-kumo-subtle'
+          ? 'bg-[rgba(255,72,1,0.10)] text-primary'
+          : 'bg-muted text-muted-foreground'
       }`}
     >
       {badge.label}
@@ -144,13 +143,13 @@ function ConnectorCard({
           if (!reconnectBusy) onReconnect()
         }}
         disabled={reconnectBusy}
-        className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-kumo-line bg-kumo-base px-3 text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-default transition-[background-color,border-color,opacity,transform] duration-150 ease-out hover:border-kumo-fill hover:bg-kumo-tint active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100"
+        className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-background px-3 text-[12px] leading-4 font-medium tracking-[-0.2px] text-foreground transition-[background-color,border-color,opacity,transform] duration-150 ease-out hover:border-accent hover:bg-muted active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100"
       >
         <ArrowsClockwise size={12} weight="bold" />
         {reconnectBusy ? 'Opening...' : 'Reconnect'}
       </button>
     ) : (
-      <div className="grid h-7 w-7 place-items-center text-kumo-inactive transition-colors group-hover:text-kumo-default">
+      <div className="grid h-7 w-7 place-items-center text-muted-foreground transition-colors group-hover:text-foreground">
         {state === 'available' ? (
           <Plus size={16} weight="bold" />
         ) : (
@@ -166,7 +165,7 @@ function ConnectorCard({
         tabIndex={0}
         onClick={onClick}
         onKeyDown={handleKeyDown}
-        className="group flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors duration-150 ease-out hover:bg-kumo-tint"
+        className="group flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors duration-150 ease-out hover:bg-muted"
       >
         <div className="relative shrink-0">
           <VendorIconTile
@@ -180,13 +179,13 @@ function ConnectorCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium tracking-[-0.25px] text-kumo-default">
+            <span className="truncate text-sm font-medium tracking-[-0.25px] text-foreground">
               {name}
             </span>
             {badgeEl}
           </div>
           {(metaLine || tagline) && (
-            <div className="mt-0.5 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+            <div className="mt-0.5 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
               {metaLine ?? tagline}
             </div>
           )}
@@ -202,7 +201,7 @@ function ConnectorCard({
       tabIndex={0}
       onClick={onClick}
       onKeyDown={handleKeyDown}
-      className="themed-card-hover-shadow group grid w-full cursor-pointer grid-cols-[48px_1fr_auto] items-center gap-4 rounded-2xl border border-kumo-line bg-kumo-base px-5 py-5 text-left transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-kumo-fill active:scale-[0.995]"
+      className="themed-card-hover-shadow group grid w-full cursor-pointer grid-cols-[48px_1fr_auto] items-center gap-4 rounded-2xl border border-border bg-background px-5 py-5 text-left transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-accent active:scale-[0.995]"
     >
       <div className="self-start">
         <div className="relative">
@@ -213,18 +212,18 @@ function ConnectorCard({
 
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <span className="truncate text-[15px] leading-5 font-medium tracking-[-0.25px] text-kumo-default">
+          <span className="truncate text-[15px] leading-5 font-medium tracking-[-0.25px] text-foreground">
             {name}
           </span>
           {badgeEl}
         </div>
         {metaLine && (
-          <div className="mt-0.5 flex items-center gap-1.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+          <div className="mt-0.5 flex items-center gap-1.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
             {metaLine}
           </div>
         )}
         {tagline && (
-          <p className="mt-2 line-clamp-2 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+          <p className="mt-2 line-clamp-2 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
             {tagline}
           </p>
         )}
@@ -238,12 +237,12 @@ function ConnectorCard({
 function SectionEyebrow({ label, count }: { label: string; count?: number }) {
   return (
     <div className="mb-3.5 flex items-center gap-3 px-1">
-      <h2 className="m-0 text-[11px] leading-4 font-semibold uppercase tracking-[0.9px] text-kumo-subtle">
+      <h2 className="m-0 text-[11px] leading-4 font-semibold uppercase tracking-[0.9px] text-muted-foreground">
         {label}
       </h2>
-      <div className="h-px flex-1 bg-kumo-line" />
+      <div className="h-px flex-1 bg-border" />
       {typeof count === 'number' && (
-        <span className="text-[11px] leading-4 font-semibold tracking-[-0.1px] text-kumo-inactive">
+        <span className="text-[11px] leading-4 font-semibold tracking-[-0.1px] text-muted-foreground">
           {count}
         </span>
       )}
@@ -318,7 +317,7 @@ function ConnectorsHeroDiagram({
   return (
     <div className="relative isolate hidden h-[176px] w-[444px] lg:block">
       <svg
-        className="absolute inset-0 h-full w-full text-kumo-line"
+        className="absolute inset-0 h-full w-full text-border"
         viewBox="0 0 444 176"
         fill="none"
       >
@@ -373,7 +372,7 @@ function ConnectorsHeroDiagram({
             onMouseLeave={() => setHoveredSource(null)}
             onFocus={() => setHoveredSource(index)}
             onBlur={() => setHoveredSource(null)}
-            className={`themed-card-hover-shadow absolute grid h-11 w-11 place-items-center rounded-2xl border border-kumo-line bg-kumo-base transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-kumo-fill ${sourceNodes[index].className}`}
+            className={`themed-card-hover-shadow absolute grid h-11 w-11 place-items-center rounded-2xl border border-border bg-background transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-accent ${sourceNodes[index].className}`}
           >
             <VendorIconTile
               logoUrl={node.logoUrl}
@@ -391,7 +390,7 @@ function ConnectorsHeroDiagram({
               key={index}
               onMouseEnter={() => setHoveredSource(index)}
               onMouseLeave={() => setHoveredSource(null)}
-              className={`themed-card-hover-shadow absolute h-11 w-11 rounded-2xl border border-kumo-line bg-kumo-elevated transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-kumo-fill ${node.className}`}
+              className={`themed-card-hover-shadow absolute h-11 w-11 rounded-2xl border border-border bg-card transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-accent ${node.className}`}
             />
           ))}
         </>
@@ -400,34 +399,34 @@ function ConnectorsHeroDiagram({
       <div className="group absolute left-[176px] top-[58px] z-20">
         <button
           type="button"
-          className="themed-card-hover-shadow grid h-[52px] w-[52px] place-items-center rounded-2xl border border-kumo-line bg-kumo-base text-kumo-brand transition-[border-color,box-shadow] hover:border-kumo-fill focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-ring focus-visible:ring-offset-2 focus-visible:ring-offset-kumo-base"
+          className="themed-card-hover-shadow grid h-[52px] w-[52px] place-items-center rounded-2xl border border-border bg-background text-primary transition-[border-color,box-shadow] hover:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           aria-label="Gatekeeper keeps Gadget access limited to connected resources"
         >
           <ShieldCheck size={21} weight="duotone" />
         </button>
-        <div className="themed-floating-shadow-lg pointer-events-none absolute left-1/2 top-[-108px] z-30 w-[228px] origin-bottom -translate-x-1/2 translate-y-1 scale-[0.98] rounded-2xl border border-kumo-line bg-kumo-base p-3 text-left opacity-0 transition-[opacity,transform] delay-0 duration-150 ease-out group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100 group-hover:delay-100 group-focus-within:translate-y-0 group-focus-within:scale-100 group-focus-within:opacity-100 group-focus-within:delay-100">
+        <div className="themed-floating-shadow-lg pointer-events-none absolute left-1/2 top-[-108px] z-30 w-[228px] origin-bottom -translate-x-1/2 translate-y-1 scale-[0.98] rounded-2xl border border-border bg-background p-3 text-left opacity-0 transition-[opacity,transform] delay-0 duration-150 ease-out group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100 group-hover:delay-100 group-focus-within:translate-y-0 group-focus-within:scale-100 group-focus-within:opacity-100 group-focus-within:delay-100">
           <div className="flex items-start gap-2.5">
-            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-kumo-tint text-kumo-brand">
+            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-muted text-primary">
               <ShieldCheck size={16} weight="duotone" />
             </div>
             <div className="min-w-0">
-              <p className="m-0 text-[12px] leading-4 font-semibold tracking-[-0.2px] text-kumo-default">
+              <p className="m-0 text-[12px] leading-4 font-semibold tracking-[-0.2px] text-foreground">
                 Gatekeeper
               </p>
-              <p className="mt-1 text-[11px] leading-4 font-normal tracking-[-0.1px] text-kumo-subtle">
+              <p className="mt-1 text-[11px] leading-4 font-normal tracking-[-0.1px] text-muted-foreground">
                 Keeps each workspace limited to the resources you connect and ensures every user has the required permissions before accessing them.
               </p>
             </div>
           </div>
-          <span className="absolute left-1/2 bottom-[-5px] h-2.5 w-2.5 -translate-x-1/2 rotate-45 border-b border-r border-kumo-line bg-kumo-base" />
+          <span className="absolute left-1/2 bottom-[-5px] h-2.5 w-2.5 -translate-x-1/2 rotate-45 border-b border-r border-border bg-background" />
         </div>
       </div>
 
-      <div className="absolute left-[268px] top-[58px] z-10 flex h-[52px] w-[172px] items-center gap-2 rounded-2xl border border-kumo-line bg-kumo-elevated pl-2 pr-4">
-        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-kumo-base text-kumo-brand">
+      <div className="absolute left-[268px] top-[58px] z-10 flex h-[52px] w-[172px] items-center gap-2 rounded-2xl border border-border bg-card pl-2 pr-4">
+        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-background text-primary">
           <Hexagon size={17} weight="bold" />
         </div>
-        <span className="relative -top-px min-w-0 truncate text-base leading-5 font-semibold tracking-tight text-kumo-default">
+        <span className="relative -top-px min-w-0 truncate text-base leading-5 font-semibold tracking-tight text-foreground">
           {siteName}
         </span>
       </div>
@@ -445,7 +444,7 @@ function ConnectorsPage() {
   const siteName = useSiteName()
 
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [search, setSearch] = useState('')
   const [view, setView] = useState<'grid' | 'list'>(() => {
@@ -499,7 +498,7 @@ function ConnectorsPage() {
         if (unavailable.length > 0) {
           toasts.add({
             title: `Some services are temporarily unavailable: ${unavailable.map((v) => v.id).join(', ')}`,
-            variant: 'warning',
+            type: 'warning',
           })
         }
         setVendors(
@@ -605,7 +604,7 @@ function ConnectorsPage() {
       handleCloseModal()
     } catch (err) {
       console.error('Failed to connect account:', err)
-      toasts.add({ title: 'Failed to start connection', variant: 'error' })
+      toasts.add({ title: 'Failed to start connection', type: 'error' })
     } finally {
       setConnecting(false)
     }
@@ -626,7 +625,7 @@ function ConnectorsPage() {
       // once `grantedResourceUrlPatterns` updates.
     } catch (err) {
       console.error('Failed to expand account access:', err)
-      toasts.add({ title: 'Failed to request additional access', variant: 'error' })
+      toasts.add({ title: 'Failed to request additional access', type: 'error' })
     } finally {
       setEnsuringResourceUrlPatterns((prev) =>
         prev.filter((p) => !resourceUrlPatterns.includes(p)),
@@ -647,7 +646,7 @@ function ConnectorsPage() {
       handleCloseModal()
     } catch (err) {
       console.error('Failed to disconnect account:', err)
-      toasts.add({ title: 'Failed to disconnect account', variant: 'error' })
+      toasts.add({ title: 'Failed to disconnect account', type: 'error' })
     } finally {
       setDisconnecting(false)
     }
@@ -660,7 +659,7 @@ function ConnectorsPage() {
       window.open(url, '_blank', 'noopener,noreferrer')
     } catch (err) {
       console.error('Failed to reconnect account:', err)
-      toasts.add({ title: 'Failed to reconnect account', variant: 'error' })
+      toasts.add({ title: 'Failed to reconnect account', type: 'error' })
     } finally {
       setReconnectingAccountId(null)
     }
@@ -738,14 +737,14 @@ function ConnectorsPage() {
     accounts.length === 0
 
   return (
-    <div className="min-h-[calc(100vh-3.5rem-1px)] bg-kumo-base">
+    <div className="min-h-[calc(100vh-3.5rem-1px)] bg-background">
       <div className="mx-auto w-full max-w-5xl px-4 py-12 sm:px-8 sm:py-14">
         <header className="mb-8 grid gap-8 lg:grid-cols-[minmax(0,540px)_444px] lg:items-center lg:justify-between">
           <div>
-            <h1 className="m-0 text-3xl font-semibold leading-tight tracking-tight text-kumo-default sm:text-[34px]">
+            <h1 className="m-0 text-3xl font-semibold leading-tight tracking-tight text-foreground sm:text-[34px]">
               Gatekeepers
             </h1>
-            <p className="mt-2 text-[14px] leading-[20px] font-normal tracking-[-0.25px] text-kumo-subtle">
+            <p className="mt-2 text-[14px] leading-[20px] font-normal tracking-[-0.25px] text-muted-foreground">
               Add the apps and accounts your workspaces can use. Connect once, then wire
               them into anything you build.
             </p>
@@ -757,32 +756,32 @@ function ConnectorsPage() {
           <div className="relative flex-1">
             <MagnifyingGlass
               size={16}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-kumo-inactive"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
             />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search gatekeepers…"
-              className="h-10 w-full rounded-lg border border-kumo-line bg-kumo-base pl-9 pr-4 text-[14px] leading-5 tracking-[-0.25px] text-kumo-default placeholder:text-kumo-inactive transition-[border-color,box-shadow] focus:border-kumo-ring focus:outline-none focus:ring-[3px] focus:ring-kumo-ring/15"
+              className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-4 text-[14px] leading-5 tracking-[-0.25px] text-foreground placeholder:text-muted-foreground transition-[border-color,box-shadow] focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring/15"
             />
           </div>
           <ViewToggle view={view} onChange={setView} />
         </div>
 
         {loadError && (
-          <div className="rounded-2xl border border-kumo-line bg-kumo-base px-4 py-6 text-center">
-            <p className="m-0 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-danger">
+          <div className="rounded-2xl border border-border bg-background px-4 py-6 text-center">
+            <p className="m-0 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-destructive">
               Something went wrong loading your gatekeepers.
             </p>
-            <p className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+            <p className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
               Check your connection and try refreshing the page.
             </p>
           </div>
         )}
 
         {initialLoading && (
-          <div className="rounded-2xl border border-kumo-line bg-kumo-base px-4 py-8 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+          <div className="rounded-2xl border border-border bg-background px-4 py-8 text-center text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
             Loading gatekeepers...
           </div>
         )}
@@ -807,7 +806,7 @@ function ConnectorsPage() {
                     metaLine={
                       <span
                         className={`truncate ${
-                          account.credentialsValid ? '' : 'text-kumo-danger'
+                          account.credentialsValid ? '' : 'text-destructive'
                         }`}
                       >
                         {account.credentialsValid

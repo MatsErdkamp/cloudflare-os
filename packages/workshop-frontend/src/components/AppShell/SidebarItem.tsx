@@ -48,14 +48,14 @@ export default function SidebarItem({
       className={[
         'group relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] leading-[18px] tracking-[-0.25px] transition-colors',
         isActive
-          ? 'bg-kumo-fill font-medium text-kumo-strong'
-          : 'font-normal text-kumo-default hover:bg-kumo-tint',
+          ? 'bg-accent font-medium text-foreground'
+          : 'font-normal text-foreground hover:bg-muted',
       ].join(' ')}
     >
       <span
         className={[
           'flex h-5 w-5 shrink-0 items-center justify-center transition-colors',
-          isActive ? 'text-kumo-brand' : 'text-kumo-subtle group-hover:text-kumo-default',
+          isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
         ].join(' ')}
       >
         {icon}
@@ -63,7 +63,7 @@ export default function SidebarItem({
       {!collapsed && (
         <>
           <span className="min-w-0 flex-1 truncate">{label}</span>
-          {trailing && <span className="shrink-0 text-kumo-inactive">{trailing}</span>}
+          {trailing && <span className="shrink-0 text-muted-foreground">{trailing}</span>}
         </>
       )}
     </Link>

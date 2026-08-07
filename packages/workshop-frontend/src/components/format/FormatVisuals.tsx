@@ -52,7 +52,7 @@ export function FormatTile({
   const { box, glyph } = TILE_SIZES[size]
   return (
     <div
-      className={`grid ${box} shrink-0 place-items-center bg-kumo-fill text-kumo-subtle ${className}`}
+      className={`grid ${box} shrink-0 place-items-center bg-accent text-muted-foreground ${className}`}
     >
       <FormatGlyph output={output} size={glyph} />
     </div>
@@ -61,8 +61,8 @@ export function FormatTile({
 
 // ─── wireframes ──────────────────────────────────────────────────────────────
 
-const BAR = 'rounded-[2px] bg-kumo-line'
-const BAR_STRONG = 'rounded-[2px] bg-kumo-fill'
+const BAR = 'rounded-[2px] bg-border'
+const BAR_STRONG = 'rounded-[2px] bg-accent'
 
 function PageWireframe() {
   return (
@@ -85,11 +85,11 @@ function PageWireframe() {
 
 function GridWireframe() {
   return (
-    <div className="flex h-full flex-col gap-px overflow-hidden rounded-[3px] bg-kumo-line">
+    <div className="flex h-full flex-col gap-px overflow-hidden rounded-[3px] bg-border">
       {Array.from({ length: 6 }).map((_, r) => (
         <div key={r} className="grid flex-1 grid-cols-4 gap-px">
           {Array.from({ length: 4 }).map((__, c) => (
-            <div key={c} className={r === 0 || c === 0 ? 'bg-kumo-fill' : 'bg-kumo-base'} />
+            <div key={c} className={r === 0 || c === 0 ? 'bg-accent' : 'bg-background'} />
           ))}
         </div>
       ))}
@@ -105,7 +105,7 @@ function GridWireframe() {
 function SlideWireframe() {
   return (
     <div className="flex h-full flex-col gap-1">
-      <div className="flex flex-1 flex-col justify-center gap-1.5 overflow-hidden rounded-[3px] border border-kumo-line px-2">
+      <div className="flex flex-1 flex-col justify-center gap-1.5 overflow-hidden rounded-[3px] border border-border px-2">
         <div className={`h-2 w-3/5 ${BAR_STRONG}`} />
         <div className={`h-1.5 w-[85%] ${BAR}`} />
       </div>
@@ -123,9 +123,9 @@ function WindowWireframe() {
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="flex items-center gap-1">
-        <span className="h-1.5 w-1.5 rounded-full bg-kumo-line" />
-        <span className="h-1.5 w-1.5 rounded-full bg-kumo-line" />
-        <span className="h-1.5 w-1.5 rounded-full bg-kumo-line" />
+        <span className="h-1.5 w-1.5 rounded-full bg-border" />
+        <span className="h-1.5 w-1.5 rounded-full bg-border" />
+        <span className="h-1.5 w-1.5 rounded-full bg-border" />
         <div className={`ml-1 h-1.5 flex-1 ${BAR}`} />
       </div>
       <div className="flex flex-1 gap-2">
@@ -137,8 +137,8 @@ function WindowWireframe() {
         </div>
         <div className="flex flex-1 flex-col gap-2">
           <div className="grid grid-cols-2 gap-2">
-            <div className="h-5 rounded-[3px] bg-kumo-tint" />
-            <div className="h-5 rounded-[3px] bg-kumo-tint" />
+            <div className="h-5 rounded-[3px] bg-muted" />
+            <div className="h-5 rounded-[3px] bg-muted" />
           </div>
           <div className="flex flex-1 items-end gap-1.5">
             {[55, 80, 40, 95, 65, 75].map((h, i) => (
@@ -158,7 +158,7 @@ function ListWireframe() {
       <div className={`h-2 w-2/5 ${BAR_STRONG}`} />
       {[92, 78, 96, 64, 84].map((w, i) => (
         <div key={i} className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 shrink-0 rounded-[1px] bg-kumo-fill" />
+          <span className="h-1.5 w-1.5 shrink-0 rounded-[1px] bg-accent" />
           <span className={`h-1.5 ${BAR}`} style={{ width: `${w}%` }} />
         </div>
       ))}
@@ -174,7 +174,7 @@ function BoardWireframe() {
         <div key={col} className="flex flex-1 flex-col gap-1.5">
           <div className={`h-1.5 w-3/4 ${BAR}`} />
           {cards.map((h, i) => (
-            <div key={i} className="rounded-[3px] bg-kumo-fill" style={{ height: `${h}px` }} />
+            <div key={i} className="rounded-[3px] bg-accent" style={{ height: `${h}px` }} />
           ))}
         </div>
       ))}
@@ -187,9 +187,9 @@ function ChartWireframe() {
   return (
     <div className="flex h-full flex-col gap-2">
       <div className={`h-2 w-1/2 ${BAR_STRONG}`} />
-      <div className="flex flex-1 items-end gap-1.5 border-b border-l border-kumo-line pb-1 pl-1">
+      <div className="flex flex-1 items-end gap-1.5 border-b border-l border-border pb-1 pl-1">
         {[45, 70, 35, 90, 60, 78, 50].map((h, i) => (
-          <div key={i} className={`flex-1 rounded-t-[2px] bg-kumo-fill`} style={{ height: `${h}%` }} />
+          <div key={i} className={`flex-1 rounded-t-[2px] bg-accent`} style={{ height: `${h}%` }} />
         ))}
       </div>
       <div className="flex gap-1.5">
@@ -224,8 +224,8 @@ export function FormatThumbnail({
 }) {
   const Wireframe = WIREFRAMES[wireframeOf(output)]
   return (
-    <div className={`absolute inset-0 bg-kumo-tint ${className}`} aria-hidden="true">
-      <div className="themed-thumbnail-shadow absolute left-1/2 top-4 h-[calc(100%-1rem)] w-[78%] -translate-x-1/2 overflow-hidden rounded-t-[6px] bg-kumo-base ring-1 ring-kumo-line/20">
+    <div className={`absolute inset-0 bg-muted ${className}`} aria-hidden="true">
+      <div className="themed-thumbnail-shadow absolute left-1/2 top-4 h-[calc(100%-1rem)] w-[78%] -translate-x-1/2 overflow-hidden rounded-t-[6px] bg-background ring-1 ring-border/20">
         <div className="h-full w-full p-3.5">
           <Wireframe />
         </div>
@@ -246,7 +246,7 @@ export function FormatPreview({ output, width = 120 }: { output?: BlueprintOutpu
   const scale = width / PREVIEW_WIDTH
   return (
     <div
-      className="relative shrink-0 overflow-hidden rounded-md border border-kumo-line"
+      className="relative shrink-0 overflow-hidden rounded-md border border-border"
       style={{ width, height: PREVIEW_HEIGHT * scale }}
     >
       <div
@@ -265,7 +265,7 @@ export function FormatMiniature({ output }: { output?: BlueprintOutput }) {
   const Wireframe = WIREFRAMES[wireframeOf(output)]
   return (
     <span
-      className="relative flex h-[52px] w-[62px] overflow-hidden rounded-md border border-kumo-line bg-kumo-base p-1.5 shadow-sm"
+      className="relative flex h-[52px] w-[62px] overflow-hidden rounded-md border border-border bg-background p-1.5 shadow-sm"
       aria-hidden="true"
     >
       <span className="flex-1 [&_*]:!rounded-[1px]">

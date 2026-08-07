@@ -12,8 +12,8 @@ export function CountBadge({
   if (count <= 0) return null
 
   const toneClassName = tone === 'solid'
-    ? 'border border-kumo-base bg-kumo-brand text-white'
-    : 'bg-kumo-brand/15 text-kumo-strong'
+    ? 'border border-background bg-primary text-white'
+    : 'bg-primary/15 text-foreground'
 
   return (
     <span

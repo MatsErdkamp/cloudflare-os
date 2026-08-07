@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouterState } from '@tanstack/react-router'
-import { List, X } from '@phosphor-icons/react'
 import TopBarNotice from '../../TopBarNotice'
 import Sidebar from './Sidebar'
 import CommandPalette from './CommandPalette'
 import { OPEN_COMMAND_PALETTE_EVENT } from './commandPaletteBus'
+import { Button, Icons } from '@matser/ui'
 
 const STORAGE_KEY_COLLAPSED = 'gadgets:sidebar-collapsed'
 
@@ -74,7 +74,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [])
 
   return (
-    <div className="flex h-screen min-h-screen w-screen overflow-hidden bg-kumo-base">
+    <div className="flex h-screen min-h-screen w-screen overflow-hidden bg-background">
       {/* Desktop sidebar — hidden on mobile in favor of the drawer. */}
       <div className="hidden md:flex">
         <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
@@ -99,15 +99,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Top bar. Same height as the sidebar's brand row (h-14) so they read as one continuous
             chrome strip across the top. Mostly empty — carries the mobile hamburger on the left and
             any admin TopBarNotice centered. */}
-        <div className="relative flex h-14 shrink-0 items-center justify-between border-b border-kumo-line bg-kumo-base px-3">
-          <button
+        <div className="relative flex h-14 shrink-0 items-center justify-between border-b border-border bg-background px-3">
+          <Button
+            variant="ghost"
+            size="icon-sm"
             type="button"
             onClick={() => setMobileOpen((o) => !o)}
             aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-kumo-default transition-colors hover:bg-kumo-tint md:hidden"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted md:hidden"
           >
-            {mobileOpen ? <X size={16} /> : <List size={16} />}
-          </button>
+            {mobileOpen ? <Icons.X size={16} /> : <Icons.Menu size={16} />}
+          </Button>
           <TopBarNotice />
           <span aria-hidden="true" className="h-7 w-7 md:hidden" />
         </div>

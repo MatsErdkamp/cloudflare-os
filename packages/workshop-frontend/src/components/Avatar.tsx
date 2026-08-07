@@ -42,7 +42,7 @@ export default function Avatar(
 
   return (
     <div
-      className={`${baseClasses} bg-kumo-tint text-kumo-subtle`}
+      className={`${baseClasses} bg-muted text-muted-foreground`}
       style={{ width: size, height: size, fontSize: size * 0.4, ...style }}
     >
       {fallback}

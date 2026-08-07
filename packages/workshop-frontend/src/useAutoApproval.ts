@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import type { Overseer, PreApprovableAction } from '@gadgets/workshop-shared/api'
 import type { ActionKind } from '@gadgets/workshop-shared/gatekeeper'
-
+import { useToast } from '@matser/ui'
 export interface AutoApprovalEntry {
   gatekeeperId: number
   resourceTitle: string
@@ -19,7 +18,7 @@ export function autoApprovalKey(entry: { gatekeeperId: number; actionKind: Actio
 }
 
 export function useAutoApproval(overseer: RpcStub<Overseer> | null) {
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const [catalog, setCatalog] = useState<PreApprovableAction[]>([])
   const [rules, setRules] = useState<Array<{ gatekeeperId: number; actionKind: ActionKind }>>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -115,7 +114,7 @@ export function useAutoApproval(overseer: RpcStub<Overseer> | null) {
       console.error('Failed to update auto-approval rule:', err)
       toasts.add({
         title: `Failed to ${enabled ? 'enable' : 'disable'} auto-approval`,
-        variant: 'error',
+        type: 'error',
       })
     } finally {
       await refresh()

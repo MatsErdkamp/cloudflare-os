@@ -23,7 +23,7 @@ export function AccountAvatar({ avatarUrl, logoUrl }: { avatarUrl: string | unde
     return <img src={avatarUrl} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />
   }
   if (logoUrl) return <img src={logoUrl} alt="" className="h-4 w-4 object-contain" />
-  return <UserCircle size={17} className="text-kumo-subtle" />
+  return <UserCircle size={17} className="text-muted-foreground" />
 }
 
 export function AccountChooser({
@@ -58,16 +58,16 @@ export function AccountChooser({
   const isEmailMailbox = vendorId === 'email' && resourceTitle === 'Email Mailbox'
 
   return (
-    <section className="overflow-hidden rounded-xl border border-kumo-line bg-kumo-base">
-      <div className="border-b border-kumo-line px-3 py-2.5">
-        <p className="text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-default">Account</p>
-        <p className="mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+    <section className="overflow-hidden rounded-xl border border-border bg-background">
+      <div className="border-b border-border px-3 py-2.5">
+        <p className="text-[12px] leading-4 font-medium tracking-[-0.2px] text-foreground">Account</p>
+        <p className="mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
           {isEmailMailbox
             ? 'Enable the Email receiver account, then choose the mailbox name below.'
             : `Pick which ${vendorName} identity this ${resourceTitle ?? 'connection'} should use.`}
         </p>
       </div>
-      <div className="divide-y divide-kumo-line">
+      <div className="divide-y divide-border">
         {accounts.map(account => {
           const selected = selectedAccountId === account.id
           const name = account.description.uniqueName || account.description.displayName || 'Connected account'
@@ -83,26 +83,26 @@ export function AccountChooser({
           return (
             <div
               key={account.id}
-              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors ${selected ? 'bg-kumo-tint' : ''}`}
+              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors ${selected ? 'bg-muted' : ''}`}
             >
               <button
                 type="button"
                 disabled={expired}
                 onClick={() => onSelect(account.id)}
-                className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left transition-colors enabled:hover:text-kumo-default disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left transition-colors enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <div
                   className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full"
                   style={{
                     backgroundColor:
-                      account.vendorDescription.color ?? 'var(--color-kumo-tint)',
+                      account.vendorDescription.color ?? 'var(--color-muted)',
                   }}
                 >
                   <AccountAvatar avatarUrl={account.description.avatar?.url} logoUrl={account.vendorDescription.logo?.url} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">{name}</p>
-                  <p className={`truncate text-[12px] leading-4 font-normal tracking-[-0.2px] ${needsAccess ? 'text-kumo-brand' : 'text-kumo-subtle'}`}>
+                  <p className="truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">{name}</p>
+                  <p className={`truncate text-[12px] leading-4 font-normal tracking-[-0.2px] ${needsAccess ? 'text-primary' : 'text-muted-foreground'}`}>
                     {expired
                       ? 'Expired credentials'
                       : needsAccess
@@ -116,7 +116,7 @@ export function AccountChooser({
                   type="button"
                   onClick={() => onReconnect(account.id)}
                   disabled={reconnecting}
-                  className="shrink-0 cursor-pointer rounded-md border border-kumo-line px-2 py-1 text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-default transition-colors hover:bg-kumo-elevated disabled:cursor-not-allowed disabled:opacity-60"
+                  className="shrink-0 cursor-pointer rounded-md border border-border px-2 py-1 text-[12px] leading-4 font-medium tracking-[-0.2px] text-foreground transition-colors hover:bg-card disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {reconnecting ? 'Opening...' : 'Reconnect'}
                 </button>
@@ -125,12 +125,12 @@ export function AccountChooser({
                   type="button"
                   onClick={() => onGrantAccess?.(account.id)}
                   disabled={granting}
-                  className="shrink-0 cursor-pointer rounded-md border border-kumo-line px-2 py-1 text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-default transition-colors hover:bg-kumo-elevated disabled:cursor-not-allowed disabled:opacity-60"
+                  className="shrink-0 cursor-pointer rounded-md border border-border px-2 py-1 text-[12px] leading-4 font-medium tracking-[-0.2px] text-foreground transition-colors hover:bg-card disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {granting ? 'Opening...' : 'Grant access'}
                 </button>
               ) : null}
-              {selected && <Check size={15} weight="bold" className="shrink-0 text-kumo-brand" />}
+              {selected && <Check size={15} weight="bold" className="shrink-0 text-primary" />}
             </div>
           )
         })}
@@ -140,10 +140,10 @@ export function AccountChooser({
             type="button"
             onClick={onConnect}
             disabled={connecting}
-            className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-subtle transition-colors hover:bg-kumo-elevated hover:text-kumo-default disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-[12px] leading-4 font-medium tracking-[-0.2px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             {connecting ? (
-              <span className="h-3.5 w-3.5 rounded-full border-2 border-kumo-brand border-t-transparent animate-spin" />
+              <span className="h-3.5 w-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
             ) : (
               <Plus size={14} />
             )}

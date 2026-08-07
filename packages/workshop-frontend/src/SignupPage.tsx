@@ -3,14 +3,13 @@ import { Link } from "@tanstack/react-router";
 import { RpcStub } from "capnweb";
 import { PublicApi } from "@gadgets/workshop-shared/api";
 import { Hexagon } from "@phosphor-icons/react";
-import { Input, Button, Banner, Loader } from "@cloudflare/kumo";
 import { hashPassword } from "./passwordHash";
 import { useServerConfig, useServerConfigError, useSiteName } from "./ServerConfigContext";
 import { useDocumentTitle } from "./useDocumentTitle";
 import OAuthButtons from "./components/auth/OAuthButtons";
 import SiteLogo from "./components/SiteLogo";
 import { useConnectionLost } from "./RpcContext";
-
+import { Input, Button, Banner, Spinner } from '@matser/ui'
 interface SignupPageProps {
   rpcStub: RpcStub<PublicApi>;
 }
@@ -82,9 +81,9 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
       return (
         <div
           role="alert"
-          className="min-h-screen flex flex-col items-center justify-center gap-4 bg-kumo-base px-4"
+          className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background px-4"
         >
-          <p className="text-sm text-kumo-danger text-center">
+          <p className="text-sm text-destructive text-center">
             Couldn&apos;t load deployment settings.
           </p>
           <Button variant="secondary" onClick={() => window.location.reload()}>Reload</Button>
@@ -92,9 +91,9 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
       );
     }
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-kumo-base px-4">
-        <Loader size="lg" />
-        <p className="text-sm text-kumo-subtle text-center">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background px-4">
+        <Spinner size={24} />
+        <p className="text-sm text-muted-foreground text-center">
           {connectionLost ? "Can't reach the server. Retrying…" : "Loading…"}
         </p>
       </div>
@@ -107,13 +106,13 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
   const passwordAuthEnabled = serverConfig.passwordAuthEnabled && signupsEnabled;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-kumo-base px-4 relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 relative overflow-hidden">
       {/* Dot grid — fades from top to bottom */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
           backgroundImage:
-            "radial-gradient(circle, var(--color-kumo-line) 1px, transparent 1px)",
+            "radial-gradient(circle, var(--color-border) 1px, transparent 1px)",
           backgroundSize: "24px 24px",
           maskImage:
             "linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 70%)",
@@ -126,19 +125,19 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           <SiteLogo size={40} className="mb-3">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-kumo-brand mb-3">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-primary mb-3">
               <Hexagon size={20} className="text-white" weight="bold" />
             </div>
           </SiteLogo>
-          <h1 className="text-xl font-semibold text-kumo-default">
+          <h1 className="text-xl font-semibold text-foreground">
             {siteName}
           </h1>
-          <p className="text-sm text-kumo-subtle mt-1">Create your account</p>
+          <p className="text-sm text-muted-foreground mt-1">Create your account</p>
         </div>
 
         {!signupsEnabled && (
           <Banner
-            variant="default"
+            variant="neutral"
             title="Signups are closed"
             className="mb-4"
           >
@@ -150,40 +149,49 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
           <>
             {/* Form */}
             <form onSubmit={handleSubmit} className="space-y-4">
-              <Input
-                label="Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoFocus
-                autoComplete="username"
-                disabled={loading}
-                placeholder="your-username"
-                error={usernameError}
-              />
+              <label className="grid gap-1.5 text-sm font-medium text-foreground">
+                Username
+                <Input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoFocus
+                  autoComplete="username"
+                  disabled={loading}
+                  placeholder="your-username"
+                  aria-invalid={Boolean(usernameError)}
+                />
+                {usernameError && <span className="text-xs font-normal text-destructive">{usernameError}</span>}
+              </label>
 
-              <Input
-                type="password"
-                label="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
-                disabled={loading}
-                placeholder="••••••••"
-                error={passwordError}
-              />
+              <label className="grid gap-1.5 text-sm font-medium text-foreground">
+                Password
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="new-password"
+                  disabled={loading}
+                  placeholder="••••••••"
+                  aria-invalid={Boolean(passwordError)}
+                />
+                {passwordError && <span className="text-xs font-normal text-destructive">{passwordError}</span>}
+              </label>
 
-              <Input
-                type="password"
-                label="Confirm Password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                autoComplete="new-password"
-                disabled={loading}
-                placeholder="••••••••"
-                error={confirmError}
-              />
+              <label className="grid gap-1.5 text-sm font-medium text-foreground">
+                Confirm Password
+                <Input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  disabled={loading}
+                  placeholder="••••••••"
+                  aria-invalid={Boolean(confirmError)}
+                />
+                {confirmError && <span className="text-xs font-normal text-destructive">{confirmError}</span>}
+              </label>
 
-              {error && <Banner variant="error" title={error} />}
+              {error && <Banner variant="destructive" title={error} />}
 
               <Button
                 type="submit"
@@ -203,9 +211,9 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
           <div className={passwordAuthEnabled ? "mt-6" : ""}>
             {passwordAuthEnabled && (
               <div className="flex items-center gap-3 mb-4">
-                <div className="h-px flex-1 bg-kumo-line" />
-                <span className="text-xs text-kumo-subtle">or</span>
-                <div className="h-px flex-1 bg-kumo-line" />
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-xs text-muted-foreground">or</span>
+                <div className="h-px flex-1 bg-border" />
               </div>
             )}
             <OAuthButtons rpcStub={rpcStub} vendors={authVendors} />
@@ -213,9 +221,9 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
         )}
 
         {passwordAuthEnabled && (
-          <p className="text-center text-sm text-kumo-subtle mt-6">
+          <p className="text-center text-sm text-muted-foreground mt-6">
             Already have an account?{" "}
-            <Link to="/" className="text-kumo-brand hover:underline font-medium">
+            <Link to="/" className="text-primary hover:underline font-medium">
               Sign in
             </Link>
           </p>

@@ -1,8 +1,7 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import type { ActionState, Overseer } from '@gadgets/workshop-shared/api'
-
+import { useToast } from '@matser/ui'
 type ActionDecision = 'approve' | 'deny'
 
 export function useResolveAction(
@@ -10,7 +9,7 @@ export function useResolveAction(
   setProcessing: Dispatch<SetStateAction<Set<number>>>,
   onResolved?: (actionId: number, state: Extract<ActionState, 'approved' | 'rejected'>) => void,
 ) {
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const onResolvedRef = useRef(onResolved)
   onResolvedRef.current = onResolved
 
@@ -22,7 +21,7 @@ export function useResolveAction(
       onResolvedRef.current?.(actionId, decision === 'approve' ? 'approved' : 'rejected')
     } catch (error) {
       console.error(`Failed to ${decision} action:`, error)
-      toasts.add({ title: `Failed to ${decision} action`, variant: 'error' })
+      toasts.add({ title: `Failed to ${decision} action`, type: 'error' })
     } finally {
       setProcessing(previous => {
         const next = new Set(previous)

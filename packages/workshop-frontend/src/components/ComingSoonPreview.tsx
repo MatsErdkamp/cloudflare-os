@@ -21,14 +21,14 @@ export default function ComingSoonPreview({
         {children}
       </div>
 
-      <div className="absolute inset-0 z-10 flex items-start justify-center bg-kumo-base/55 px-6 pt-16 backdrop-blur-[3px] sm:pt-20">
-        <div className="themed-compact-shadow flex flex-col items-center gap-3 rounded-2xl border border-kumo-line bg-kumo-base px-6 py-5 text-center">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-kumo-fill text-kumo-subtle">
+      <div className="absolute inset-0 z-10 flex items-start justify-center bg-background/55 px-6 pt-16 backdrop-blur-[3px] sm:pt-20">
+        <div className="themed-compact-shadow flex flex-col items-center gap-3 rounded-2xl border border-border bg-background px-6 py-5 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-muted-foreground">
             <Icon size={18} />
           </div>
           <div>
-            <p className="text-[15px] font-semibold tracking-[-0.25px] text-kumo-default">{title}</p>
-            <p className="mx-auto mt-1 max-w-xs text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
+            <p className="text-[15px] font-semibold tracking-[-0.25px] text-foreground">{title}</p>
+            <p className="mx-auto mt-1 max-w-xs text-[13px] leading-[18px] tracking-[-0.25px] text-muted-foreground">
               {description}
             </p>
           </div>

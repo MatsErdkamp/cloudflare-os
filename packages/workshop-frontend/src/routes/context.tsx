@@ -39,16 +39,16 @@ function ContextRow({ item }: { item: ContextItem }) {
   const { label, Icon } = TYPE_META[item.kind]
   return (
     <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-kumo-fill text-kumo-subtle">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-muted-foreground">
         <Icon size={16} />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium tracking-[-0.25px] text-kumo-default">{item.name}</p>
-        <p className="mt-0.5 truncate text-[12px] leading-4 tracking-[-0.2px] text-kumo-subtle">
+        <p className="truncate text-sm font-medium tracking-[-0.25px] text-foreground">{item.name}</p>
+        <p className="mt-0.5 truncate text-[12px] leading-4 tracking-[-0.2px] text-muted-foreground">
           {label} · {item.detail}
         </p>
       </div>
-      <span className="hidden shrink-0 text-xs tracking-[-0.1px] text-kumo-inactive lg:block">
+      <span className="hidden shrink-0 text-xs tracking-[-0.1px] text-muted-foreground lg:block">
         {item.updated}
       </span>
     </div>
@@ -61,8 +61,8 @@ function ContextPage() {
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-6 sm:px-10">
       <header className="px-3 pb-4 pt-10">
-        <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">Context &amp; Skills</h1>
-        <p className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Context &amp; Skills</h1>
+        <p className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-muted-foreground">
           Curated collections of knowledge your agents read, plus reusable skills they can apply.
         </p>
       </header>

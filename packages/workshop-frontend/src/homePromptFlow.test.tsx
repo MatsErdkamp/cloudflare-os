@@ -18,34 +18,31 @@ const testState = vi.hoisted(() => {
   };
 });
 
+const storage = new Map<string, string>();
+vi.stubGlobal('localStorage', {
+  clear: () => storage.clear(),
+  getItem: (key: string) => storage.get(key) ?? null,
+  removeItem: (key: string) => storage.delete(key),
+  setItem: (key: string, value: string) => storage.set(key, value),
+});
+
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => testState.navigate,
 }));
-
-vi.mock("@cloudflare/kumo", () => ({
-  useKumoToastManager: () => ({ add: testState.addToast }),
-}));
-
-vi.mock("./AuthContext", () => ({
-  useAuthenticatedApi: () => ({
-    authenticatedApi: testState.authenticatedApi,
-  }),
-}));
-
+vi.mock("@matser/ui", () => ({ useToast: () => ({ add: testState.addToast }) }));
+vi.mock("./AuthContext", () => ({ useAuthenticatedApi: () => ({ authenticatedApi: testState.authenticatedApi }) }));
 vi.mock("./ChatInterface", () => ({
   ChatInput: ({ seedText, seedNonce }: { seedText?: string; seedNonce?: number }) => {
     testState.seeds.push({ text: seedText, nonce: seedNonce });
     return <textarea aria-label="Prompt" readOnly value={seedText ?? ""} />;
   },
 }));
-
 vi.mock("./components/MeshBackground", () => ({ default: () => null }));
 vi.mock("./components/AppShell/HomeTaskSuggestions", () => ({ default: () => null }));
 vi.mock("./useDocumentTitle", () => ({ useDocumentTitle: () => {} }));
 
 import { HomePageContent } from "./routes/index";
-
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("Home prompt route flow", () => {

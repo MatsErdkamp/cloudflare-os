@@ -1,13 +1,11 @@
-import { Dialog, Switch } from '@cloudflare/kumo'
-import { X, ShieldCheck } from '@phosphor-icons/react'
+import {X, ShieldCheck } from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   AccountDescription,
   SupportedResource,
   VendorDescription,
 } from '@gadgets/workshop-shared/gatekeeper'
-import { WorkshopButton, WorkshopIconButton } from './WorkshopControls'
-
+import { Dialog, Switch, DialogContent, DialogTitle, DialogDescription, DialogClose, Button } from '@matser/ui'
 interface ConnectConnectorModalProps {
   open: boolean
   mode: 'connect' | 'manage'
@@ -153,10 +151,10 @@ export default function ConnectConnectorModal({
     : `Connect ${vendorDescription.displayName}`
 
   const headerSubline = isManage ? (
-    <div className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+    <div className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
       <span
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-          credentialsValid ? 'bg-kumo-success' : 'bg-kumo-danger'
+          credentialsValid ? 'bg-status-success' : 'bg-destructive'
         }`}
         aria-hidden
       />
@@ -170,9 +168,9 @@ export default function ConnectConnectorModal({
     </div>
   ) : (
     vendorDescription.tagline && (
-      <Dialog.Description className="mt-0.5 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+      <DialogDescription className="mt-0.5 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
         {vendorDescription.tagline}
-      </Dialog.Description>
+      </DialogDescription>
     )
   )
 
@@ -183,8 +181,8 @@ export default function ConnectConnectorModal({
     const icon = resource?.icon?.url ?? logoUrl
     return (
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-kumo-strong"
-        style={{ backgroundColor: color ?? 'var(--color-kumo-tint)' }}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-foreground"
+        style={{ backgroundColor: color ?? 'var(--color-muted)' }}
       >
         {icon ? (
           <img src={icon} alt="" className="h-4 w-4 object-contain" />
@@ -196,57 +194,57 @@ export default function ConnectConnectorModal({
   }
 
   return (
-    <Dialog.Root
+    <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
         if (busy) return
         onOpenChange(nextOpen)
       }}
     >
-      <Dialog
-        className="!z-[1000] !top-[clamp(28px,8vh,80px)] !flex !max-h-[calc(100vh-clamp(28px,8vh,80px)-28px)] !w-[min(640px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-kumo-base p-0"
+      <DialogContent
+        className="!z-[1000] !top-[clamp(28px,8vh,80px)] !flex !max-h-[calc(100vh-clamp(28px,8vh,80px)-28px)] !w-[min(640px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-background p-0"
         size="lg"
       >
-        <div className="shrink-0 flex items-start justify-between gap-4 border-b border-kumo-line px-5 py-4">
+        <div className="shrink-0 flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div className="flex min-w-0 items-start gap-3">
             <div
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-              style={{ backgroundColor: color ?? 'var(--color-kumo-tint)' }}
+              style={{ backgroundColor: color ?? 'var(--color-muted)' }}
             >
               {logoUrl ? (
                 <img src={logoUrl} alt="" className="h-5 w-5 object-contain" />
               ) : (
-                <span className="text-sm font-semibold text-kumo-strong">
+                <span className="text-sm font-semibold text-foreground">
                   {vendorDescription.displayName[0]}
                 </span>
               )}
             </div>
             <div className="min-w-0">
-              <Dialog.Title className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-kumo-default">
+              <DialogTitle className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-foreground">
                 {headerTitle}
-              </Dialog.Title>
+              </DialogTitle>
               {headerSubline}
             </div>
           </div>
-          <Dialog.Close
+          <DialogClose
             render={(props) => (
-              <WorkshopIconButton {...props} disabled={busy} aria-label="Close">
+              <Button {...props} disabled={busy} aria-label="Close" className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                 <X size={16} />
-              </WorkshopIconButton>
+              </Button>
             )}
           />
         </div>
 
         <div className="new-gatekeeper-scroll-balanced min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {vendorDescription.description && (
-            <p className="text-[13px] leading-[19px] font-normal tracking-[-0.25px] text-kumo-default">
+            <p className="text-[13px] leading-[19px] font-normal tracking-[-0.25px] text-foreground">
               {vendorDescription.description}
             </p>
           )}
 
           {supportedResources.length > 0 && (
             <div className="mt-5">
-              <h3 className="mb-2 text-[12px] leading-4 font-semibold uppercase tracking-[0.6px] text-kumo-inactive">
+              <h3 className="mb-2 text-[12px] leading-4 font-semibold uppercase tracking-[0.6px] text-muted-foreground">
                 {granular
                   ? isManage
                     ? 'Resources'
@@ -267,14 +265,14 @@ export default function ConnectConnectorModal({
                   return (
                     <li
                       key={resource.urlPattern}
-                      className="flex items-center gap-3 rounded-lg border border-kumo-line bg-kumo-base px-3 py-2.5"
+                      className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5"
                     >
                       {resourceIcon(resource)}
                       <div className="min-w-0 flex-1">
-                        <p className="text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+                        <p className="text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                           {resource.title}
                         </p>
-                        <p className="mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                        <p className="mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                           {resource.description}
                         </p>
                       </div>
@@ -303,7 +301,7 @@ export default function ConnectConnectorModal({
 
           {!isManage && !autoProvisions && (
             <div
-              className="relative mt-5 overflow-hidden rounded-lg border border-kumo-line px-4 py-3"
+              className="relative mt-5 overflow-hidden rounded-lg border border-border px-4 py-3"
               style={{
                 background:
                   'linear-gradient(180deg, rgba(255, 72, 1, 0.04) 0%, rgba(255, 72, 1, 0.02) 100%)',
@@ -312,14 +310,14 @@ export default function ConnectConnectorModal({
               <div className="flex items-start gap-3">
                 <ShieldCheck
                   size={18}
-                  className="mt-0.5 shrink-0 text-kumo-brand"
+                  className="mt-0.5 shrink-0 text-primary"
                   weight="duotone"
                 />
-                <div className="text-[12px] leading-[17px] font-normal tracking-[-0.2px] text-kumo-default">
+                <div className="text-[12px] leading-[17px] font-normal tracking-[-0.2px] text-foreground">
                   <span className="font-medium">
                     Gatekeeper sits between {vendorDescription.displayName} and your Gadgets.
                   </span>{' '}
-                  <span className="text-kumo-subtle">
+                  <span className="text-muted-foreground">
                     Each Gadget only sees the resources you connect. If the workspace is shared,
                     Gatekeeper verifies other users have the required permissions before they can
                     access those resources.
@@ -330,24 +328,24 @@ export default function ConnectConnectorModal({
           )}
 
           {isManage && (
-            <div className="mt-5 rounded-lg border border-kumo-line bg-kumo-elevated px-4 py-3 text-[12px] leading-[17px] font-normal tracking-[-0.2px] text-kumo-subtle">
+            <div className="mt-5 rounded-lg border border-border bg-card px-4 py-3 text-[12px] leading-[17px] font-normal tracking-[-0.2px] text-muted-foreground">
               This account can be used by Gadgets you connect it to. Shared users must have the
               required permissions before they can access those connected resources.
             </div>
           )}
         </div>
 
-        <div className="shrink-0 flex items-center justify-between gap-3 border-t border-kumo-line bg-kumo-base px-5 py-3">
+        <div className="shrink-0 flex items-center justify-between gap-3 border-t border-border bg-background px-5 py-3">
           {isManage && confirmingDisconnect ? (
-            <p className="m-0 min-w-0 flex-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-default">
+            <p className="m-0 min-w-0 flex-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-foreground">
               Disconnect {vendorDescription.displayName}? Gadgets using this will lose access.
             </p>
           ) : isManage && hasPending ? (
-            <p className="m-0 min-w-0 flex-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+            <p className="m-0 min-w-0 flex-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
               {pendingPatterns.length} resource{pendingPatterns.length === 1 ? '' : 's'} to add
             </p>
           ) : !isManage && granular && noneSelected ? (
-            <p className="m-0 min-w-0 flex-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+            <p className="m-0 min-w-0 flex-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
               Select at least one resource to continue.
             </p>
           ) : (
@@ -358,73 +356,73 @@ export default function ConnectConnectorModal({
               <>
                 {confirmingDisconnect ? (
                   <>
-                    <WorkshopButton
+                    <Button
                       onClick={() => setConfirmingDisconnect(false)}
                       disabled={disconnecting}
-                      className="!h-9"
-                    >
+                      className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-9"
+                     variant="secondary">
                       Cancel
-                    </WorkshopButton>
-                    <WorkshopButton
-                      tone="danger"
+                    </Button>
+                    <Button
+
                       onClick={handleDisconnect}
                       disabled={disconnecting}
-                      className="!h-9 min-w-[140px]"
-                    >
+                      className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 bg-destructive px-3 text-white enabled:hover:opacity-90 disabled:opacity-50 !h-9 min-w-[140px]"
+                     variant="destructive">
                       {disconnecting ? 'Disconnecting...' : 'Yes, disconnect'}
-                    </WorkshopButton>
+                    </Button>
                   </>
                 ) : hasPending ? (
                   <>
-                    <WorkshopButton onClick={discardPending} disabled={ensuringBusy} className="!h-9">
+                    <Button onClick={discardPending} disabled={ensuringBusy} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-9" variant="secondary">
                       Cancel
-                    </WorkshopButton>
-                    <WorkshopButton
-                      tone="primary"
+                    </Button>
+                    <Button
+
                       onClick={handleAddResources}
                       disabled={ensuringBusy}
-                      className="min-w-[140px]"
-                    >
+                      className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 min-w-[140px]"
+                     variant="primary">
                       {ensuringBusy
                         ? 'Opening...'
                         : `Continue to ${vendorDescription.displayName}`}
-                    </WorkshopButton>
+                    </Button>
                   </>
                 ) : (
                   <>
-                    <Dialog.Close
+                    <DialogClose
                       render={(props) => (
-                        <WorkshopButton {...props} className="!h-9">
+                        <Button {...props} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-9" variant="secondary">
                           Close
-                        </WorkshopButton>
+                        </Button>
                       )}
                     />
-                    <WorkshopButton
-                      tone="danger"
+                    <Button
+
                       onClick={handleDisconnect}
                       disabled={disconnecting}
-                      className="!h-9"
-                    >
+                      className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 bg-destructive px-3 text-white enabled:hover:opacity-90 disabled:opacity-50 !h-9"
+                     variant="destructive">
                       Disconnect
-                    </WorkshopButton>
+                    </Button>
                   </>
                 )}
               </>
             ) : (
               <>
-                <Dialog.Close
+                <DialogClose
                   render={(props) => (
-                    <WorkshopButton {...props} disabled={connecting} className="!h-9">
+                    <Button {...props} disabled={connecting} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-9" variant="secondary">
                       Cancel
-                    </WorkshopButton>
+                    </Button>
                   )}
                 />
-                <WorkshopButton
-                  tone="primary"
+                <Button
+
                   onClick={handleConfirm}
                   disabled={connecting || (granular && noneSelected)}
-                  className="min-w-[140px]"
-                >
+                  className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 min-w-[140px]"
+                 variant="primary">
                   {autoProvisions
                     ? connecting
                       ? 'Adding...'
@@ -432,13 +430,13 @@ export default function ConnectConnectorModal({
                     : connecting
                     ? 'Opening...'
                     : `Continue to ${vendorDescription.displayName}`}
-                </WorkshopButton>
+                </Button>
               </>
             )}
           </div>
         </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }
 

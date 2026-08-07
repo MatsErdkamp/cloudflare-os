@@ -21,7 +21,7 @@ const INLINE_MARKDOWN_COMPONENTS: Components = {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-kumo-brand hover:underline pointer-events-auto"
+      className="text-primary hover:underline pointer-events-auto"
     >
       {children}
     </a>
@@ -38,7 +38,7 @@ export default function TopBarNotice() {
       aria-hidden="false"
       className="hidden lg:flex absolute inset-0 items-center justify-center pointer-events-none px-40"
     >
-      <div className="max-w-full truncate text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+      <div className="max-w-full truncate text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={INLINE_MARKDOWN_COMPONENTS}>
           {notice}
         </ReactMarkdown>

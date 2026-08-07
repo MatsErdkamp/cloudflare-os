@@ -1,9 +1,6 @@
 import { useState } from 'react'
-import { Table } from '@cloudflare/kumo'
-import { Badge } from '@cloudflare/kumo'
-import { Button } from '@cloudflare/kumo'
 import { sampleDataRows } from '../../data/chat'
-
+import { Table, Badge, Button, TableHeader, TableHead, TableBody, TableRow, TableCell, TableCheckCell, TableCheckHead } from '@matser/ui'
 export default function DataTab() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
@@ -27,14 +24,14 @@ export default function DataTab() {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-kumo-fill bg-kumo-elevated">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-accent bg-card">
         <div className="flex items-center gap-3">
-          <span className="font-mono text-sm text-kumo-default">channels</span>
-          <Badge variant="secondary">{sampleDataRows.length} rows</Badge>
+          <span className="font-mono text-sm text-foreground">channels</span>
+          <Badge>{sampleDataRows.length} rows</Badge>
         </div>
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
-            <span className="text-xs text-kumo-subtle">
+            <span className="text-xs text-muted-foreground">
               {selectedIds.size} selected
             </span>
           )}
@@ -46,58 +43,58 @@ export default function DataTab() {
       {/* Table */}
       <div className="flex-1 overflow-auto">
         <Table layout="fixed">
-          <Table.Header>
-            <Table.Row>
-              <Table.CheckHead
+          <TableHeader>
+            <TableRow>
+              <TableCheckHead
                 checked={selectedIds.size === sampleDataRows.length}
                 indeterminate={selectedIds.size > 0 && selectedIds.size < sampleDataRows.length}
-                onValueChange={toggleAll}
+                onCheckedChange={toggleAll}
                 aria-label="Select all rows"
               />
-              <Table.Head>Channel</Table.Head>
-              <Table.Head>Messages</Table.Head>
-              <Table.Head>Last Active</Table.Head>
-              <Table.Head>Status</Table.Head>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
+              <TableHead>Channel</TableHead>
+              <TableHead>Messages</TableHead>
+              <TableHead>Last Active</TableHead>
+              <TableHead>Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {sampleDataRows.map((row) => (
-              <Table.Row key={row.id} variant={selectedIds.has(row.id) ? 'selected' : 'default'}>
-                <Table.CheckCell
+              <TableRow key={row.id} variant={selectedIds.has(row.id) ? 'selected' : 'default'}>
+                <TableCheckCell
                   checked={selectedIds.has(row.id)}
-                  onValueChange={() => toggleRow(row.id)}
+                  onCheckedChange={() => toggleRow(row.id)}
                   aria-label={`Select ${row.channel}`}
                 />
-                <Table.Cell>
-                  <span className="font-mono text-sm text-kumo-default">{row.channel}</span>
-                </Table.Cell>
-                <Table.Cell>
-                  <span className="text-sm text-kumo-subtle tabular-nums">
+                <TableCell>
+                  <span className="font-mono text-sm text-foreground">{row.channel}</span>
+                </TableCell>
+                <TableCell>
+                  <span className="text-sm text-muted-foreground tabular-nums">
                     {row.messages.toLocaleString()}
                   </span>
-                </Table.Cell>
-                <Table.Cell>
-                  <span className="text-xs text-kumo-subtle">{row.lastActive}</span>
-                </Table.Cell>
-                <Table.Cell>
+                </TableCell>
+                <TableCell>
+                  <span className="text-xs text-muted-foreground">{row.lastActive}</span>
+                </TableCell>
+                <TableCell>
                   {row.unread ? (
-                    <Badge variant="primary">Unread</Badge>
+                    <Badge color="blue">Unread</Badge>
                   ) : (
-                    <Badge variant="secondary">Read</Badge>
+                    <Badge>Read</Badge>
                   )}
-                </Table.Cell>
-              </Table.Row>
+                </TableCell>
+              </TableRow>
             ))}
-          </Table.Body>
+          </TableBody>
         </Table>
       </div>
 
       {/* Footer */}
-      <div className="px-4 py-2 border-t border-kumo-fill bg-kumo-elevated flex items-center justify-between">
-        <span className="font-mono text-xs text-kumo-subtle">
+      <div className="px-4 py-2 border-t border-accent bg-card flex items-center justify-between">
+        <span className="font-mono text-xs text-muted-foreground">
           {sampleDataRows.length} rows in channels
         </span>
-        <span className="font-mono text-xs text-kumo-subtle">
+        <span className="font-mono text-xs text-muted-foreground">
           {sampleDataRows.reduce((sum, r) => sum + r.messages, 0).toLocaleString()} total messages
         </span>
       </div>

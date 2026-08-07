@@ -1,14 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { Text, Loader, Banner } from '@cloudflare/kumo'
 import { Sparkle } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget, newMessagePortRpcSession } from 'capnweb'
 import { GadgetClient, ConsoleLogEvent } from '@gadgets/workshop-shared/api'
-
 // We want to inject Cap'n Web into the Gadget. Luckily it has no dependencies, so we can just take
 // the whole module and embed it. We can import the module using ?raw to get a string of the
 // content.
 import CAPNWEB_BUNDLE from 'capnweb?raw'
-
+import { Text, Spinner, Banner, Button } from '@matser/ui'
 let CAPNWEB_BUNDLE_ANNOTATED = `//# sourceURL=jsrpc.js\n${CAPNWEB_BUNDLE}`
 
 // Unfortunately, we will have to embed the code as a data: URL, because our iframe is totally
@@ -397,10 +395,10 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
     // Don't render anything if not visible and never loaded
     return (
       <div
-        className="flex items-center justify-center text-kumo-subtle"
+        className="flex items-center justify-center text-muted-foreground"
         style={{ height }}
       >
-        <Text variant="secondary">
+        <Text variant="muted">
           Switch to this tab to load the Gadget UI
         </Text>
       </div>
@@ -415,7 +413,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
         justifyContent: 'center',
         alignItems: 'center'
       }}>
-        <Loader size="lg" />
+        <Spinner size={24} />
       </div>
     )
   }
@@ -430,11 +428,12 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
         padding: '20px'
       }}>
         <Banner
-          variant="error"
+          variant="destructive"
           title="Error"
           description={error}
           action={
-            <Banner.Action
+            <Button
+              variant="secondary"
               onClick={() => {
                 setError(null)
                 setHasLoaded(false)
@@ -443,7 +442,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
               }}
             >
               Try again
-            </Banner.Action>
+            </Button>
           }
         />
       </div>
@@ -453,7 +452,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
   if (!sandboxedHtml) {
     return (
       <div
-        className="relative overflow-hidden bg-kumo-base"
+        className="relative overflow-hidden bg-background"
         style={{
           height,
           display: 'flex',
@@ -469,14 +468,14 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
         />
 
         <div className="relative flex max-w-sm flex-col items-center gap-3 px-6 text-center">
-          <div className="themed-user-bubble-shadow flex h-12 w-12 items-center justify-center rounded-xl border border-kumo-line bg-kumo-elevated text-kumo-subtle">
+          <div className="themed-user-bubble-shadow flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-card text-muted-foreground">
             <Sparkle size={22} weight="regular" />
           </div>
           <div className="space-y-1">
-            <h2 className="text-[20px] leading-7 font-normal tracking-[-0.45px] text-kumo-default">
+            <h2 className="text-[20px] leading-7 font-normal tracking-[-0.45px] text-foreground">
               No gadget UI yet
             </h2>
-            <p className="text-[15px] leading-5 font-normal tracking-[-0.3px] text-kumo-subtle">
+            <p className="text-[15px] leading-5 font-normal tracking-[-0.3px] text-muted-foreground">
               When the gadget builds one, it will appear here.
             </p>
           </div>

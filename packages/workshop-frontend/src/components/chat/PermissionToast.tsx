@@ -1,11 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Button } from '@cloudflare/kumo'
-import { Badge } from '@cloudflare/kumo'
-import { Text } from '@cloudflare/kumo'
 import { Shield, X, Check } from '@phosphor-icons/react'
 import { samplePermissions, type PermissionRequest } from '../../data/chat'
 import { logoComponents } from '../ConnectionLogos'
-
+import { Button, Badge, Text } from '@matser/ui'
 function PermissionCard({
   perm,
   onGrant,
@@ -21,23 +18,23 @@ function PermissionCard({
   if (perm.status !== 'pending') return null
 
   return (
-    <div className="rounded-xl border border-kumo-line bg-kumo-base shadow-lg overflow-hidden animate-slide-in">
+    <div className="rounded-xl border border-border bg-background shadow-lg overflow-hidden animate-slide-in">
       {/* Header */}
       <div className="flex items-start gap-3 p-3">
-        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 bg-kumo-warning-tint">
-          <Shield size={14} className="text-kumo-brand" />
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 bg-status-warning-muted">
+          <Shield size={14} className="text-primary" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-kumo-default">Permission requested</div>
+          <div className="text-sm font-semibold text-foreground">Permission requested</div>
           <div className="mt-0.5">
-            <Text variant="secondary" size="xs" as="span">
+            <Text variant="muted" size="xs" as="span">
               Workshop wants to access <strong>{perm.connectionName}</strong>
             </Text>
           </div>
         </div>
         <button
           onClick={onDeny}
-          className="p-1 text-kumo-subtle hover:text-kumo-default rounded-md hover:bg-kumo-tint transition-colors flex-shrink-0"
+          className="p-1 text-muted-foreground hover:text-foreground rounded-md hover:bg-muted transition-colors flex-shrink-0"
         >
           <X size={14} />
         </button>
@@ -46,16 +43,16 @@ function PermissionCard({
       {/* Connection info — click to toggle details */}
       <button
         onClick={() => setShowScopes(!showScopes)}
-        className="mx-3 px-3 py-2 rounded-lg bg-kumo-tint flex items-center gap-2.5 w-[calc(100%-1.5rem)] text-left hover:bg-kumo-fill/40 transition-colors cursor-pointer"
+        className="mx-3 px-3 py-2 rounded-lg bg-muted flex items-center gap-2.5 w-[calc(100%-1.5rem)] text-left hover:bg-accent/40 transition-colors cursor-pointer"
       >
         {Logo && <Logo size={16} />}
-        <Text variant="body" size="sm" bold as="span">{perm.connectionName}</Text>
+        <Text variant="body" size="sm" weight="semibold" as="span">{perm.connectionName}</Text>
         <div className="ml-auto flex items-center gap-1.5">
-          <Badge variant="secondary">
+          <Badge>
             {perm.scopes.length} {perm.scopes.length === 1 ? 'scope' : 'scopes'}
           </Badge>
           <svg
-            className={`w-3.5 h-3.5 text-kumo-subtle transition-transform ${showScopes ? 'rotate-180' : ''}`}
+            className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${showScopes ? 'rotate-180' : ''}`}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -71,25 +68,25 @@ function PermissionCard({
         <div className="mx-3 mt-1.5 space-y-1.5">
           {/* Resources being accessed */}
           {perm.resources && perm.resources.length > 0 && (
-            <div className="px-3 py-2 rounded-md bg-kumo-tint/50">
-              <span className="font-mono text-[10px] text-kumo-subtle uppercase tracking-wider block mb-1">
+            <div className="px-3 py-2 rounded-md bg-muted/50">
+              <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider block mb-1">
                 Resources
               </span>
               {perm.resources.map((res) => (
                 <div key={res} className="flex items-center gap-1.5 mt-0.5">
-                  <span className="w-1 h-1 rounded-full bg-kumo-brand flex-shrink-0" />
-                  <span className="text-xs text-kumo-default truncate">{res}</span>
+                  <span className="w-1 h-1 rounded-full bg-primary flex-shrink-0" />
+                  <span className="text-xs text-foreground truncate">{res}</span>
                 </div>
               ))}
             </div>
           )}
           {/* API scopes */}
-          <div className="px-3 py-2 rounded-md bg-kumo-tint/50">
-            <span className="font-mono text-[10px] text-kumo-subtle uppercase tracking-wider block mb-1">
+          <div className="px-3 py-2 rounded-md bg-muted/50">
+            <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider block mb-1">
               API scopes
             </span>
             {perm.scopes.map((scope) => (
-              <div key={scope} className="font-mono text-xs text-kumo-subtle">{scope}</div>
+              <div key={scope} className="font-mono text-xs text-muted-foreground">{scope}</div>
             ))}
           </div>
         </div>
@@ -146,11 +143,11 @@ export default function PermissionToasts() {
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80">
       {grantedToast && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-kumo-line bg-kumo-base shadow-lg animate-slide-in">
-          <div className="w-5 h-5 rounded-full flex items-center justify-center bg-kumo-success-tint">
-            <Check size={11} className="text-kumo-success" />
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-background shadow-lg animate-slide-in">
+          <div className="w-5 h-5 rounded-full flex items-center justify-center bg-status-success-muted">
+            <Check size={11} className="text-status-success" />
           </div>
-          <span className="text-xs text-kumo-default">
+          <span className="text-xs text-foreground">
             <strong>{grantedToast}</strong> access granted
           </span>
         </div>

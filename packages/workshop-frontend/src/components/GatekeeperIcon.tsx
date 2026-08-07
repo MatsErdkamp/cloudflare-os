@@ -27,7 +27,7 @@ export function GatekeeperIcon({
     return (
       <div
         className={`flex shrink-0 items-center justify-center overflow-hidden ${className}`}
-        style={{ backgroundColor: color ?? 'var(--color-kumo-tint)' }}
+        style={{ backgroundColor: color ?? 'var(--color-muted)' }}
       >
         <img src={logoUrl} alt="" className="h-full w-full object-contain p-1" />
       </div>
@@ -37,9 +37,9 @@ export function GatekeeperIcon({
   return (
     <div
       className={`flex shrink-0 items-center justify-center ${className}`}
-      style={{ backgroundColor: 'var(--color-kumo-tint)' }}
+      style={{ backgroundColor: 'var(--color-muted)' }}
     >
-      <span className="font-medium text-kumo-strong" style={{ fontSize: Math.max(11, Math.round(size * 0.7)) }}>
+      <span className="font-medium text-foreground" style={{ fontSize: Math.max(11, Math.round(size * 0.7)) }}>
         {fallback[0].toUpperCase()}
       </span>
     </div>

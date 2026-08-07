@@ -7,6 +7,7 @@ import {
   Presentation,
   type Icon,
 } from '@phosphor-icons/react'
+import { Button } from '@matser/ui'
 
 // A few example work tasks shown under the Home composer, so a new user immediately sees the kind
 // of thing they can ask for. Picking one drops a starter prompt into the composer (it does not
@@ -78,23 +79,25 @@ function SuggestionRow({
 }) {
   return (
     <li>
-      <button
+      <Button
+        variant="ghost"
+        size="md"
         type="button"
         onClick={onClick}
-        className="press group flex w-full cursor-pointer items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-kumo-tint"
+        className="press group flex h-auto w-full cursor-pointer items-center justify-start gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-muted"
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-kumo-fill text-kumo-subtle transition-colors group-hover:text-kumo-default">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-muted-foreground transition-colors group-hover:text-foreground">
           {icon}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+          <span className="block truncate text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
             {label}
           </span>
-          <span className="block truncate text-[12px] leading-4 tracking-[-0.2px] text-kumo-subtle">
+          <span className="block truncate text-[12px] leading-4 tracking-[-0.2px] text-muted-foreground">
             {description}
           </span>
         </span>
-      </button>
+      </Button>
     </li>
   )
 }
@@ -123,7 +126,7 @@ export default function HomeTaskSuggestions({
 
   return (
     <section aria-label="Example tasks" className="flex flex-col gap-1">
-      <h3 className="px-1 pb-1 text-[12px] font-medium uppercase tracking-[0.06em] text-kumo-inactive">
+      <h3 className="px-1 pb-1 text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
         Get started
       </h3>
       <ul className="flex flex-col gap-0.5">

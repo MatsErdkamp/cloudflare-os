@@ -115,3 +115,17 @@ IMPORTANT: Frontend error reporting is a separate, opt-in path:
   Install automatic capture only in trusted first-party surfaces, never gadget/user-authored code.
   Exception messages and stacks reach the external Reporter, so never intentionally put secrets,
   prompts, tokens, headers, or request/response bodies in thrown errors or report metadata.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in this repository's GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The tracker uses the default Matt Pocock skill label vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This monorepo uses a multi-context domain-documentation layout. See `docs/agents/domain.md`.

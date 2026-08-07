@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import {useState, useEffect, useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { useParams, useNavigate, useSearch, Link } from '@tanstack/react-router'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import {
   ShareNetwork,
   Pencil,
@@ -17,7 +16,6 @@ import { RpcStub, RpcTarget } from 'capnweb'
 import { useAuthenticatedApi } from './AuthContext'
 import UserMenu from './components/UserMenu'
 import SiteLogo from './components/SiteLogo'
-
 import {
   GadgetClient,
   AiChatAuthorInfo,
@@ -49,14 +47,13 @@ import ShareModal from './ShareModal'
 import { GadgetPresence } from './components/GadgetPresence'
 import BlueprintModal from './BlueprintModal'
 import TopBarNotice from './TopBarNotice'
-import { WorkshopButton, WorkshopIconButton, WorkshopInput } from './components/WorkshopControls'
 import { useActions } from './useActions'
 import DeleteConfirmationDialog from './components/DeleteConfirmationDialog'
 import WorkspaceOpenErrorPage from './components/WorkspaceOpenErrorPage'
 import { useWorkspaceOpen } from './useWorkspaceOpen'
 import { reportIssue } from './errorReporting'
 import GadgetExportMenu from './GadgetExportMenu'
-
+import { useToast, Button, Input} from '@matser/ui'
 const NO_GADGETS: ReadonlySet<WorkpieceId> = new Set()
 
 // ─── console log subscriber ───────────────────────────────────────────────────
@@ -192,14 +189,14 @@ function PaneLabel({
   return (
     <div
       title={title}
-      className="inline-flex w-full min-w-0 max-w-[180px] items-center gap-1.5 overflow-hidden rounded-lg bg-kumo-tint px-2.5 py-1.5 text-[13px] font-medium tracking-[-0.15px] text-kumo-default"
+      className="inline-flex w-full min-w-0 max-w-[180px] items-center gap-1.5 overflow-hidden rounded-lg bg-muted px-2.5 py-1.5 text-[13px] font-medium tracking-[-0.15px] text-foreground"
     >
       {LabelIcon
         ? <LabelIcon size={14} weight="bold" className="flex-shrink-0" />
         : <FormatGlyph output={output} size="sm" className="flex-shrink-0" weight="regular" />}
       <span className="truncate">{title}</span>
       {badge !== undefined && (
-        <span className="rounded-full bg-kumo-fill px-1.5 py-0.5 text-[10px] font-medium leading-none text-kumo-subtle">
+        <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
           {badge}
         </span>
       )}
@@ -278,14 +275,14 @@ function PaneWorkpieceTabs({
             // The open one gets room for its whole name; the others yield first.
             className={`inline-flex flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium tracking-[-0.15px] transition-colors duration-150 ${
               active
-                ? 'max-w-[240px] bg-kumo-tint text-kumo-default'
-                : 'max-w-[150px] text-kumo-subtle hover:bg-kumo-tint/50 hover:text-kumo-default'
+                ? 'max-w-[240px] bg-muted text-foreground'
+                : 'max-w-[150px] text-muted-foreground hover:bg-muted/50 hover:text-foreground'
             }`}
           >
             <FormatGlyph output={gadget.output} size="sm" className="flex-shrink-0" weight="regular" />
             <span className="truncate">{gadget.title}</span>
             {gadget.chatId !== undefined && (
-              <span className="flex-shrink-0 rounded-full bg-kumo-fill px-1.5 py-0.5 text-[10px] font-medium leading-none text-kumo-subtle">
+              <span className="flex-shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
                 Draft
               </span>
             )}
@@ -312,7 +309,7 @@ function PaneTab({
       type="button"
       onClick={onClick}
       className={`relative flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] font-medium tracking-[-0.15px] transition-colors duration-150 ${
-        active ? 'bg-kumo-tint text-kumo-default' : 'text-kumo-subtle hover:text-kumo-default'
+        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'
       }`}
     >
       {label}
@@ -403,10 +400,10 @@ function NoGadgetPlaceholder({ height }: { height: string }) {
   return (
     <div className="flex items-center justify-center px-6 text-center" style={{ height }}>
       <div className="max-w-[360px]">
-        <p className="m-0 text-[15px] leading-[22px] font-semibold tracking-[-0.3px] text-kumo-default">
+        <p className="m-0 text-[15px] leading-[22px] font-semibold tracking-[-0.3px] text-foreground">
           No gadgets yet
         </p>
-        <p className="mt-1.5 mb-0 text-[13px] leading-[19px] tracking-[-0.25px] text-kumo-subtle">
+        <p className="mt-1.5 mb-0 text-[13px] leading-[19px] tracking-[-0.25px] text-muted-foreground">
           Ask the agent in chat to build something, and it will appear here.
         </p>
       </div>
@@ -428,7 +425,7 @@ export default function GadgetEditor() {
   const urlWorkpieceId = workpieceParam !== undefined ? workpieceParam : null
 
   // ── toasts ─────────────────────────────────────────────────────────────────────
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   // ── core state ──────────────────────────────────────────────────────────────
   // The workspace's workpiece list (gadget-type workpieces only in v1), kept live via
@@ -466,7 +463,7 @@ export default function GadgetEditor() {
       if (id) navigate({ to: '/workspace/$id', params: { id }, search: {}, replace: true })
     },
     onInvalidShareKey: () => {
-      toasts.add({ title: 'Invalid or expired share link.', variant: 'error' })
+      toasts.add({ title: 'Invalid or expired share link.', type: 'error' })
     },
   })
   const [userInfo, setUserInfo] = useState<AiChatAuthorInfo | null>(null)
@@ -523,7 +520,7 @@ export default function GadgetEditor() {
   }, [])
 
   // Brief hint banner shown when entering fullscreen, instructing the user how to exit.
-  // We don't use the global Kumo toast manager here because the fullscreen overlay sits above
+  // We don't use the global the previous UI library toast manager here because the fullscreen overlay sits above
   // it in stacking order (and toasts render bottom-right, not top-center).
   const [showFullscreenHint, setShowFullscreenHint] = useState(false)
   // Element that had focus before entering fullscreen; we restore focus to it on exit so
@@ -1183,7 +1180,7 @@ export default function GadgetEditor() {
     try {
       await target.setTitle(title)
     } catch {
-      toasts.add({ title: 'Failed to rename gadget', variant: 'error' })
+      toasts.add({ title: 'Failed to rename gadget', type: 'error' })
     } finally {
       target[Symbol.dispose]()
     }
@@ -1219,7 +1216,7 @@ export default function GadgetEditor() {
       await overseer.stub.setTitle(titleInput.trim())
       updateTitle(titleInput.trim())
       setIsEditingTitle(false)
-    } catch { toasts.add({ title: 'Failed to update title', variant: 'error' }) }
+    } catch { toasts.add({ title: 'Failed to update title', type: 'error' }) }
   }
   const handleCancelEdit = () => {
     setTitleInput(metadata?.title || '')
@@ -1242,7 +1239,7 @@ export default function GadgetEditor() {
       await overseer.stub.deleteSelf()
       navigate({ to: '/' })
     } catch {
-      toasts.add({ title: 'Failed to delete workspace', variant: 'error' })
+      toasts.add({ title: 'Failed to delete workspace', type: 'error' })
       setIsDeleting(false)
       setDeleteDialogOpen(false)
     }
@@ -1266,18 +1263,18 @@ export default function GadgetEditor() {
 
   if (error?.kind === 'message') {
     return (
-      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-kumo-base">
+      <div className="min-h-screen flex items-center justify-center flex-col gap-4 bg-background">
         {/* Observer-verification denials list one line per failed connection, so preserve newlines. */}
-        <p className="text-sm text-kumo-danger whitespace-pre-line text-center max-w-lg">
+        <p className="text-sm text-destructive whitespace-pre-line text-center max-w-lg">
           {error.message}
         </p>
         <div className="flex items-center gap-2">
-          <WorkshopButton tone="secondary" onClick={handleGoToWorkspaces}>
+          <Button  onClick={handleGoToWorkspaces} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40" variant="secondary">
             Go to workspaces
-          </WorkshopButton>
-          <WorkshopButton tone="primary" onClick={retryOpen}>
+          </Button>
+          <Button  onClick={retryOpen} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50" variant="primary">
             Try again
-          </WorkshopButton>
+          </Button>
         </div>
       </div>
     )
@@ -1288,10 +1285,10 @@ export default function GadgetEditor() {
   if (!metadata || !overseer || !workpiecesReady ||
       (selectedGadgetId !== null && gadget === null)) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-kumo-base">
+      <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-kumo-brand border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-kumo-subtle">Loading workspace…</p>
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading workspace…</p>
         </div>
         {observerConfig && (
           <ObserverConfigModal
@@ -1323,11 +1320,11 @@ export default function GadgetEditor() {
 
   // ── always render the full two-pane edit layout; preview overlays on top ──────
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-kumo-base relative">
+    <div className="flex flex-col h-screen overflow-hidden bg-background relative">
       {/* ═══ SHARED TOP BAR (visible in both modes) ════════════════════════════ */}
       <div
-        className="relative flex items-center justify-between px-4 sm:px-6 backdrop-blur-md border-b border-kumo-line flex-shrink-0 gap-3"
-        style={{ height: TOPBAR_H, backgroundColor: 'color-mix(in srgb, var(--color-kumo-base) 80%, transparent)' }}
+        className="relative flex items-center justify-between px-4 sm:px-6 backdrop-blur-md border-b border-border flex-shrink-0 gap-3"
+        style={{ height: TOPBAR_H, backgroundColor: 'color-mix(in srgb, var(--color-background) 80%, transparent)' }}
       >
         <TopBarNotice />
         {/* Left: logo / title */}
@@ -1338,15 +1335,15 @@ export default function GadgetEditor() {
             className="flex-shrink-0 hover:opacity-80 transition-opacity"
           >
             <SiteLogo size={22}>
-              <Hexagon size={22} className="text-kumo-brand" weight="bold" />
+              <Hexagon size={22} className="text-primary" weight="bold" />
             </SiteLogo>
           </Link>
 
-          <span className="text-kumo-inactive flex-shrink-0">/</span>
+          <span className="text-muted-foreground flex-shrink-0">/</span>
 
           {isEditingTitle ? (
             <div className="flex items-center gap-1">
-              <WorkshopInput
+              <Input
                 type="text"
                 value={titleInput}
                 onChange={e => setTitleInput(e.target.value)}
@@ -1355,42 +1352,42 @@ export default function GadgetEditor() {
                   if (e.key === 'Escape') handleCancelEdit()
                 }}
                 autoFocus
-                className="!h-7 w-56 bg-kumo-tint text-[14px] leading-5 font-medium tracking-[-0.25px]"
+                className="!h-9 rounded-lg border border-border bg-background px-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/15 !h-7 w-56 bg-muted text-[14px] leading-5 font-medium tracking-[-0.25px]"
               />
-              <WorkshopIconButton
+              <Button
                 onClick={handleSaveTitle}
                 disabled={!titleInput.trim()}
-                className="!h-7 !w-7 hover:text-kumo-brand disabled:opacity-30"
+                className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-7 !w-7 hover:text-primary disabled:opacity-30"
                 aria-label="Save workspace title"
-              >
+               variant="ghost" size="icon-sm">
                 <Check size={14} />
-              </WorkshopIconButton>
-              <WorkshopIconButton
+              </Button>
+              <Button
                 onClick={handleCancelEdit}
-                className="!h-7 !w-7"
+                className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-7 !w-7"
                 aria-label="Cancel title edit"
-              >
+               variant="ghost" size="icon-sm">
                 <X size={14} />
-              </WorkshopIconButton>
+              </Button>
             </div>
           ) : (
             <div className="flex items-center gap-1 min-w-0">
-              <span className="text-[14px] leading-5 font-medium tracking-[-0.25px] text-kumo-default truncate">
+              <span className="text-[14px] leading-5 font-medium tracking-[-0.25px] text-foreground truncate">
                 {metadata.title}
               </span>
-              <WorkshopIconButton
+              <Button
                 onClick={() => setIsEditingTitle(true)}
-                className="!h-7 !w-7 flex-shrink-0"
+                className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-7 !w-7 flex-shrink-0"
                 title="Rename workspace"
                 aria-label="Rename workspace"
-              >
+               variant="ghost" size="icon-sm">
                 <Pencil size={16} />
-              </WorkshopIconButton>
+              </Button>
             </div>
           )}
 
           {metadata.owner && (
-            <span className="text-xs text-kumo-inactive flex-shrink-0">
+            <span className="text-xs text-muted-foreground flex-shrink-0">
               by {metadata.owner.name}
             </span>
           )}
@@ -1405,7 +1402,7 @@ export default function GadgetEditor() {
           />
 
           {metadata.totalCost != null && (
-            <span className="mr-2 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+            <span className="mr-2 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
               {formatHeaderCost(metadata.totalCost)}
             </span>
           )}
@@ -1417,37 +1414,37 @@ export default function GadgetEditor() {
           />
 
           {connectionLost && (
-            <span className="text-xs text-kumo-warning px-2 py-0.5 rounded-full bg-kumo-warning-tint border border-kumo-warning/20">
+            <span className="text-xs text-status-warning px-2 py-0.5 rounded-full bg-status-warning-muted border border-status-warning/20">
               Reconnecting…
             </span>
           )}
 
-          <WorkshopIconButton
+          <Button
             onClick={() => setShareModalOpen(true)}
             title="Share workspace"
             aria-label="Share workspace"
-          >
+           className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
             <ShareNetwork size={15} />
-          </WorkshopIconButton>
+          </Button>
 
-          <WorkshopIconButton
+          <Button
             onClick={() => setBlueprintModalOpen(true)}
             disabled={!selectedGadgetStub}
             title="Blueprints"
             aria-label="Blueprints"
-          >
+           className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
             <Blueprint size={16} />
-          </WorkshopIconButton>
+          </Button>
 
           {!metadata.owner && (
-            <WorkshopIconButton
-              danger
+            <Button
+
               onClick={() => setDeleteDialogOpen(true)}
               title="Delete workspace"
               aria-label="Delete workspace"
-            >
+             className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 text-muted-foreground enabled:hover:bg-destructive-muted enabled:hover:text-destructive" variant="ghost" size="icon-sm">
               <Trash size={16} />
-            </WorkshopIconButton>
+            </Button>
           )}
 
           {/* User menu */}
@@ -1465,15 +1462,15 @@ export default function GadgetEditor() {
             className="absolute left-0 h-0 z-10"
             style={{ top: simpleMode ? 0 : TABBAR_H, right: outputRailWidth }}
           >
-            <div className="absolute left-0 right-0 h-0.5 bg-kumo-fill overflow-hidden">
-              <div className="absolute inset-y-0 w-1/3 bg-kumo-brand animate-[thinking_1.5s_ease-in-out_infinite]" />
+            <div className="absolute left-0 right-0 h-0.5 bg-accent overflow-hidden">
+              <div className="absolute inset-y-0 w-1/3 bg-primary animate-[thinking_1.5s_ease-in-out_infinite]" />
             </div>
           </div>
         )}
 
         {/* ── LEFT: Chat pane ──────────────────────────────────────────────────── */}
         <div
-          className={`flex flex-col flex-shrink-0 ${workspaceTransitionClass} ${showFullEditor ? 'border-r border-kumo-line' : ''}`}
+          className={`flex flex-col flex-shrink-0 ${workspaceTransitionClass} ${showFullEditor ? 'border-r border-border' : ''}`}
           style={{
             width: showFullEditor
               ? chatWidth
@@ -1517,24 +1514,24 @@ export default function GadgetEditor() {
               </div>
 
               {!layoutModeReady && (
-                <div className="absolute inset-0 flex items-center justify-center bg-kumo-base">
+                <div className="absolute inset-0 flex items-center justify-center bg-background">
                   <div className="flex flex-col items-center gap-3">
-                    <div className="w-6 h-6 border-2 border-kumo-brand border-t-transparent rounded-full animate-spin" />
-                    <p className="text-sm text-kumo-subtle">Loading conversation…</p>
+                    <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm text-muted-foreground">Loading conversation…</p>
                   </div>
                 </div>
               )}
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center">
-              <div className="w-6 h-6 border-2 border-kumo-brand border-t-transparent rounded-full animate-spin" />
+              <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
           )}
         </div>
 
         {/* ── Resize handle ───────────────────────────────────────────────────── */}
         <div
-          className={`flex-shrink-0 overflow-visible bg-kumo-line cursor-col-resize relative touch-none ${workspaceTransitionClass}`}
+          className={`flex-shrink-0 overflow-visible bg-border cursor-col-resize relative touch-none ${workspaceTransitionClass}`}
           style={{ width: showFullEditor ? 1 : 0 }}
           onPointerDown={handleResizePointerDown}
           onPointerMove={handleResizePointerMove}
@@ -1546,7 +1543,7 @@ export default function GadgetEditor() {
 
         {/* ── RIGHT: App / Code / Connections tabs ───────────────────────────── */}
         <div
-          className={`flex flex-shrink-0 min-w-0 overflow-hidden bg-kumo-base ${workspaceTransitionClass}`}
+          className={`flex flex-shrink-0 min-w-0 overflow-hidden bg-background ${workspaceTransitionClass}`}
           style={{
             width: showFullEditor ? `calc(100% - ${chatWidth}px - 1px)` : 0,
             opacity: showFullEditor ? 1 : 0,
@@ -1554,7 +1551,7 @@ export default function GadgetEditor() {
         >
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <div
-            className="flex items-center gap-2 border-b border-kumo-line px-3 flex-shrink-0"
+            className="flex items-center gap-2 border-b border-border px-3 flex-shrink-0"
             style={{ height: TABBAR_H }}
           >
             <div className="flex min-w-0 flex-1 items-center overflow-hidden">
@@ -1576,7 +1573,7 @@ export default function GadgetEditor() {
             </div>
 
             <div className="flex flex-shrink-0 items-center gap-1.5">
-              <div className="flex items-center rounded-lg border border-kumo-line p-0.5">
+              <div className="flex items-center rounded-lg border border-border p-0.5">
                 {paneShowsActivity
                   ? ACTIVITY_TABS.map(tab => (
                     <PaneTab
@@ -1607,25 +1604,25 @@ export default function GadgetEditor() {
               )}
 
               {!paneShowsActivity && (
-                <WorkshopIconButton
+                <Button
                   aria-label="Enter full screen"
                   title={activeTab === 'app' && !previewMode
                     ? 'Full screen'
                     : `Full screen is available in ${formatOf(selectedGadgetSummary?.output).noun} view`}
                   onClick={enterGadgetFullscreen}
                   disabled={activeTab !== 'app' || previewMode}
-                >
+                 className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                   <ArrowsOutSimple size={17} />
-                </WorkshopIconButton>
+                </Button>
               )}
 
-              <WorkshopIconButton
+              <Button
                 aria-label={paneShowsActivity ? 'Close activity' : 'Close gadget pane'}
                 title="Close"
                 onClick={closeWorkspacePane}
-              >
+               className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                 <X size={16} />
-              </WorkshopIconButton>
+              </Button>
             </div>
           </div>
 
@@ -1650,7 +1647,7 @@ export default function GadgetEditor() {
                 activeTab !== 'app' || previewMode
                   ? 'hidden'
                   : isGadgetFullscreen
-                    ? 'fixed inset-0 z-20 bg-kumo-base outline-none'
+                    ? 'fixed inset-0 z-20 bg-background outline-none'
                     : 'h-full'
               }
             >
@@ -1674,8 +1671,8 @@ export default function GadgetEditor() {
                   aria-live="polite"
                   className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 transform"
                 >
-                  <div className="rounded-full border border-kumo-line bg-kumo-base/90 px-4 py-1.5 text-[13px] leading-[18px] text-kumo-default shadow-md backdrop-blur-sm">
-                    Press <kbd className="rounded border border-kumo-line bg-kumo-elevated px-1.5 py-0.5 text-[11px] font-medium">Esc</kbd> to exit full screen
+                  <div className="rounded-full border border-border bg-background/90 px-4 py-1.5 text-[13px] leading-[18px] text-foreground shadow-md backdrop-blur-sm">
+                    Press <kbd className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] font-medium">Esc</kbd> to exit full screen
                   </div>
                 </div>
               )}
@@ -1742,7 +1739,7 @@ export default function GadgetEditor() {
 
       {/* ═══ PREVIEW OVERLAY ══════════════════════════════════════════════════ */}
       {previewMode && (
-        <div className="absolute inset-x-0 bottom-0 bg-kumo-base z-10" style={{ top: TOPBAR_H }}>
+        <div className="absolute inset-x-0 bottom-0 bg-background z-10" style={{ top: TOPBAR_H }}>
           {selectedGadgetStub && (
             <GadgetUI
               key={selectedGadgetId}
@@ -1783,7 +1780,7 @@ export default function GadgetEditor() {
       <DeleteConfirmationDialog
         open={deleteDialogOpen}
         title="Delete workspace?"
-        description={<>This removes <span className="font-medium text-kumo-default">{metadata.title}</span>. You can&apos;t undo this.</>}
+        description={<>This removes <span className="font-medium text-foreground">{metadata.title}</span>. You can&apos;t undo this.</>}
         isDeleting={isDeleting}
         onOpenChange={setDeleteDialogOpen}
         onConfirm={handleDeleteConfirm}

@@ -1,9 +1,7 @@
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
-import { Dialog, DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
+import {useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { DotsThree, DownloadSimple, Pencil, Plus, Trash, X } from '@phosphor-icons/react'
 import DeleteConfirmationDialog from './components/DeleteConfirmationDialog'
-import { WorkshopButton, WorkshopIconButton, WorkshopInput } from './components/WorkshopControls'
-
+import { Dialog, DropdownMenu, useToast, DialogContent, DialogTitle, DialogDescription, DialogClose, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, Button, Input} from '@matser/ui'
 interface FileSidebarProps {
   files: string[]
   activeFile: string | null
@@ -54,16 +52,16 @@ export default function FileSidebar({
     openCreateModal: () => setIsCreateModalOpen(true),
   }), [])
 
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const handleCreateFile = () => {
     if (!newFileName.trim()) {
-      toasts.add({ title: 'Filename cannot be empty', variant: 'error' })
+      toasts.add({ title: 'Filename cannot be empty', type: 'error' })
       return
     }
 
     if (files.includes(newFileName.trim())) {
-      toasts.add({ title: 'A file with this name already exists', variant: 'error' })
+      toasts.add({ title: 'A file with this name already exists', type: 'error' })
       return
     }
 
@@ -88,7 +86,7 @@ export default function FileSidebar({
     }
 
     if (files.includes(trimmed)) {
-      toasts.add({ title: 'A file with this name already exists', variant: 'error' })
+      toasts.add({ title: 'A file with this name already exists', type: 'error' })
       return
     }
 
@@ -98,7 +96,7 @@ export default function FileSidebar({
 
   const startDelete = (filename: string) => {
     if (files.length <= 1) {
-      toasts.add({ title: 'Cannot delete the last remaining file', variant: 'error' })
+      toasts.add({ title: 'Cannot delete the last remaining file', type: 'error' })
       return
     }
     setDeletingFile(filename)
@@ -114,20 +112,20 @@ export default function FileSidebar({
   }
 
   return (
-    <div className="flex h-full w-[244px] flex-col border-r border-kumo-line bg-kumo-base">
+    <div className="flex h-full w-[244px] flex-col border-r border-border bg-background">
       <div className="flex h-9 shrink-0 items-center justify-between gap-2 px-3 pt-3 pb-2">
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-kumo-inactive">
+        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Files
         </span>
-        <WorkshopIconButton
+        <Button
           onClick={() => setIsCreateModalOpen(true)}
           disabled={editLocked}
           aria-label="New file"
           title="New file"
-          className="!h-6 !w-6 text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default"
-        >
+          className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-6 !w-6 text-muted-foreground hover:bg-muted hover:text-foreground"
+         variant="ghost" size="icon-sm">
           <Plus size={14} weight="bold" />
-        </WorkshopIconButton>
+        </Button>
       </div>
 
       <div className="flex-1 overflow-auto px-2 pb-3">
@@ -169,7 +167,7 @@ export default function FileSidebar({
         })}
       </div>
 
-      <Dialog.Root
+      <Dialog
         open={isCreateModalOpen}
         onOpenChange={(o) => {
           if (!o) {
@@ -178,34 +176,34 @@ export default function FileSidebar({
           }
         }}
       >
-        <Dialog
-          className="!z-[1000] !w-[min(420px,calc(100vw-32px))] overflow-hidden bg-kumo-base p-0 !top-[18%] !-translate-y-0"
+        <DialogContent
+          className="!z-[1000] !w-[min(420px,calc(100vw-32px))] overflow-hidden bg-background p-0 !top-[18%] !-translate-y-0"
           size="sm"
         >
-          <div className="flex items-start justify-between gap-4 border-b border-kumo-line px-5 py-4">
+          <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div className="min-w-0">
-              <Dialog.Title className="text-[15px] leading-5 font-medium tracking-[-0.3px] text-kumo-default">
+              <DialogTitle className="text-[15px] leading-5 font-medium tracking-[-0.3px] text-foreground">
                 New file
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+              </DialogTitle>
+              <DialogDescription className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                 Create a new file in this gadget.
-              </Dialog.Description>
+              </DialogDescription>
             </div>
-            <Dialog.Close
+            <DialogClose
               render={(props) => (
-                <WorkshopIconButton
+                <Button
                   {...props}
-                  className="!h-7 !w-7"
+                  className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-7 !w-7"
                   aria-label="Close"
-                >
+                 variant="ghost" size="icon-sm">
                   <X size={16} />
-                </WorkshopIconButton>
+                </Button>
               )}
             />
           </div>
 
           <div className="px-5 py-4">
-            <WorkshopInput
+            <Input
               ref={createInputRef}
               autoFocus
               placeholder="filename.ts"
@@ -221,31 +219,31 @@ export default function FileSidebar({
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
-              className="w-full font-mono"
+              className="!h-9 rounded-lg border border-border bg-background px-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/15 w-full font-mono"
             />
           </div>
 
-          <div className="flex items-center justify-end gap-2 border-t border-kumo-line bg-kumo-base px-5 py-3">
-            <Dialog.Close
+          <div className="flex items-center justify-end gap-2 border-t border-border bg-background px-5 py-3">
+            <DialogClose
               render={(props) => (
-                <WorkshopButton
+                <Button
                   {...props}
-                  className="!h-9"
-                >
+                  className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-9"
+                 variant="secondary">
                   Cancel
-                </WorkshopButton>
+                </Button>
               )}
             />
-            <WorkshopButton
-              tone="primary"
+            <Button
+
               onClick={handleCreateFile}
               disabled={!newFileName.trim()}
-            >
+             className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50" variant="primary">
               Create file
-            </WorkshopButton>
+            </Button>
           </div>
-        </Dialog>
-      </Dialog.Root>
+        </DialogContent>
+      </Dialog>
 
       <DeleteConfirmationDialog
         open={isDeleteModalOpen}
@@ -256,7 +254,7 @@ export default function FileSidebar({
           }
         }}
         title="Delete file?"
-        description={<>This removes <span className="font-mono text-kumo-default">{deletingFile}</span> from the gadget. You can&apos;t undo this.</>}
+        description={<>This removes <span className="font-mono text-foreground">{deletingFile}</span> from the gadget. You can&apos;t undo this.</>}
         onConfirm={confirmDelete}
       />
     </div>
@@ -324,10 +322,10 @@ function FileRow({
       className={[
         'group relative mb-[2px] flex h-7 items-center gap-2 rounded-md px-2 text-[13px] leading-[18px] tracking-[-0.2px] transition-[background-color,box-shadow,color,opacity] duration-150 ease-out',
         isRenaming
-          ? 'bg-kumo-base ring-1 ring-kumo-ring/40'
+          ? 'bg-background ring-1 ring-ring/40'
           : isActive
-            ? 'file-row-active cursor-pointer bg-kumo-recessed text-kumo-default font-medium'
-            : 'cursor-pointer text-kumo-default hover:bg-kumo-tint',
+            ? 'file-row-active cursor-pointer bg-muted text-foreground font-medium'
+            : 'cursor-pointer text-foreground hover:bg-muted',
         isUnchanged && !isRenaming ? 'opacity-50' : '',
       ].join(' ')}
       onClick={isRenaming ? undefined : onSelect}
@@ -366,12 +364,12 @@ function FileRow({
           autoCapitalize="off"
           autoCorrect="off"
           aria-label={`Rename ${filename}`}
-          className="min-w-0 flex-1 bg-transparent text-[13px] leading-[18px] tracking-[-0.2px] text-kumo-default outline-none placeholder:text-kumo-inactive"
+          className="min-w-0 flex-1 bg-transparent text-[13px] leading-[18px] tracking-[-0.2px] text-foreground outline-none placeholder:text-muted-foreground"
         />
       ) : (
         <button
           type="button"
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch bg-transparent p-0 text-left text-[13px] leading-[18px] tracking-[-0.2px] text-inherit outline-none focus-visible:ring-2 focus-visible:ring-kumo-ring focus-visible:ring-offset-1 focus-visible:ring-offset-kumo-base"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch bg-transparent p-0 text-left text-[13px] leading-[18px] tracking-[-0.2px] text-inherit outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           aria-current={isActive ? 'page' : undefined}
           onClick={(event) => {
             event.stopPropagation()
@@ -381,7 +379,7 @@ function FileRow({
           <span className="min-w-0 flex-1 truncate">{filename}</span>
           {isStreamingActive && (
             <span
-              className="h-1.5 w-1.5 shrink-0 rounded-full bg-kumo-success"
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-status-success"
               aria-label={`${filename} is being edited`}
               title="Agent is editing this file"
             />
@@ -391,48 +389,45 @@ function FileRow({
 
       {!isRenaming && !isDeleted && (
         <DropdownMenu>
-          <DropdownMenu.Trigger
+          <DropdownMenuTrigger
             render={(
-              <WorkshopIconButton
+              <Button
                 aria-label={`Actions for ${filename}`}
                 onClick={(event) => event.stopPropagation()}
-                className="!h-5 !w-5 text-kumo-inactive opacity-0 hover:bg-kumo-tint hover:text-kumo-default focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 data-[popup-open]:opacity-100"
-              >
+                className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-5 !w-5 text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 data-[popup-open]:opacity-100"
+               variant="ghost" size="icon-sm">
                 <DotsThree size={14} weight="bold" />
-              </WorkshopIconButton>
+              </Button>
             )}
           />
-          <DropdownMenu.Content
+          <DropdownMenuContent
             onClick={(event) => event.stopPropagation()}
-            className="themed-floating-shadow !z-[1100] !min-w-[144px] rounded-lg border border-kumo-line bg-kumo-base p-1"
+            className="themed-floating-shadow !z-[1100] !min-w-[144px] rounded-lg border border-border bg-background p-1"
           >
-            <DropdownMenu.Item
-              icon={<DownloadSimple size={12} className="mr-2" />}
+            <DropdownMenuItem
               onClick={onDownload}
-              className="!h-auto rounded-md !px-2.5 !py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-kumo-default transition-colors data-highlighted:bg-kumo-tint"
+              className="!h-auto rounded-md !px-2.5 !py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-foreground transition-colors data-highlighted:bg-muted"
             >
-              Download
-            </DropdownMenu.Item>
+              <DownloadSimple size={12} className="mr-2" />Download
+            </DropdownMenuItem>
             {!editLocked && (
               <>
-                <DropdownMenu.Item
-                  icon={<Pencil size={12} className="mr-2" />}
+                <DropdownMenuItem
                   onClick={onRename}
-                  className="!h-auto rounded-md !px-2.5 !py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-kumo-default transition-colors data-highlighted:bg-kumo-tint"
+                  className="!h-auto rounded-md !px-2.5 !py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-foreground transition-colors data-highlighted:bg-muted"
                 >
-                  Rename
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  icon={<Trash size={12} className="mr-2" />}
-                  variant="danger"
+                  <Pencil size={12} className="mr-2" />Rename
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
                   onClick={onDelete}
-                  className="!h-auto rounded-md !px-2.5 !py-1.5 text-[12px] leading-4 tracking-[-0.2px] transition-colors data-highlighted:bg-kumo-danger-tint"
+                  className="!h-auto rounded-md !px-2.5 !py-1.5 text-[12px] leading-4 tracking-[-0.2px] transition-colors data-highlighted:bg-destructive-muted"
                 >
-                  Delete
-                </DropdownMenu.Item>
+                  <Trash size={12} className="mr-2" />Delete
+                </DropdownMenuItem>
               </>
             )}
-          </DropdownMenu.Content>
+          </DropdownMenuContent>
         </DropdownMenu>
       )}
     </div>
@@ -440,10 +435,10 @@ function FileRow({
 }
 
 function getStatusDotClass(status: FileChangeStatus | undefined, isDirty: boolean): string | null {
-  if (isDirty) return 'bg-kumo-danger'
-  if (status === 'added') return 'bg-kumo-success'
-  if (status === 'deleted') return 'bg-kumo-danger'
-  if (status === 'modified') return 'bg-kumo-warning'
+  if (isDirty) return 'bg-destructive'
+  if (status === 'added') return 'bg-status-success'
+  if (status === 'deleted') return 'bg-destructive'
+  if (status === 'modified') return 'bg-status-warning'
   if (status === 'unchanged') return null
   return null
 }

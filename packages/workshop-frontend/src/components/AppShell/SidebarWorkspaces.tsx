@@ -9,14 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { Link } from '@tanstack/react-router'
-import {
-  ArrowRight,
-  CaretDown,
-  MagnifyingGlass,
-  Star,
-} from '@phosphor-icons/react'
 import { openCommandPalette } from './commandPaletteBus'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import {
   GadgetMetadataWithTimestamps,
@@ -27,7 +20,7 @@ import { useAuthenticatedApi } from '../../AuthContext'
 import ShareModal from '../../ShareModal'
 import DeleteConfirmationDialog from '../DeleteConfirmationDialog'
 import SidebarGadgetRow from './SidebarGadgetRow'
-
+import { Button, Icons, useToast } from '@matser/ui'
 // Cap on items shown in the Recent list before the user clicks through to /workspaces.
 const RECENT_INITIAL_LIMIT = 6
 
@@ -67,7 +60,7 @@ function useWorkspacesContext(): WorkspacesContextValue {
 // ─────────────────────────────────────────────────────────────────────────────
 export function SidebarWorkspacesProvider({ children }: { children: ReactNode }) {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [gadgets, setGadgets] = useState<GadgetMetadataWithTimestamps[]>([])
   const [gadgetsLoading, setGadgetsLoading] = useState(true)
@@ -146,7 +139,7 @@ export function SidebarWorkspacesProvider({ children }: { children: ReactNode })
     } catch (err) {
       console.error('Failed to toggle pin:', err)
       setGadgets((prev) => prev.map((x) => (x.id === g.id ? { ...x, pinned: g.pinned } : x)))
-      toasts.add({ title: 'Failed to update favorite', variant: 'error' })
+      toasts.add({ title: 'Failed to update favorite', type: 'error' })
     } finally {
       overseer[Symbol.dispose]()
     }
@@ -160,7 +153,7 @@ export function SidebarWorkspacesProvider({ children }: { children: ReactNode })
     } catch (err) {
       console.error('Failed to rename:', err)
       setGadgets((prev) => prev.map((x) => (x.id === g.id ? { ...x, title: g.title } : x)))
-      toasts.add({ title: 'Failed to rename workspace', variant: 'error' })
+      toasts.add({ title: 'Failed to rename workspace', type: 'error' })
     } finally {
       overseer[Symbol.dispose]()
     }
@@ -177,7 +170,7 @@ export function SidebarWorkspacesProvider({ children }: { children: ReactNode })
     } catch (err) {
       overseer?.[Symbol.dispose]()
       console.error('Failed to open workspace for sharing:', err)
-      toasts.add({ title: 'Failed to open share settings', variant: 'error' })
+      toasts.add({ title: 'Failed to open share settings', type: 'error' })
     }
   }, [authenticatedApi, toasts])
 
@@ -198,11 +191,11 @@ export function SidebarWorkspacesProvider({ children }: { children: ReactNode })
       setGadgets((prev) => prev.filter((x) => x.id !== deleteTarget.id))
       toasts.add({
         title: deleteTarget.owner ? 'Workspace removed' : 'Workspace deleted',
-        variant: 'success',
+        type: 'success',
       })
     } catch (err) {
       console.error('Failed to delete workspace:', err)
-      toasts.add({ title: 'Failed to delete workspace', variant: 'error' })
+      toasts.add({ title: 'Failed to delete workspace', type: 'error' })
     } finally {
       setIsDeleting(false)
       setDeleteTarget(null)
@@ -269,15 +262,17 @@ export function SidebarWorkspacesTools({ collapsed = false }: { collapsed?: bool
 
   return (
     <div className="flex flex-col items-center px-2">
-      <button
+      <Button
+        variant="ghost"
+        size="icon"
         type="button"
         onClick={() => openCommandPalette()}
         aria-label="Search"
         title="Search (⌘K)"
-        className="press flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-kumo-subtle transition-colors hover:bg-kumo-tint hover:text-kumo-default"
+        className="press flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
-        <MagnifyingGlass size={15} />
-      </button>
+        <Icons.Search size={15} />
+      </Button>
     </div>
   )
 }
@@ -331,10 +326,10 @@ export function SidebarWorkspacesLists({ collapsed = false }: { collapsed?: bool
         count={favorites.length}
         open={favOpen}
         onToggle={() => setFavOpen((o) => !o)}
-        icon={<Star size={12} weight="regular" className="text-kumo-inactive" />}
+        icon={<Icons.Star size={12} className="text-muted-foreground" />}
       >
         {favorites.length === 0 ? (
-          <p className="px-2.5 py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-kumo-inactive">
+          <p className="px-2.5 py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-muted-foreground">
             Favorite a workspace to keep it here.
           </p>
         ) : (
@@ -362,11 +357,11 @@ export function SidebarWorkspacesLists({ collapsed = false }: { collapsed?: bool
         {gadgetsLoading ? (
           <div className="flex flex-col gap-1 px-1">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-7 rounded-md bg-kumo-elevated animate-pulse" />
+              <div key={i} className="h-7 rounded-md bg-card animate-pulse" />
             ))}
           </div>
         ) : recent.length === 0 ? (
-          <p className="px-2.5 py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-kumo-inactive">
+          <p className="px-2.5 py-1.5 text-[12px] leading-4 tracking-[-0.2px] text-muted-foreground">
             {search ? 'No matches.' : 'No workspaces yet.'}
           </p>
         ) : (
@@ -385,10 +380,10 @@ export function SidebarWorkspacesLists({ collapsed = false }: { collapsed?: bool
             </div>
             <Link
               to="/workspaces"
-              className="mt-0.5 flex h-7 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium tracking-[-0.2px] text-kumo-subtle transition-colors hover:bg-kumo-tint hover:text-kumo-default"
+              className="mt-0.5 flex h-7 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium tracking-[-0.2px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               {recentHidden > 0 ? `Show all (${recent.length})` : 'Show all'}
-              <ArrowRight size={11} weight="bold" />
+              <Icons.ArrowRight size={11} />
             </Link>
           </>
         )}
@@ -415,20 +410,21 @@ function SidebarSection({
 }) {
   return (
     <div className="mt-3 flex flex-col px-2">
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         type="button"
         onClick={onToggle}
-        className="flex h-6 cursor-pointer items-center gap-1 px-1.5 text-[11px] font-medium uppercase tracking-[0.06em] text-kumo-inactive transition-colors hover:text-kumo-subtle"
+        className="flex h-6 cursor-pointer items-center justify-start gap-1 px-1.5 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground transition-colors hover:text-muted-foreground"
       >
-        <CaretDown
+        <Icons.ChevronDown
           size={10}
-          weight="bold"
           className={['transition-transform', open ? '' : '-rotate-90'].join(' ')}
         />
         {icon}
         <span>{label}</span>
-        {count !== undefined && <span className="ml-1 text-kumo-inactive">{count}</span>}
-      </button>
+        {count !== undefined && <span className="ml-1 text-muted-foreground">{count}</span>}
+      </Button>
       {open && <div className="mt-0.5">{children}</div>}
     </div>
   )

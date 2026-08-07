@@ -97,8 +97,8 @@ export function BindingBadge({
   }
 
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-kumo-fill px-2 py-[3px] text-[11px] font-medium leading-none tracking-[-0.1px] text-kumo-subtle">
-      <span className="flex items-center text-kumo-inactive">{icon}</span>
+    <span className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-[3px] text-[11px] font-medium leading-none tracking-[-0.1px] text-muted-foreground">
+      <span className="flex items-center text-muted-foreground">{icon}</span>
       {vendorDescription?.displayName ?? badge.label}
     </span>
   );
@@ -118,19 +118,19 @@ export function BlueprintCard({
   const badges = uniqueBindingBadges(metadata.bindings);
 
   return (
-    <div className="themed-card-hover-shadow group relative isolate flex min-h-[150px] flex-col overflow-hidden rounded-2xl border border-kumo-line bg-kumo-base text-left transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-kumo-fill active:scale-[0.995]">
+    <div className="themed-card-hover-shadow group relative isolate flex min-h-[150px] flex-col overflow-hidden rounded-2xl border border-border bg-background text-left transition-[border-color,transform,box-shadow] duration-150 ease-out hover:-translate-y-px hover:border-accent active:scale-[0.995]">
       {featured && (
         <Star
           size={72}
           weight="fill"
-          className="pointer-events-none absolute -right-4 -top-4 text-kumo-brand/10"
+          className="pointer-events-none absolute -right-4 -top-4 text-primary/10"
         />
       )}
       <Link
         to="/blueprint/$id"
         params={{ id }}
         aria-label={`Open blueprint ${metadata.title}`}
-        className="absolute inset-0 z-10 rounded-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-brand"
+        className="absolute inset-0 z-10 rounded-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       />
       <div className="pointer-events-none relative z-20 flex flex-1 flex-col p-4">
         <div className="flex items-start gap-3">
@@ -140,10 +140,10 @@ export function BlueprintCard({
             <Hexagon size={16} className="text-white/75" weight="bold" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="m-0 line-clamp-2 text-[15px] leading-5 font-medium tracking-[-0.25px] text-kumo-default">
+            <p className="m-0 line-clamp-2 text-[15px] leading-5 font-medium tracking-[-0.25px] text-foreground">
               {metadata.title}
             </p>
-            <p className={`mt-1.5 line-clamp-2 min-h-8 text-[12px] leading-4 font-normal tracking-[-0.2px] ${metadata.description ? "text-kumo-subtle" : "text-kumo-inactive italic"}`}>
+            <p className={`mt-1.5 line-clamp-2 min-h-8 text-[12px] leading-4 font-normal tracking-[-0.2px] ${metadata.description ? "text-muted-foreground" : "text-muted-foreground italic"}`}>
               {metadata.description || "No description"}
             </p>
           </div>

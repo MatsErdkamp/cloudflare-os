@@ -87,13 +87,20 @@ const gatekeepers = findGatekeepers(PACKAGES_DIR);
 const CONTEXT_GATEKEEPER_NAME = "gatekeeper-context";
 
 // Rebuild each gatekeeper's generated UI (src/generated/*) on source change so edits show up on
-// reload; wrangler dev's `watch_dir: src` then re-bundles the worker.
+// reload; wrangler dev's `watch_dir: src` then re-bundles the worker. `run-local` intentionally
+// serves a pre-built snapshot, so persistent UI watchers there add thousands of file descriptors
+// without providing hot reload and can prevent the fresh server from starting.
 const devWatchers = [];
 let stoppingDevWatchers = false;
 
 // Spawn a persistent watcher.
 function spawnDevWatcher(label, command, args) {
-  const watcher = spawn(command, args, { stdio: "inherit", cwd: ROOT });
+  const watcher = spawn(command, args, {
+    stdio: "inherit",
+    cwd: ROOT,
+    // Give each watcher its own process group so shutdown also reaches pnpm/Vite grandchildren.
+    detached: process.platform !== "win32",
+  });
   watcher.on("exit", (code, signal) => {
     if (stoppingDevWatchers) return;
     console.error(`${label} exited unexpectedly (code=${code}, signal=${signal}).`);
@@ -106,24 +113,38 @@ for (const gk of gatekeepers) {
   if (existsSync(join(gk.dir, "src", "configurator"))) {
     const script = join(ROOT, "scripts", "build-gatekeeper-configurator.mjs");
     execFileSync(process.execPath, [script, gk.dir, "--quiet"], { stdio: "inherit", cwd: ROOT });
-    spawnDevWatcher(
-      `configurator UI watcher for ${gk.name}`,
-      process.execPath,
-      [script, gk.dir, "--watch", "--quiet"],
-    );
+    if (!serveFrontendAssets) {
+      spawnDevWatcher(
+        `configurator UI watcher for ${gk.name}`,
+        process.execPath,
+        [script, gk.dir, "--watch", "--quiet"],
+      );
+    }
   }
 
   // Single-file app UI (Vite bundle written to src/generated/app.txt by build-app.mjs).
   if (existsSync(join(gk.dir, "build-app.mjs"))) {
     const script = join(gk.dir, "build-app.mjs");
     execFileSync(process.execPath, [script], { stdio: "inherit", cwd: gk.dir });
-    spawnDevWatcher(`app UI watcher for ${gk.name}`, process.execPath, [script, "--watch"]);
+    if (!serveFrontendAssets) {
+      spawnDevWatcher(`app UI watcher for ${gk.name}`, process.execPath, [script, "--watch"]);
+    }
   }
 }
 
 function stopDevWatchers() {
   stoppingDevWatchers = true;
-  for (const watcher of devWatchers) watcher.kill();
+  for (const watcher of devWatchers) {
+    if (watcher.exitCode !== null || watcher.signalCode !== null) continue;
+    if (process.platform === "win32") watcher.kill();
+    else {
+      try {
+        process.kill(-watcher.pid, "SIGTERM");
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+    }
+  }
 }
 
 process.on("exit", stopDevWatchers);

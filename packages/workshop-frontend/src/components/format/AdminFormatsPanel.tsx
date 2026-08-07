@@ -8,7 +8,6 @@
 // plural and icon, and clearing an override falls back to it.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Button, DropdownMenu, Input, Switch, useKumoToastManager } from '@cloudflare/kumo'
 import { ArrowDown, ArrowUp, CaretDown, CaretRight, Plus, Sparkle, Trash, Warning } from '@phosphor-icons/react'
 import type {
   AdminApi,
@@ -22,7 +21,7 @@ import { useAuthenticatedApi } from '../../AuthContext'
 import { MENU_CONTENT } from '../menuStyles'
 import { FORMAT_ICONS, GENERIC_OUTPUT } from './formats'
 import { FormatGlyph, FormatPreview } from './FormatVisuals'
-
+import { Button, DropdownMenu, Input, Switch, useToast, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@matser/ui'
 // A blueprint the admin could promote. `declared` is what it says it produces, when we know --
 // known for the deployment's featured blueprints, unknown for the admin's own published ones.
 type Promotable = { id: string; title: string; declared?: BlueprintOutput }
@@ -39,7 +38,7 @@ export default function AdminFormatsPanel({
   onChanged: () => Promise<void>
 }) {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const [busy, setBusy] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [candidates, setCandidates] = useState<Promotable[]>([])
@@ -78,7 +77,7 @@ export default function AdminFormatsPanel({
       await onChanged()
     } catch (err) {
       console.error('Format update failed:', err)
-      toasts.add({ title: "Couldn't update standard formats", variant: 'error' })
+      toasts.add({ title: "Couldn't update standard formats", type: 'error' })
     } finally {
       setBusy(false)
     }
@@ -93,9 +92,9 @@ export default function AdminFormatsPanel({
   }
 
   return (
-    <div className="rounded-xl border border-kumo-line bg-kumo-elevated p-6">
-      <h2 className="mb-1 text-lg font-semibold text-kumo-strong">Standard formats</h2>
-      <p className="mb-5 text-sm text-kumo-subtle">
+    <div className="rounded-xl border border-border bg-card p-6">
+      <h2 className="mb-1 text-lg font-semibold text-foreground">Standard formats</h2>
+      <p className="mb-5 text-sm text-muted-foreground">
         A promoted blueprint is offered by name (“New Doc”, “New Slides”) wherever people start
         something, and the agent is told to prefer it over building the same thing from scratch.
       </p>
@@ -126,7 +125,7 @@ export default function AdminFormatsPanel({
       )}
 
       <DropdownMenu>
-        <DropdownMenu.Trigger
+        <DropdownMenuTrigger
           render={
             <Button variant="secondary" disabled={busy || available.length === 0}>
               <Plus size={14} className="mr-1.5" />
@@ -134,30 +133,30 @@ export default function AdminFormatsPanel({
             </Button>
           }
         />
-        <DropdownMenu.Content className={MENU_CONTENT}>
-          <p className="px-2 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-[0.06em] text-kumo-inactive">
+        <DropdownMenuContent className={MENU_CONTENT}>
+          <p className="px-2 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
             Offer as a standard format
           </p>
           {available.map((candidate) => (
-            <DropdownMenu.Item
+            <DropdownMenuItem
               key={candidate.id}
-              className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-kumo-tint"
+              className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-muted"
               onClick={() => mutate(() => admin.promoteFormat(candidate.id))}
             >
-              <FormatGlyph output={candidate.declared} size="lg" className="shrink-0 text-kumo-subtle" />
+              <FormatGlyph output={candidate.declared} size="lg" className="shrink-0 text-muted-foreground" />
               <span className="min-w-0">
-                <span className="block truncate text-[13px] text-kumo-default">
+                <span className="block truncate text-[13px] text-foreground">
                   {candidate.title || 'Untitled blueprint'}
                 </span>
-                <span className="block truncate text-[11px] text-kumo-inactive">
+                <span className="block truncate text-[11px] text-muted-foreground">
                   {candidate.declared
                     ? `Produces ${candidate.declared.plural}`
                     : 'No declared format. You’ll name it.'}
                 </span>
               </span>
-            </DropdownMenu.Item>
+            </DropdownMenuItem>
           ))}
-        </DropdownMenu.Content>
+        </DropdownMenuContent>
       </DropdownMenu>
     </div>
   )
@@ -166,12 +165,12 @@ export default function AdminFormatsPanel({
 // What users will actually get, drawn with the same components the real surfaces use.
 function PreviewStrip({ formats }: { formats: AdminFormat[] }) {
   return (
-    <div className="mb-5 rounded-lg border border-dashed border-kumo-line bg-kumo-tint/40 p-4">
-      <p className="mb-2.5 text-[11px] font-medium uppercase tracking-[0.06em] text-kumo-inactive">
+    <div className="mb-5 rounded-lg border border-dashed border-border bg-muted/40 p-4">
+      <p className="mb-2.5 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
         What people will see
       </p>
       {formats.length === 0 ? (
-        <p className="text-[13px] italic text-kumo-inactive">
+        <p className="text-[13px] italic text-muted-foreground">
           Nothing yet. People will only see “New workspace”.
         </p>
       ) : (
@@ -179,15 +178,15 @@ function PreviewStrip({ formats }: { formats: AdminFormat[] }) {
           {formats.map((format) => (
             <span
               key={format.blueprintId}
-              className="flex items-center gap-2 rounded-full border border-kumo-line bg-kumo-base px-3.5 py-2 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-default"
+              className="flex items-center gap-2 rounded-full border border-border bg-background px-3.5 py-2 text-[13px] leading-[18px] tracking-[-0.25px] text-foreground"
             >
-              <FormatGlyph output={format.output} size="md" className="text-kumo-subtle" />
+              <FormatGlyph output={format.output} size="md" className="text-muted-foreground" />
               New {format.output!.noun}
             </span>
           ))}
         </div>
       )}
-      <p className="mt-2.5 text-[12px] leading-4 text-kumo-subtle">
+      <p className="mt-2.5 text-[12px] leading-4 text-muted-foreground">
         In the composer’s + menu, the command palette, and on an empty Outputs page, in this order.
       </p>
     </div>
@@ -196,9 +195,9 @@ function PreviewStrip({ formats }: { formats: AdminFormat[] }) {
 
 function EmptyState() {
   return (
-    <div className="mb-5 rounded-lg border border-kumo-line bg-kumo-base px-4 py-5 text-center">
-      <p className="text-sm font-medium text-kumo-default">No standard formats yet</p>
-      <p className="mx-auto mt-1 max-w-md text-[13px] leading-[18px] text-kumo-subtle">
+    <div className="mb-5 rounded-lg border border-border bg-background px-4 py-5 text-center">
+      <p className="text-sm font-medium text-foreground">No standard formats yet</p>
+      <p className="mx-auto mt-1 max-w-md text-[13px] leading-[18px] text-muted-foreground">
         Promote a blueprint to offer it by name wherever people start something, and to have the
         agent prefer it over building the same thing from scratch.
       </p>
@@ -230,7 +229,7 @@ function FormatRow({
   const needsNaming = !format.missing && !format.output
 
   return (
-    <div className="group rounded-lg border border-kumo-line bg-kumo-base">
+    <div className="group rounded-lg border border-border bg-background">
       <div className="flex items-center gap-3 p-3">
         <button
           type="button"
@@ -240,27 +239,27 @@ function FormatRow({
         >
           {format.missing ? (
             <span
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-kumo-tint text-kumo-danger"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-destructive"
               title="This blueprint no longer exists"
             >
               <Warning size={16} />
             </span>
           ) : (
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-kumo-fill text-kumo-subtle">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-accent text-muted-foreground">
               <FormatGlyph output={format.output} size="lg" />
             </span>
           )}
 
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-2">
-              <span className="truncate text-sm font-medium text-kumo-default">
+              <span className="truncate text-sm font-medium text-foreground">
                 {format.output ? `New ${format.output.noun}` : format.blueprintTitle || format.blueprintId}
               </span>
               {format.bundled && <Badge>Bundled</Badge>}
               {!format.enabled && !format.missing && <Badge>Off</Badge>}
               {needsNaming && <Badge tone="warn">Needs a name</Badge>}
             </span>
-            <span className="mt-0.5 block truncate text-xs text-kumo-subtle">
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
               {format.missing
                 ? 'Blueprint deleted. Remove this entry.'
                 : needsNaming
@@ -269,7 +268,7 @@ function FormatRow({
             </span>
           </span>
 
-          <span className="shrink-0 text-kumo-inactive">
+          <span className="shrink-0 text-muted-foreground">
             {open ? <CaretDown size={13} /> : <CaretRight size={13} />}
           </span>
         </button>
@@ -297,9 +296,9 @@ function FormatRow({
       </div>
 
       {open && (
-        <div className="flex flex-col gap-4 border-t border-kumo-line px-3 py-4">
+        <div className="flex flex-col gap-4 border-t border-border px-3 py-4">
           {format.missing ? (
-            <p className="text-[13px] text-kumo-subtle">
+            <p className="text-[13px] text-muted-foreground">
               The blueprint behind this format was deleted, so nobody is offered it. Remove the
               entry.
             </p>
@@ -351,7 +350,7 @@ function FormatRow({
                       the Outputs page, and that shouldn't be discovered there. */}
                   <figure className="hidden shrink-0 flex-col items-center gap-1.5 sm:flex">
                     <FormatPreview output={format.output} width={112} />
-                    <figcaption className="text-[10px] uppercase tracking-[0.06em] text-kumo-inactive">
+                    <figcaption className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
                       On Outputs
                     </figcaption>
                   </figure>
@@ -373,7 +372,7 @@ function FormatRow({
                     only its last line, and showing the label alone made an empty hint look like the
                     agent had been told nothing. Mirrors #listStandardFormats in overseer.ts. */}
                 {format.output && (
-                  <p className="mt-2 flex items-start gap-1.5 rounded-md bg-kumo-tint/60 px-2.5 py-2 font-mono text-[11px] leading-4 text-kumo-subtle">
+                  <p className="mt-2 flex items-start gap-1.5 rounded-md bg-muted/60 px-2.5 py-2 font-mono text-[11px] leading-4 text-muted-foreground">
                     <Sparkle size={12} className="mt-0.5 shrink-0" />
                     <span className="min-w-0">
                       <span className="block">
@@ -381,7 +380,7 @@ function FormatRow({
                         {format.agentHint ? ` -- ${format.agentHint}` : ''}
                       </span>
                       {format.blueprintDescription && (
-                        <span className="mt-0.5 block text-kumo-inactive">
+                        <span className="mt-0.5 block text-muted-foreground">
                           {format.blueprintDescription}
                         </span>
                       )}
@@ -394,8 +393,8 @@ function FormatRow({
                   withdrawing it is the switch above, which keeps the name, hint and position for
                   when it comes back. Removing would discard all three to reach the same visible
                   result. The backend refuses it too -- this is an RPC. */}
-              <div className="flex items-end justify-between gap-4 border-t border-kumo-line pt-3">
-                <p className="text-[12px] leading-4 text-kumo-subtle">
+              <div className="flex items-end justify-between gap-4 border-t border-border pt-3">
+                <p className="text-[12px] leading-4 text-muted-foreground">
                   {(format.enabled
                     ? 'Turning this off removes it from the menus above and from the agent’s catalog. Outputs already made from it keep working. '
                     : 'Currently hidden from the menus above and from the agent’s catalog. ') +
@@ -438,8 +437,8 @@ function Fieldset({
 }) {
   return (
     <div>
-      <p className="text-[13px] font-medium text-kumo-default">{title}</p>
-      <p className="mb-2 mt-0.5 text-[12px] leading-4 text-kumo-subtle">{detail}</p>
+      <p className="text-[13px] font-medium text-foreground">{title}</p>
+      <p className="mb-2 mt-0.5 text-[12px] leading-4 text-muted-foreground">{detail}</p>
       {children}
     </div>
   )
@@ -449,7 +448,7 @@ function Badge({ children, tone = 'neutral' }: { children: React.ReactNode; tone
   return (
     <span
       className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ${
-        tone === 'warn' ? 'bg-kumo-danger/10 text-kumo-danger' : 'bg-kumo-fill text-kumo-subtle'
+        tone === 'warn' ? 'bg-destructive/10 text-destructive' : 'bg-accent text-muted-foreground'
       }`}
     >
       {children}
@@ -488,10 +487,10 @@ function OverrideField({
 
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-kumo-inactive">
+      <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
         {label}
         {overridden && (
-          <span className="ml-1 normal-case tracking-normal text-kumo-subtle">(overridden)</span>
+          <span className="ml-1 normal-case tracking-normal text-muted-foreground">(overridden)</span>
         )}
       </span>
       <Input
@@ -524,23 +523,23 @@ function IconPicker({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-kumo-inactive">
+      <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
         Icon
       </span>
       <DropdownMenu>
-        <DropdownMenu.Trigger
+        <DropdownMenuTrigger
           render={
             <button
               type="button"
               disabled={disabled}
               aria-label="Choose icon"
-              className="grid h-9 w-9 cursor-pointer place-items-center rounded-lg border border-kumo-line bg-kumo-base text-kumo-subtle transition-colors hover:text-kumo-default disabled:cursor-default"
+              className="grid h-9 w-9 cursor-pointer place-items-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default"
             >
               <FormatGlyph output={selected && { ...GENERIC_OUTPUT, icon: selected }} size="lg" />
             </button>
           }
         />
-        <DropdownMenu.Content className={MENU_CONTENT}>
+        <DropdownMenuContent className={MENU_CONTENT}>
           <div className="grid grid-cols-5 gap-1 p-1">
             {OUTPUT_ICONS.map((icon) => {
               const Icon = FORMAT_ICONS[icon]
@@ -552,7 +551,7 @@ function IconPicker({
                   aria-label={icon}
                   onClick={() => onPick(icon === declaredIcon ? null : icon)}
                   className={`grid h-8 w-8 cursor-pointer place-items-center rounded-md transition-colors ${
-                    active ? 'bg-kumo-fill text-kumo-strong' : 'text-kumo-subtle hover:bg-kumo-tint'
+                    active ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-muted'
                   }`}
                 >
                   <Icon size={16} />
@@ -560,7 +559,7 @@ function IconPicker({
               )
             })}
           </div>
-        </DropdownMenu.Content>
+        </DropdownMenuContent>
       </DropdownMenu>
     </label>
   )
@@ -584,7 +583,7 @@ function IconButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className="grid h-7 w-7 cursor-pointer place-items-center rounded-md text-kumo-subtle transition-colors hover:bg-kumo-fill hover:text-kumo-default disabled:cursor-default disabled:opacity-40"
+      className="grid h-7 w-7 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-40"
     >
       {children}
     </button>

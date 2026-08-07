@@ -24,17 +24,17 @@
   word-wrap: break-word;
   overflow-wrap: break-word;
   box-sizing: border-box;
-  color: var(--text-color-kumo-default);
+  color: var(--color-foreground);
 }
-.disabled { color: var(--text-color-kumo-inactive); }
+.disabled { color: var(--color-muted-foreground); }
 
 .textarea {
   color: transparent;
   -webkit-text-fill-color: transparent;
-  caret-color: var(--text-color-kumo-default);
+  caret-color: var(--color-foreground);
 }
 .textarea::placeholder {
-  -webkit-text-fill-color: var(--text-color-kumo-inactive);
+  -webkit-text-fill-color: var(--color-muted-foreground);
 }
 /* Translucent, with still-transparent text, so the mirror's glyphs stay legible through it. */
 .textarea::selection {
@@ -46,7 +46,7 @@
 /* A brand-colored title led by the vendor logo, painted into the em space the token starts with (see
  * CAPSULE_LOGO_SLOT) so it costs no layout. Width-only sizing keeps non-square logos in aspect. */
 .capsule {
-  color: var(--color-kumo-brand);
+  color: var(--color-primary);
   background-repeat: no-repeat;
   background-position: left 0.12em center;
   background-size: 0.9em auto;
@@ -54,15 +54,15 @@
 
 /* A resolved slash command stays exactly as typed; only its color marks it as resolved. */
 .command {
-  color: var(--color-kumo-brand);
+  color: var(--color-primary);
 }
 
 /* The same quiet fill as a hovered Approve/Deny button, so a token reads as one object. The 1px
  * spread stands in for a chip's padding, which would shift the glyphs out of step with the
  * textarea. */
 .hovered {
-  background-color: var(--color-kumo-tint);
-  box-shadow: 0 0 0 1px var(--color-kumo-tint);
+  background-color: var(--color-muted);
+  box-shadow: 0 0 0 1px var(--color-muted);
   border-radius: 4px;
   transition: background-color 120ms ease, box-shadow 120ms ease;
 }

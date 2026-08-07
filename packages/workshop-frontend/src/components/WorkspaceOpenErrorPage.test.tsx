@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /* eslint-disable react/react-in-jsx-scope */
 
-import { act, type ReactNode } from 'react'
+import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createOpenGadgetError, OPEN_GADGET_ERROR_CODES } from '@gadgets/workshop-shared/api'
@@ -14,12 +14,6 @@ afterAll(() => {
   if (previousActEnvironment === undefined) delete testGlobal.IS_REACT_ACT_ENVIRONMENT
   else testGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
 })
-
-vi.mock('./WorkshopControls', () => ({
-  WorkshopButton: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => (
-    <button type="button" onClick={onClick}>{children}</button>
-  ),
-}))
 
 describe('WorkspaceOpenErrorPage', () => {
   let root: Root | undefined

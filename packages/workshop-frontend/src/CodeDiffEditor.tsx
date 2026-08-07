@@ -396,15 +396,15 @@ export default function CodeDiffEditor({
   const layoutButtonClass = (active: boolean, disabled = false) => (
     `inline-flex h-[22px] w-[22px] items-center justify-center rounded-md border transition-colors ${
       active
-        ? 'border-transparent bg-transparent text-kumo-brand'
-        : 'border-transparent text-kumo-subtle hover:bg-kumo-tint hover:text-kumo-default'
-    } ${disabled ? 'cursor-not-allowed opacity-35 hover:bg-transparent hover:text-kumo-subtle' : 'cursor-pointer'}`
+        ? 'border-transparent bg-transparent text-primary'
+        : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
+    } ${disabled ? 'cursor-not-allowed opacity-35 hover:bg-transparent hover:text-muted-foreground' : 'cursor-pointer'}`
   )
 
   if (!filename || (!originalYText && !modifiedYText)) {
     return (
       <div
-        className="flex items-center justify-center bg-kumo-base text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle"
+        className="flex items-center justify-center bg-background text-[13px] leading-[18px] tracking-[-0.25px] text-muted-foreground"
         style={{ height }}
       >
         {!filename ? 'Select a file to view changes' : 'Loading diff...'}
@@ -413,13 +413,13 @@ export default function CodeDiffEditor({
   }
 
   return (
-    <div ref={containerRef} className="flex min-h-0 overflow-hidden bg-kumo-base" style={{ height }}>
+    <div ref={containerRef} className="flex min-h-0 overflow-hidden bg-background" style={{ height }}>
       <div
-        className="gadgets-diff-surface relative m-4 min-h-0 flex-1 overflow-hidden rounded-[10px] border border-kumo-line bg-kumo-base"
+        className="gadgets-diff-surface relative m-4 min-h-0 flex-1 overflow-hidden rounded-[10px] border border-border bg-background"
         style={{ isolation: 'isolate' }}
       >
         <div className="absolute right-3 top-3 flex items-center gap-2" style={{ zIndex: 1 }}>
-          <div className="flex h-7 items-center gap-0.5 rounded-lg border border-kumo-line bg-kumo-base px-0.5 shadow-sm">
+          <div className="flex h-7 items-center gap-0.5 rounded-lg border border-border bg-background px-0.5 shadow-sm">
             <button
               type="button"
               className={layoutButtonClass(diffLayoutPreference === 'stacked')}
@@ -443,14 +443,14 @@ export default function CodeDiffEditor({
             </button>
           </div>
           <div
-            className="pointer-events-none flex h-7 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-2 font-mono text-[11px] leading-4 tracking-[-0.2px] shadow-sm"
+            className="pointer-events-none flex h-7 items-center gap-2 rounded-lg border border-border bg-background px-2 font-mono text-[11px] leading-4 tracking-[-0.2px] shadow-sm"
             style={{ fontFamily: monoFont }}
           >
             {model.status !== 'Modified' && (
-              <span className="text-[10px] font-medium text-kumo-subtle">{model.status}</span>
+              <span className="text-[10px] font-medium text-muted-foreground">{model.status}</span>
             )}
-            <span className="text-kumo-danger">-{model.deletions}</span>
-            <span className="text-kumo-success">+{model.additions}</span>
+            <span className="text-destructive">-{model.deletions}</span>
+            <span className="text-status-success">+{model.additions}</span>
           </div>
         </div>
 
@@ -477,7 +477,7 @@ export default function CodeDiffEditor({
               />
             </div>
           )}
-          {splitDiff && <div key="divider" className="w-px flex-shrink-0 bg-kumo-line" />}
+          {splitDiff && <div key="divider" className="w-px flex-shrink-0 bg-border" />}
           <div key="modified" className={splitDiff ? 'min-w-0 flex-1' : 'h-full min-w-0'}>
             <Editor
               height="100%"

@@ -220,7 +220,7 @@ export function useSlashCommandPicker({
   let popup = open && layout ? createPortal(
     <div
       ref={popupRef}
-      className="themed-floating-shadow fixed z-[1000] flex flex-col overflow-hidden rounded-lg border border-kumo-line bg-kumo-base"
+      className="themed-floating-shadow fixed z-[1000] flex flex-col overflow-hidden rounded-lg border border-border bg-background"
       style={{
         left: layout.left,
         top: layout.top,
@@ -255,15 +255,15 @@ export function useSlashCommandPicker({
                 choice.description,
                 [choice.providerLabel, choice.resourceLabel].filter(Boolean).join(" · "),
               ].join("\n")}
-              className={`${PICKER_ROW} w-full text-left text-[13px] leading-[18px] tracking-[-0.25px] disabled:cursor-wait disabled:opacity-60 ${optionIndex === index ? `${PICKER_ROW_ACTIVE} text-kumo-strong` : "text-kumo-default"}`}
+              className={`${PICKER_ROW} w-full text-left text-[13px] leading-[18px] tracking-[-0.25px] disabled:cursor-wait disabled:opacity-60 ${optionIndex === index ? `${PICKER_ROW_ACTIVE} text-foreground` : "text-foreground"}`}
               onMouseMove={() => setIndex(optionIndex)}
               onClick={() => select(choice)}
             >
               <span className="max-w-[45%] shrink-0 truncate">
-                <span className="text-kumo-inactive">/</span>{choice.name}
+                <span className="text-muted-foreground">/</span>{choice.name}
               </span>
-              <span className="min-w-0 flex-1 truncate text-kumo-subtle">{choice.description}</span>
-              <span className="max-w-[30%] shrink-0 truncate text-[11.5px] leading-4 text-kumo-inactive">
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">{choice.description}</span>
+              <span className="max-w-[30%] shrink-0 truncate text-[11.5px] leading-4 text-muted-foreground">
                 {choice.providerLabel}
               </span>
               {optionIndex === index && selectable && <TabHint />}

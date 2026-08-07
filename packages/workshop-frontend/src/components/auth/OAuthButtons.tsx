@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { RpcStub } from 'capnweb'
 import { PublicApi, AuthVendorInfo } from '@gadgets/workshop-shared/api'
-import { Button, Banner } from '@cloudflare/kumo'
-
+import { Button, Banner } from '@matser/ui'
 interface OAuthButtonsProps {
   rpcStub: RpcStub<PublicApi>
   vendors: AuthVendorInfo[]
@@ -93,7 +92,7 @@ export default function OAuthButtons({ rpcStub, vendors, onSuccess }: OAuthButto
 
   return (
     <div className="space-y-3">
-      {error && <Banner variant="error" title={error} />}
+      {error && <Banner variant="destructive" title={error} />}
       {vendors.map((vendor) => (
         <Button
           key={vendor.vendorId}

@@ -1,5 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
-import { Dialog, Select, Loader, Text, useKumoToastManager } from '@cloudflare/kumo'
+import {useState, useEffect, useRef } from 'react'
 import { Warning, Plus, ArrowClockwise, CheckCircle } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget } from 'capnweb'
 import {
@@ -9,9 +8,8 @@ import {
   ObserverAccountChoice,
 } from '@gadgets/workshop-shared/api'
 import { AccountDescription, VendorDescription, SupportedResource } from '@gadgets/workshop-shared/gatekeeper'
-import { WorkshopButton } from './components/WorkshopControls'
 import Avatar from './components/Avatar'
-
+import { Dialog, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Spinner, Text, useToast, DialogContent, DialogTitle, Button } from '@matser/ui'
 // Shown when a non-owner opens a shared Gadget that reads data through one or more gatekeeper
 // bindings, and they haven't yet chosen which of their own connected accounts to use for each one.
 // Each chosen account's owner is verified (server-side, via the gatekeeper) to actually have access
@@ -49,7 +47,7 @@ export default function ObserverConfigModal({
   onConfirm,
   onCancel,
 }: ObserverConfigModalProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [accounts, setAccounts] = useState<Map<number, AccountInfo>>(new Map())
   const [ready, setReady] = useState(false)
@@ -116,7 +114,7 @@ export default function ObserverConfigModal({
       })
       .catch(err => {
         console.error('Failed to subscribe to connected accounts:', err)
-        toasts.add({ title: 'Failed to load your connected accounts', variant: 'error' })
+        toasts.add({ title: 'Failed to load your connected accounts', type: 'error' })
       })
 
     return () => {
@@ -188,7 +186,7 @@ export default function ObserverConfigModal({
       }
     } catch (err) {
       console.error('Failed to initiate connection:', err)
-      toasts.add({ title: 'Failed to start connection flow', variant: 'error' })
+      toasts.add({ title: 'Failed to start connection flow', type: 'error' })
       connectingRef.current = null
       setConnecting(null)
     }
@@ -202,7 +200,7 @@ export default function ObserverConfigModal({
       // Subscription fires add() with credentialsValid:true on completion, clearing `reconnecting`.
     } catch (err) {
       console.error('Failed to initiate reconnection:', err)
-      toasts.add({ title: 'Failed to start re-authentication flow', variant: 'error' })
+      toasts.add({ title: 'Failed to start re-authentication flow', type: 'error' })
       setReconnecting(null)
     }
   }
@@ -229,12 +227,12 @@ export default function ObserverConfigModal({
   const isRetry = needs.some(n => n.failure)
 
   return (
-    <Dialog.Root open disablePointerDismissal onOpenChange={open => { if (!open) onCancel() }}>
-      <Dialog className="p-6" size="lg">
-        <Dialog.Title className="mb-2 text-lg font-semibold">
+    <Dialog open disablePointerDismissal onOpenChange={open => { if (!open) onCancel() }}>
+      <DialogContent className="p-6" size="lg">
+        <DialogTitle className="mb-2 text-lg font-semibold">
           {isRetry ? 'Verify your access again' : 'Verify your access'}
-        </Dialog.Title>
-        <Text variant="secondary" size="sm" as="p">
+        </DialogTitle>
+        <Text variant="muted" size="sm" as="p">
           {isRetry
             ? 'We couldn’t confirm your access to everything this workspace has read. Re-authenticate ' +
               'the account below, or choose a different one, then try again.'
@@ -244,7 +242,7 @@ export default function ObserverConfigModal({
 
         {!ready || !vendorsReady ? (
           <div className="text-center py-10">
-            <Loader />
+            <Spinner />
           </div>
         ) : (
           <div className="flex flex-col gap-4 mt-5">
@@ -255,7 +253,7 @@ export default function ObserverConfigModal({
               const chosen = accountFor(need.gatekeeperId)
 
               return (
-                <div key={need.gatekeeperId} className="rounded-xl border border-kumo-line bg-kumo-base p-4">
+                <div key={need.gatekeeperId} className="rounded-xl border border-border bg-background p-4">
                   <div className={`flex items-center gap-3${matching.length === 0 && !need.failure ? '' : ' mb-3'}`}>
                     <Avatar
                       src={vendor?.logo?.url}
@@ -264,30 +262,30 @@ export default function ObserverConfigModal({
                       fallback={<Plus size={16} />}
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="text-[14px] font-medium text-kumo-default truncate">
+                      <div className="text-[14px] font-medium text-foreground truncate">
                         {need.resourceTitle}
                       </div>
                       {need.resourceUrl && (
-                        <div className="text-xs font-mono text-kumo-subtle truncate">
+                        <div className="text-xs font-mono text-muted-foreground truncate">
                           {need.resourceUrl.replace(/^https?:\/\//, '')}
                         </div>
                       )}
                     </div>
                     {matching.length === 0 && vendor && (
-                      <WorkshopButton
-                        tone="primary"
+                      <Button
+
                         onClick={() => handleConnect(need)}
                         disabled={connecting === need.vendorId}
-                      >
+                       className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50" variant="primary">
                         {connecting === need.vendorId ? 'Waiting for connection…' : 'Connect'}
-                      </WorkshopButton>
+                      </Button>
                     )}
                   </div>
 
                   {/* Name the account that was refused and why. The reason is free text, either from
                       the gatekeeper or authored by the overseer, and must not be parsed. */}
                   {need.failure && (
-                    <div className={`flex items-start gap-2 px-3 py-2 rounded-md text-xs text-kumo-warning bg-kumo-warning-tint border border-kumo-warning/20${matching.length === 0 ? '' : ' mb-3'}`}>
+                    <div className={`flex items-start gap-2 px-3 py-2 rounded-md text-xs text-status-warning bg-status-warning-muted border border-status-warning/20${matching.length === 0 ? '' : ' mb-3'}`}>
                       <Warning size={14} className="mt-0.5 shrink-0" />
                       <div className="min-w-0">
                         <span className="font-medium">
@@ -302,39 +300,34 @@ export default function ObserverConfigModal({
                   {matching.length > 0 && (
                     <div className="flex flex-col gap-2">
                       {matching.length === 1 ? (
-                        <div className="flex min-h-10 items-center gap-3 rounded-lg border border-kumo-line bg-kumo-elevated/50 px-3 py-2">
+                        <div className="flex min-h-10 items-center gap-3 rounded-lg border border-border bg-card/50 px-3 py-2">
                           <div className="min-w-0 flex-1">
-                            <div className="text-[11px] leading-4 text-kumo-subtle">Using your account</div>
-                            <div className="truncate text-sm font-medium text-kumo-default">
+                            <div className="text-[11px] leading-4 text-muted-foreground">Using your account</div>
+                            <div className="truncate text-sm font-medium text-foreground">
                               {accountLabel(matching[0], matching[0].id)}
                             </div>
                           </div>
                           {matching[0].credentialsValid && (
-                            <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-kumo-success">
+                            <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-status-success">
                               <CheckCircle size={15} weight="fill" /> Ready
                             </span>
                           )}
                         </div>
                       ) : (
                         <Select
-                          className="w-full text-sm"
                           value={
                             choices[need.gatekeeperId] !== undefined
                               ? String(choices[need.gatekeeperId])
                               : undefined
                           }
-                          placeholder={`Choose a ${vendorName} account…`}
                           onValueChange={v =>
                             setChoices(prev => ({ ...prev, [need.gatekeeperId]: Number(v) }))
                           }
-                          renderValue={v => accountLabel(accounts.get(Number(v)), Number(v))}
                         >
-                          {matching.map(acct => (
-                            <Select.Option key={acct.id} value={String(acct.id)}>
-                              {accountLabel(acct, acct.id)}
-                              {!acct.credentialsValid ? ' (expired)' : ''}
-                            </Select.Option>
-                          ))}
+                          <SelectTrigger className="w-full text-sm"><SelectValue placeholder={`Choose a ${vendorName} account…`} /></SelectTrigger>
+                          <SelectContent>{matching.map(acct => (
+                            <SelectItem key={acct.id} value={String(acct.id)}>{accountLabel(acct, acct.id)}{!acct.credentialsValid ? ' (expired)' : ''}</SelectItem>
+                          ))}</SelectContent>
                         </Select>
                       )}
 
@@ -348,7 +341,7 @@ export default function ObserverConfigModal({
                           type="button"
                           onClick={() => handleReconnect(chosen.id)}
                           disabled={reconnecting === chosen.id}
-                          className="flex items-center gap-1.5 text-xs text-kumo-warning hover:underline disabled:opacity-60"
+                          className="flex items-center gap-1.5 text-xs text-status-warning hover:underline disabled:opacity-60"
                         >
                           {reconnecting === chosen.id ? (
                             <ArrowClockwise size={12} className="animate-spin" />
@@ -368,7 +361,7 @@ export default function ObserverConfigModal({
                           type="button"
                           onClick={() => handleConnect(need)}
                           disabled={connecting === need.vendorId}
-                          className="flex items-center gap-1 text-xs text-kumo-subtle hover:text-kumo-default disabled:opacity-60 self-start"
+                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-60 self-start"
                         >
                           <Plus size={11} />
                           {connecting === need.vendorId ? 'Waiting for connection…' : 'Connect a different account'}
@@ -383,18 +376,18 @@ export default function ObserverConfigModal({
         )}
 
         <div className="flex justify-end gap-2 mt-6">
-          <WorkshopButton tone="secondary" onClick={onCancel}>
+          <Button  onClick={onCancel} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40" variant="secondary">
             Cancel
-          </WorkshopButton>
-          <WorkshopButton
-            tone="primary"
+          </Button>
+          <Button
+
             onClick={handleConfirm}
             disabled={!ready || !vendorsReady || !allSatisfied}
-          >
+           className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50" variant="primary">
             {isRetry ? 'Verify again' : 'Verify and open'}
-          </WorkshopButton>
+          </Button>
         </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }

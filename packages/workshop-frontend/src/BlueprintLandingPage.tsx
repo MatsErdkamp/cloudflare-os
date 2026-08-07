@@ -3,9 +3,7 @@ import { useNavigate, useParams, useRouter } from '@tanstack/react-router'
 import { RpcStub, RpcTarget } from 'capnweb'
 import { PublicApi, AuthenticatedApi, AdminApi, BlueprintPublicInfo, BlueprintBinding, BlueprintBindingAssignment, BlueprintUserSummary, AiChatAuthorInfo, ConnectedAccountsSubscriber } from '@gadgets/workshop-shared/api'
 import { AccountDescription, SupportedResource, VendorDescription, ResourceConfiguratorFrame } from '@gadgets/workshop-shared/gatekeeper'
-import { Button, Dialog, DropdownMenu, Select, Tooltip, useKumoToastManager } from '@cloudflare/kumo'
 import { ArrowsOutSimple, ArrowLeft, ArrowSquareOut, DotsThree, DownloadSimple, Lightning, Plus, Robot, Sparkle, Star, Trash, X } from '@phosphor-icons/react'
-
 import { useAuth } from './useAuth'
 import LoginPage from './LoginPage'
 import { normalizeResourceUrl } from './resourceMatching'
@@ -16,10 +14,9 @@ import {
 } from './fileTransfers'
 import { AccountChooser, AccountOption } from './gatekeeper-modal/AccountChooser'
 import ResourceConfiguratorHost from './ResourceConfiguratorHost'
-import { WorkshopButton, WorkshopIconButton } from './components/WorkshopControls'
 import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from './components/menuStyles'
 import { useDocumentTitle } from './useDocumentTitle'
-
+import { Button, Dialog, DropdownMenu, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tooltip, useToast, DialogContent, DialogTrigger, DialogTitle, DialogDescription, DialogClose, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, TooltipContent, TooltipTrigger } from '@matser/ui'
 interface Props {
   rpcStub: RpcStub<PublicApi>
 }
@@ -34,7 +31,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
   const navigate = useNavigate()
   const router = useRouter()
   const { isAuthenticated, authenticatedApi, isLoading: authLoading, login } = useAuth(rpcStub)
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [blueprint, setBlueprint] = useState<BlueprintPublicInfo | null>(null)
   useDocumentTitle(blueprint?.metadata.title)
@@ -205,10 +202,10 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     try {
       const result = await authenticatedApi.connectAccount(vendorId)
       window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      toasts.add({ title: 'Complete the account connection in the new tab.', type: 'success' })
     } catch (err) {
       console.error('Failed to initiate connection:', err)
-      toasts.add({ title: 'Failed to start connection flow', variant: 'error' })
+      toasts.add({ title: 'Failed to start connection flow', type: 'error' })
     } finally {
       setConnectingVendor(null)
     }
@@ -220,10 +217,10 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     try {
       const result = await authenticatedApi.reconnectAccount(accountId)
       window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account reconnect in the new tab.', variant: 'success' })
+      toasts.add({ title: 'Complete the account reconnect in the new tab.', type: 'success' })
     } catch (err) {
       console.error('Failed to initiate reconnect:', err)
-      toasts.add({ title: 'Failed to start reconnect flow', variant: 'error' })
+      toasts.add({ title: 'Failed to start reconnect flow', type: 'error' })
       setReconnectingAccountId(null)
     }
   }, [authenticatedApi, toasts])
@@ -622,7 +619,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
       console.error('Failed to update featured status:', err)
       toasts.add({
         title: nextFeatured ? 'Failed to feature blueprint' : 'Failed to unfeature blueprint',
-        variant: 'error',
+        type: 'error',
       })
     } finally {
       setUpdatingFeatured(false)
@@ -646,10 +643,10 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
         setIsInLibrary(true)
         setIsUploadedBlueprint(false)
       }
-      toasts.add({ title: nextPinned ? 'Blueprint favorited' : 'Blueprint unfavorited', variant: 'success' })
+      toasts.add({ title: nextPinned ? 'Blueprint favorited' : 'Blueprint unfavorited', type: 'success' })
     } catch (err) {
       console.error('Failed to update blueprint pin:', err)
-      toasts.add({ title: 'Failed to update favorite status', variant: 'error' })
+      toasts.add({ title: 'Failed to update favorite status', type: 'error' })
     } finally {
       setUpdatingPinned(false)
     }
@@ -671,10 +668,10 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     try {
       await authenticatedApi.addBlueprintToLibrary(id)
       setIsInLibrary(true)
-      toasts.add({ title: 'Blueprint added to library', variant: 'success' })
+      toasts.add({ title: 'Blueprint added to library', type: 'success' })
     } catch (err) {
       console.error('Failed to add blueprint to library:', err)
-      toasts.add({ title: 'Failed to add blueprint to library', variant: 'error' })
+      toasts.add({ title: 'Failed to add blueprint to library', type: 'error' })
     } finally {
       setAddingToLibrary(false)
     }
@@ -688,18 +685,18 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
       await authenticatedApi.removeBlueprintFromLibrary(id)
       if (isUploadedBlueprint) {
         setShowDeleteConfirm(false)
-        toasts.add({ title: 'Blueprint deleted', variant: 'success' })
+        toasts.add({ title: 'Blueprint deleted', type: 'success' })
         navigate({ to: '/' })
       } else {
         setIsInLibrary(false)
         setIsPinned(false)
-        toasts.add({ title: 'Blueprint removed from library', variant: 'success' })
+        toasts.add({ title: 'Blueprint removed from library', type: 'success' })
       }
     } catch (err) {
       console.error('Failed to remove blueprint from library:', err)
       toasts.add({
         title: isUploadedBlueprint ? 'Failed to delete blueprint' : 'Failed to remove blueprint from library',
-        variant: 'error',
+        type: 'error',
       })
     } finally {
       setRemovingFromLibrary(false)
@@ -721,11 +718,11 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
         await authenticatedApi.deleteOrphanedBlueprint(id)
       }
       setShowDeleteConfirm(false)
-      toasts.add({ title: 'Blueprint deleted', variant: 'success' })
+      toasts.add({ title: 'Blueprint deleted', type: 'success' })
       navigate({ to: '/' })
     } catch (err) {
       console.error('Failed to delete blueprint:', err)
-      toasts.add({ title: 'Failed to delete blueprint', variant: 'error' })
+      toasts.add({ title: 'Failed to delete blueprint', type: 'error' })
     } finally {
       overseer?.then(stub => stub[Symbol.dispose]()).catch(() => {})
       setRemovingFromLibrary(false)
@@ -785,7 +782,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     ownBlueprintSummary?.source.type === 'workspace' ? ownBlueprintSummary.source : null
 
   return (
-    <div className="min-h-full bg-kumo-base">
+    <div className="min-h-full bg-background">
       <div className="mx-auto w-full max-w-5xl px-6 pb-16 pt-10 sm:px-10">
         <button
           type="button"
@@ -796,7 +793,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
               navigate({ to: '/explore' })
             }
           }}
-          className="mb-8 inline-flex cursor-pointer items-center gap-2 px-1 py-1 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-subtle transition-[color,transform] duration-150 ease-out hover:text-kumo-default active:scale-[0.98]"
+          className="mb-8 inline-flex cursor-pointer items-center gap-2 px-1 py-1 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-muted-foreground transition-[color,transform] duration-150 ease-out hover:text-foreground active:scale-[0.98]"
         >
           <ArrowLeft size={14} weight="bold" />
           Back
@@ -805,24 +802,24 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
         <header className="mb-10 grid gap-7 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
           <div className="min-w-0">
             {isFeatured && (
-              <span className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-[rgba(255,72,1,0.10)] px-2 py-1 text-[11px] leading-4 font-semibold tracking-[-0.1px] text-kumo-brand">
+              <span className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-[rgba(255,72,1,0.10)] px-2 py-1 text-[11px] leading-4 font-semibold tracking-[-0.1px] text-primary">
                 <Star size={12} weight="fill" />
                 Featured
               </span>
             )}
-            <h1 className="m-0 text-3xl font-semibold leading-tight tracking-tight text-kumo-default">
+            <h1 className="m-0 text-3xl font-semibold leading-tight tracking-tight text-foreground">
               {meta.title}
             </h1>
             {meta.description && (
-              <p className="mt-3 max-w-[640px] text-[15px] leading-[22px] font-normal tracking-[-0.25px] text-kumo-subtle">
+              <p className="mt-3 max-w-[640px] text-[15px] leading-[22px] font-normal tracking-[-0.25px] text-muted-foreground">
                 {meta.description}
               </p>
             )}
-            <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+            <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
               <span>By {meta.author.name}</span>
-              <span className="text-kumo-inactive">•</span>
+              <span className="text-muted-foreground">•</span>
               <span>v{meta.version}</span>
-              <span className="text-kumo-inactive">•</span>
+              <span className="text-muted-foreground">•</span>
               <span>Updated {new Date(meta.lastUpdated).toLocaleDateString()}</span>
             </div>
           </div>
@@ -840,120 +837,114 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
                   type="button"
                   onClick={handleStartConfigure}
                   disabled={createDisabled}
-                  className="press inline-flex h-10 w-full cursor-pointer items-center justify-center rounded-lg bg-kumo-brand px-4 text-[14px] leading-5 font-semibold tracking-[-0.25px] text-white transition-colors duration-150 ease-out hover:bg-kumo-brand-hover disabled:cursor-not-allowed disabled:opacity-60"
+                  className="press inline-flex h-10 w-full cursor-pointer items-center justify-center rounded-lg bg-primary px-4 text-[14px] leading-5 font-semibold tracking-[-0.25px] text-white transition-colors duration-150 ease-out hover:bg-primary disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {creating ? 'Creating...' : primaryActionLabel}
                 </button>
               </span>
 
             {!isOwnBlueprint && !loadingOwnBlueprintState && !isInLibrary && (
-              <Tooltip content={isAuthenticated ? 'Add to library' : 'Log in to add to library'} asChild>
-                <button
+              <Tooltip>
+                <TooltipTrigger render={<button
                   type="button"
                   aria-label={isAuthenticated ? 'Add blueprint to library' : 'Log in to add blueprint to library'}
                   onClick={handleAddToLibrary}
                   disabled={addingToLibrary || loadingLibraryState}
-                  className="press inline-flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-kumo-line bg-kumo-base p-0 text-kumo-subtle transition-colors duration-150 ease-out hover:border-kumo-fill hover:bg-kumo-tint hover:text-kumo-default disabled:cursor-not-allowed disabled:opacity-60"
+                  className="press inline-flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border bg-background p-0 text-muted-foreground transition-colors duration-150 ease-out hover:border-accent hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Plus size={17} weight="bold" />
-                </button>
+                </button>} />
+                <TooltipContent>{isAuthenticated ? 'Add to library' : 'Log in to add to library'}</TooltipContent>
               </Tooltip>
             )}
 
             <DropdownMenu>
-              <DropdownMenu.Trigger
+              <DropdownMenuTrigger
                 render={(
-                  <WorkshopIconButton
+                  <Button
                     aria-label="More blueprint actions"
-                    className="!h-10 !w-10 shrink-0 rounded-lg border border-kumo-line bg-kumo-base text-kumo-subtle hover:border-kumo-fill hover:bg-kumo-tint hover:text-kumo-default data-[popup-open]:border-kumo-fill data-[popup-open]:bg-kumo-tint data-[popup-open]:text-kumo-default"
-                  >
+                    className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !h-10 !w-10 shrink-0 rounded-lg border border-border bg-background text-muted-foreground hover:border-accent hover:bg-muted hover:text-foreground data-[popup-open]:border-accent data-[popup-open]:bg-muted data-[popup-open]:text-foreground"
+                   variant="ghost" size="icon-sm">
                     <DotsThree size={18} weight="bold" />
-                  </WorkshopIconButton>
+                  </Button>
                 )}
               />
-              <DropdownMenu.Content className={MENU_CONTENT}>
-                <DropdownMenu.Item
-                  icon={<DownloadSimple size={13} className="mr-2" />}
+              <DropdownMenuContent className={MENU_CONTENT}>
+                <DropdownMenuItem
                   onClick={handleDownload}
                   disabled={downloading}
                   className={MENU_ITEM}
                 >
-                  {downloading ? 'Downloading...' : 'Download archive'}
-                </DropdownMenu.Item>
+                  <DownloadSimple size={13} className="mr-2" />{downloading ? 'Downloading...' : 'Download archive'}
+                </DropdownMenuItem>
 
-                <DropdownMenu.Item
-                  icon={<Star size={13} className="mr-2" weight={isPinned ? 'fill' : 'regular'} />}
+                <DropdownMenuItem
                   onClick={handleTogglePinned}
                   disabled={updatingPinned}
                   className={MENU_ITEM}
                 >
-                  {updatingPinned ? 'Updating...' : (isPinned ? 'Unfavorite' : 'Favorite')}
-                </DropdownMenu.Item>
+                  <Star size={13} className="mr-2" weight={isPinned ? 'fill' : 'regular'} />{updatingPinned ? 'Updating...' : (isPinned ? 'Unfavorite' : 'Favorite')}
+                </DropdownMenuItem>
 
                 {sourceWorkspace && (
-                  <DropdownMenu.Item
-                    icon={<ArrowSquareOut size={13} className="mr-2" />}
+                  <DropdownMenuItem
                     onClick={() => window.open(`/workspace/${sourceWorkspace.workspaceId}`, '_blank', 'noopener,noreferrer')}
                     className={MENU_ITEM}
                   >
-                    Go to workspace
-                  </DropdownMenu.Item>
+                    <ArrowSquareOut size={13} className="mr-2" />Go to workspace
+                  </DropdownMenuItem>
                 )}
 
                 {canDeleteOwnedBlueprint && (
                   <>
-                    <DropdownMenu.Separator />
-                    <DropdownMenu.Item
-                      icon={<Trash size={13} className="mr-2" />}
-                      variant="danger"
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
                       onClick={() => setShowDeleteConfirm(true)}
                       className={MENU_ITEM_DANGER}
                     >
-                      Delete blueprint
-                    </DropdownMenu.Item>
+                      <Trash size={13} className="mr-2" />Delete blueprint
+                    </DropdownMenuItem>
                   </>
                 )}
 
                 {!isOwnBlueprint && !loadingOwnBlueprintState && isInLibrary && (
                   <>
-                    <DropdownMenu.Separator />
+                    <DropdownMenuSeparator />
                     {isUploadedBlueprint ? (
-                      <DropdownMenu.Item
-                        icon={<Trash size={13} className="mr-2" />}
-                        variant="danger"
+                      <DropdownMenuItem
+                        variant="destructive"
                         onClick={() => setShowDeleteConfirm(true)}
                         className={MENU_ITEM_DANGER}
                       >
-                        Delete blueprint
-                      </DropdownMenu.Item>
+                        <Trash size={13} className="mr-2" />Delete blueprint
+                      </DropdownMenuItem>
                     ) : (
-                      <DropdownMenu.Item
-                        icon={<Trash size={13} className="mr-2" />}
-                        variant="danger"
+                      <DropdownMenuItem
+                        variant="destructive"
                         onClick={handleRemoveFromLibrary}
                         disabled={removingFromLibrary}
                         className={MENU_ITEM_DANGER}
                       >
-                        {removingFromLibrary ? 'Removing...' : 'Remove from library'}
-                      </DropdownMenu.Item>
+                        <Trash size={13} className="mr-2" />{removingFromLibrary ? 'Removing...' : 'Remove from library'}
+                      </DropdownMenuItem>
                     )}
                   </>
                 )}
 
                 {canManageFeatured && (
                   <>
-                    <DropdownMenu.Separator />
-                    <DropdownMenu.Item
-                      icon={<Sparkle size={13} className="mr-2" weight={isFeatured ? 'fill' : 'regular'} />}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
                       onClick={handleToggleFeatured}
                       disabled={updatingFeatured}
                       className={MENU_ITEM}
                     >
-                      {updatingFeatured ? 'Updating...' : (isFeatured ? 'Unfeature blueprint' : 'Feature blueprint')}
-                    </DropdownMenu.Item>
+                      <Sparkle size={13} className="mr-2" weight={isFeatured ? 'fill' : 'regular'} />{updatingFeatured ? 'Updating...' : (isFeatured ? 'Unfeature blueprint' : 'Feature blueprint')}
+                    </DropdownMenuItem>
                   </>
                 )}
-              </DropdownMenu.Content>
+              </DropdownMenuContent>
               </DropdownMenu>
             </div>
           </aside>
@@ -963,19 +954,19 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
           {bindingEntries.length > 0 ? (
             <section>
               <div className="mb-2 flex items-center gap-2 px-1">
-                <h2 className="text-[12px] font-medium uppercase tracking-[0.08em] text-kumo-inactive">
+                <h2 className="text-[12px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                   Required connections
                 </h2>
-                <span className="text-[12px] font-medium tracking-[-0.1px] text-kumo-inactive">
+                <span className="text-[12px] font-medium tracking-[-0.1px] text-muted-foreground">
                   {bindingEntries.length}
                 </span>
               </div>
-              <div className="mb-3 px-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+              <div className="mb-3 px-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                 {readyCount === bindingEntries.length
                   ? 'Everything is ready. You can change any connection before creating the Gadget.'
                   : `${readyCount} of ${bindingEntries.length} ready. Suggestions are used automatically when they match one of your connected accounts.`}
               </div>
-              <div className="overflow-hidden rounded-2xl border border-kumo-line bg-kumo-base">
+              <div className="overflow-hidden rounded-2xl border border-border bg-background">
                 {bindingEntries.map(([name, binding]) => (
                   <BlueprintBindingSummaryCard
                     key={name}
@@ -990,52 +981,52 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
               </div>
             </section>
           ) : (
-            <section className="rounded-2xl border border-kumo-line bg-kumo-base px-5 py-5">
-              <p className="m-0 text-[15px] leading-5 font-medium tracking-[-0.25px] text-kumo-default">
+            <section className="rounded-2xl border border-border bg-background px-5 py-5">
+              <p className="m-0 text-[15px] leading-5 font-medium tracking-[-0.25px] text-foreground">
                 No connections required
               </p>
-              <p className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+              <p className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                 This blueprint can create a Gadget without configuring external resources.
               </p>
             </section>
           )}
 
           {error && (
-            <div className="flex items-center justify-between gap-3 rounded-2xl border border-kumo-danger/30 bg-kumo-danger-tint px-4 py-3 text-[13px] leading-[18px] text-kumo-danger">
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-destructive/30 bg-destructive-muted px-4 py-3 text-[13px] leading-[18px] text-destructive">
               <span>{error}</span>
-              <button onClick={() => setError(null)} className="cursor-pointer text-kumo-danger hover:text-kumo-default">&times;</button>
+              <button onClick={() => setError(null)} className="cursor-pointer text-destructive hover:text-foreground">&times;</button>
             </div>
           )}
         </main>
       </div>
 
-      <Dialog.Root
+      <Dialog
         open={activeBindingName !== null}
         onOpenChange={(open) => { if (!open) setActiveBindingName(null) }}
       >
-        <Dialog
+        <DialogContent
           // The configurator iframe measures getBoundingClientRect(), which includes transforms.
-          className="!z-[1000] !top-[clamp(28px,10vh,96px)] !flex !max-h-[calc((100vh_-_clamp(28px,10vh,96px)_-_28px)_*_0.9)] !w-[min(760px,calc(100vw-32px))] !-translate-y-0 data-ending-style:!scale-100 data-starting-style:!scale-100 flex-col overflow-hidden bg-kumo-base p-0"
+          className="!z-[1000] !top-[clamp(28px,10vh,96px)] !flex !max-h-[calc((100vh_-_clamp(28px,10vh,96px)_-_28px)_*_0.9)] !w-[min(760px,calc(100vw-32px))] !-translate-y-0 data-ending-style:!scale-100 data-starting-style:!scale-100 flex-col overflow-hidden bg-background p-0"
           size="lg"
         >
           {activeBinding && activeBindingName && authenticatedApi && (
             <>
-              <div className="shrink-0 flex items-start justify-between gap-4 border-b border-kumo-line px-5 py-4">
+              <div className="shrink-0 flex items-start justify-between gap-4 border-b border-border px-5 py-4">
                 <div className="min-w-0">
-                  <Dialog.Title className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-kumo-default">
+                  <DialogTitle className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-foreground">
                     Configure {activeBinding.title || activeBindingName}
-                  </Dialog.Title>
-                  <Dialog.Description className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+                  </DialogTitle>
+                  <DialogDescription className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                     {activeBinding.type === 'gatekeeper' && activeBinding.description
                       ? activeBinding.description
                       : 'Choose the resource or model this new Gadget should use.'}
-                  </Dialog.Description>
+                  </DialogDescription>
                 </div>
-                <Dialog.Close
+                <DialogClose
                   render={(props) => (
-                    <WorkshopIconButton {...props} aria-label="Close">
+                    <Button {...props} aria-label="Close" className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                       <X size={16} />
-                    </WorkshopIconButton>
+                    </Button>
                   )}
                 />
               </div>
@@ -1060,44 +1051,43 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
                 />
               </div>
 
-              <div className="shrink-0 flex items-center justify-end gap-2 border-t border-kumo-line px-5 py-3">
-                <WorkshopButton onClick={() => setActiveBindingName(null)}>
+              <div className="shrink-0 flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+                <Button onClick={() => setActiveBindingName(null)} className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40" variant="secondary">
                   Cancel
-                </WorkshopButton>
-                <WorkshopButton
-                  tone="primary"
+                </Button>
+                <Button
+
                   onClick={handleSaveActiveBinding}
                   disabled={!canSaveActiveBinding()}
-                >
+                 className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50" variant="primary">
                   Save connection
-                </WorkshopButton>
+                </Button>
               </div>
             </>
           )}
-        </Dialog>
+        </DialogContent>
         <div
           ref={selectPortalRef}
           className="pointer-events-none fixed inset-0 z-[1100] [&>*]:pointer-events-auto"
         />
-      </Dialog.Root>
+      </Dialog>
 
       {/* Delete blueprint confirmation dialog */}
-      <Dialog.Root
-        role="alertdialog"
+      <Dialog
         open={showDeleteConfirm}
         onOpenChange={(open) => { if (!open) setShowDeleteConfirm(false) }}
       >
-        <Dialog className="p-8" size="sm">
-          <Dialog.Title className="text-lg font-semibold">
+        <DialogContent className="p-8" size="sm">
+          <DialogTitle className="text-lg font-semibold">
             Delete blueprint
-          </Dialog.Title>
-          <Dialog.Description className="mt-2 text-kumo-subtle">
+          </DialogTitle>
+          <DialogDescription className="mt-2 text-muted-foreground">
             Delete "{blueprint?.metadata.title}"? {canDeleteOwnedBlueprint
               ? 'This blueprint link will stop working, but gadgets already created from it won’t be affected.'
               : 'This blueprint was uploaded manually and cannot be recovered.'}
-          </Dialog.Description>
+          </DialogDescription>
           <div className="mt-6 flex justify-end gap-2">
-            <Dialog.Close
+            <DialogClose
               render={(props) => (
                 <Button variant="secondary" {...props} disabled={removingFromLibrary}>
                   Cancel
@@ -1112,8 +1102,8 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
               Delete
             </Button>
           </div>
-        </Dialog>
-      </Dialog.Root>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -1126,12 +1116,12 @@ function BlueprintScreenshotHero({
   screenshotUrl: string
 }) {
   return (
-    <Dialog.Root>
-      <Dialog.Trigger
+    <Dialog>
+      <DialogTrigger
         render={(
           <button
             type="button"
-            className="themed-compact-shadow themed-card-hover-shadow group relative block w-full cursor-zoom-in overflow-hidden rounded-2xl border border-kumo-line bg-kumo-base text-left transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-kumo-fill active:scale-[0.995]"
+            className="themed-compact-shadow themed-card-hover-shadow group relative block w-full cursor-zoom-in overflow-hidden rounded-2xl border border-border bg-background text-left transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-accent active:scale-[0.995]"
             aria-label={`Open larger screenshot of ${title}`}
           >
             <img
@@ -1139,26 +1129,26 @@ function BlueprintScreenshotHero({
               alt={`Screenshot of ${title}`}
               className="aspect-[16/9] w-full object-cover"
             />
-            <span className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full border border-kumo-line bg-kumo-base/90 text-kumo-subtle opacity-0 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-[opacity,color,background-color] duration-150 ease-out group-hover:opacity-100 group-hover:text-kumo-default">
+            <span className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full border border-border bg-background/90 text-muted-foreground opacity-0 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-[opacity,color,background-color] duration-150 ease-out group-hover:opacity-100 group-hover:text-foreground">
               <ArrowsOutSimple size={14} weight="bold" />
             </span>
           </button>
         )}
       />
-      <Dialog
-        className="!z-[1200] !w-[min(1120px,calc(100vw-32px))] overflow-hidden bg-kumo-base p-0"
+      <DialogContent
+        className="!z-[1200] !w-[min(1120px,calc(100vw-32px))] overflow-hidden bg-background p-0"
         size="lg"
       >
-        <Dialog.Title className="sr-only">Screenshot of {title}</Dialog.Title>
-        <Dialog.Close
+        <DialogTitle className="sr-only">Screenshot of {title}</DialogTitle>
+        <DialogClose
           render={(props) => (
-            <WorkshopIconButton
+            <Button
               {...props}
               aria-label="Close screenshot"
-              className="!absolute !right-3 !top-3 !z-10 !h-8 !w-8 rounded-full border border-kumo-line bg-kumo-base/90 text-kumo-subtle shadow-[0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-sm hover:bg-kumo-base hover:text-kumo-default"
-            >
+              className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 !absolute !right-3 !top-3 !z-10 !h-8 !w-8 rounded-full border border-border bg-background/90 text-muted-foreground shadow-[0_1px_2px_rgba(0,0,0,0.05)] backdrop-blur-sm hover:bg-background hover:text-foreground"
+             variant="ghost" size="icon-sm">
               <X size={18} />
-            </WorkshopIconButton>
+            </Button>
           )}
         />
         <div className="p-3 sm:p-4">
@@ -1168,8 +1158,8 @@ function BlueprintScreenshotHero({
             className="max-h-[calc(100vh-96px)] w-full rounded-xl object-contain"
           />
         </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1187,17 +1177,17 @@ function BlueprintStatePage({
   onAction?: () => void
 }) {
   return (
-    <div className="min-h-full bg-kumo-base">
+    <div className="min-h-full bg-background">
       <div className="mx-auto flex min-h-[60vh] w-full max-w-[1040px] items-center justify-center px-4 py-12 sm:px-8">
-        <div className="themed-compact-shadow w-full max-w-md rounded-2xl border border-kumo-line bg-kumo-base px-6 py-8 text-center">
+        <div className="themed-compact-shadow w-full max-w-md rounded-2xl border border-border bg-background px-6 py-8 text-center">
           {loading && (
-            <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-kumo-brand border-t-transparent" />
+            <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           )}
-          <h1 className="m-0 text-[20px] leading-7 font-semibold tracking-[-0.35px] text-kumo-default">
+          <h1 className="m-0 text-[20px] leading-7 font-semibold tracking-[-0.35px] text-foreground">
             {title}
           </h1>
           {message && (
-            <p className="mt-2 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+            <p className="mt-2 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
               {message}
             </p>
           )}
@@ -1205,7 +1195,7 @@ function BlueprintStatePage({
             <button
               type="button"
               onClick={onAction}
-              className="mt-5 inline-flex h-9 cursor-pointer items-center justify-center rounded-full border border-kumo-line bg-kumo-base px-4 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default transition-[background-color,border-color,transform] duration-150 ease-out hover:border-kumo-fill hover:bg-kumo-tint active:scale-[0.98]"
+              className="mt-5 inline-flex h-9 cursor-pointer items-center justify-center rounded-full border border-border bg-background px-4 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground transition-[background-color,border-color,transform] duration-150 ease-out hover:border-accent hover:bg-muted active:scale-[0.98]"
             >
               {actionLabel}
             </button>
@@ -1231,16 +1221,16 @@ function BindingIconTile({
     icon = vendor?.description.logo?.url ? (
       <img src={vendor.description.logo.url} alt="" className="h-5 w-5 object-contain" />
     ) : (
-      <span className="text-[13px] font-semibold text-kumo-subtle">{fallback}</span>
+      <span className="text-[13px] font-semibold text-muted-foreground">{fallback}</span>
     )
   } else if (binding.type === 'aiModel') {
-    icon = <Robot size={16} className="text-kumo-subtle" />
+    icon = <Robot size={16} className="text-muted-foreground" />
   } else {
-    icon = <Lightning size={16} className="text-kumo-subtle" />
+    icon = <Lightning size={16} className="text-muted-foreground" />
   }
 
   return (
-    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-kumo-fill text-kumo-subtle">
+    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-accent text-muted-foreground">
       {icon}
     </div>
   )
@@ -1305,24 +1295,24 @@ function BlueprintBindingSummaryCard({
   }
 
   return (
-    <div className="grid min-h-[72px] min-w-0 grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 border-b border-kumo-line px-4 py-3 text-left last:border-b-0">
+    <div className="grid min-h-[72px] min-w-0 grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 border-b border-border px-4 py-3 text-left last:border-b-0">
       <BindingIconTile binding={binding} vendor={vendor} />
       <div className="min-w-0">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <h3 className="m-0 truncate text-[14px] leading-5 font-medium tracking-[-0.25px] text-kumo-default">
+          <h3 className="m-0 truncate text-[14px] leading-5 font-medium tracking-[-0.25px] text-foreground">
             {title}
           </h3>
           <span className={`rounded-full px-2 py-0.5 text-[11px] leading-4 font-medium tracking-[-0.1px] ${
             assignment
-              ? 'bg-kumo-success-tint text-kumo-success'
+              ? 'bg-status-success-muted text-status-success'
               : suggestion
-                ? 'bg-kumo-tint text-kumo-subtle'
-                : 'bg-[rgba(255,72,1,0.10)] text-kumo-brand'
+                ? 'bg-muted text-muted-foreground'
+                : 'bg-[rgba(255,72,1,0.10)] text-primary'
           }`}>
             {status}
           </span>
         </div>
-        <p className="mt-0.5 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+        <p className="mt-0.5 truncate text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
           {usingLabel
             ? <>Using: <span>{usingLabel}</span></>
             : suggestion
@@ -1333,7 +1323,7 @@ function BlueprintBindingSummaryCard({
       <button
         type="button"
         onClick={onConfigure}
-        className="press inline-flex h-8 cursor-pointer items-center justify-center rounded-lg border border-kumo-line bg-kumo-base px-3 text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-default transition-colors duration-150 ease-out hover:border-kumo-fill hover:bg-kumo-tint"
+        className="press inline-flex h-8 cursor-pointer items-center justify-center rounded-lg border border-border bg-background px-3 text-[12px] leading-4 font-medium tracking-[-0.2px] text-foreground transition-colors duration-150 ease-out hover:border-accent hover:bg-muted"
       >
         {actionLabel}
       </button>
@@ -1400,30 +1390,22 @@ function BindingField({
   if (binding.type === 'aiModel') {
     return (
       <div>
-        <label className="block text-sm font-medium text-kumo-default mb-1">
+        <label className="block text-sm font-medium text-foreground mb-1">
           {title}
         </label>
         {binding.description && (
-          <p className="text-xs text-kumo-subtle mb-1">{binding.description}</p>
+          <p className="text-xs text-muted-foreground mb-1">{binding.description}</p>
         )}
         <Select
-          aria-label="Choose an AI model"
-          className="w-full text-sm"
-          placeholder="Choose an AI model"
           value={(value as any).modelId || undefined}
           onValueChange={(modelId) => onChange({ modelId } as any)}
-          renderValue={(id) => models.find(m => m.id === id)?.name ?? String(id)}
-          container={selectPortalContainer}
           disabled={models.length === 0}
         >
-          {models.map(m => (
-            <Select.Option key={m.id} value={m.id}>
-              {m.name}
-            </Select.Option>
-          ))}
+          <SelectTrigger className="w-full text-sm" aria-label="Choose an AI model"><SelectValue placeholder="Choose an AI model" /></SelectTrigger>
+          <SelectContent container={selectPortalContainer}>{models.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}</SelectContent>
         </Select>
         {models.length === 0 && (
-          <p className="text-xs text-kumo-subtle mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             No AI models are available yet. Add a model from AI Providers first.
           </p>
         )}
@@ -1438,30 +1420,21 @@ function BindingField({
 
     return (
       <div>
-        <label className="block text-sm font-medium text-kumo-default mb-1">
+        <label className="block text-sm font-medium text-foreground mb-1">
           {title}
         </label>
         {binding.description && (
-          <p className="text-xs text-kumo-subtle mb-1">{binding.description}</p>
+          <p className="text-xs text-muted-foreground mb-1">{binding.description}</p>
         )}
         <Select
-          aria-label="Choose a model for the agent spawner"
-          className="w-full text-sm"
-          placeholder="Choose a model for the agent spawner"
           value={selectedModelId}
           onValueChange={(modelId) => onChange({ modelId: modelId === NO_AGENT_MODEL_ID ? null : modelId } as any)}
-          renderValue={(id) => {
-            if (id === NO_AGENT_MODEL_ID) return '(No agent)'
-            return models.find(m => m.id === id)?.name ?? String(id)
-          }}
-          container={selectPortalContainer}
         >
-          <Select.Option value={NO_AGENT_MODEL_ID}>(No agent)</Select.Option>
-          {models.map(m => (
-            <Select.Option key={m.id} value={m.id}>
-              {m.name}
-            </Select.Option>
-          ))}
+          <SelectTrigger className="w-full text-sm" aria-label="Choose a model for the agent spawner"><SelectValue placeholder="Choose a model for the agent spawner" /></SelectTrigger>
+          <SelectContent container={selectPortalContainer}>
+            <SelectItem value={NO_AGENT_MODEL_ID}>(No agent)</SelectItem>
+            {models.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+          </SelectContent>
         </Select>
       </div>
     )
@@ -1636,7 +1609,7 @@ function BlueprintGatekeeperBindingField({
   // offered by the vendor. The binding can't be satisfied in either case.
   if (!vendor) {
     return (
-      <div className="rounded-lg border border-kumo-danger/30 bg-kumo-danger-tint px-3 py-2.5 text-sm text-kumo-danger">
+      <div className="rounded-lg border border-destructive/30 bg-destructive-muted px-3 py-2.5 text-sm text-destructive">
         <p className="font-semibold mb-0.5">{title}</p>
         <p>The "{binding.gatekeeperName}" gatekeeper is not available on this workshop, so this connection can't be configured.</p>
       </div>
@@ -1644,7 +1617,7 @@ function BlueprintGatekeeperBindingField({
   }
   if (!resource) {
     return (
-      <div className="rounded-lg border border-kumo-danger/30 bg-kumo-danger-tint px-3 py-2.5 text-sm text-kumo-danger">
+      <div className="rounded-lg border border-destructive/30 bg-destructive-muted px-3 py-2.5 text-sm text-destructive">
         <p className="font-semibold mb-0.5">{title}</p>
         <p>The required resource type for this binding isn't offered by {vendor.description.displayName}.</p>
       </div>
@@ -1669,8 +1642,8 @@ function BlueprintGatekeeperBindingField({
       {selectedAccount && (
         <div className="space-y-2.5">
           {binding.resourceUrl && (
-            <p className="m-0 pl-[2px] text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
-              Blueprint recommends: <span className="break-all text-kumo-default">{formatSuggestedResource(binding.resourceUrl)}</span>
+            <p className="m-0 pl-[2px] text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
+              Blueprint recommends: <span className="break-all text-foreground">{formatSuggestedResource(binding.resourceUrl)}</span>
             </p>
           )}
 

@@ -10,12 +10,12 @@ const DISMISS_KEY = 'dismissedBanner'
 // Accent styles per color. Soft status tints (light background + accent text) so the banner doesn't
 // read as an alert, plus a solid brand option.
 const COLOR_STYLES: Record<BannerColor, CSSProperties> = {
-  neutral: { background: 'var(--color-kumo-tint)', color: 'var(--text-color-kumo-default)' },
-  info: { background: 'var(--color-kumo-info-tint)', color: 'var(--color-kumo-info)' },
-  success: { background: 'var(--color-kumo-success-tint)', color: 'var(--color-kumo-success)' },
-  warning: { background: 'var(--color-kumo-warning-tint)', color: 'var(--text-color-kumo-warning)' },
-  danger: { background: 'var(--color-kumo-danger-tint)', color: 'var(--color-kumo-danger)' },
-  brand: { background: 'var(--color-accent-100)', color: 'var(--text-color-kumo-inverse)' },
+  neutral: { background: 'var(--color-muted)', color: 'var(--color-foreground)' },
+  info: { background: 'var(--color-status-info-muted)', color: 'var(--color-status-info)' },
+  success: { background: 'var(--color-status-success-muted)', color: 'var(--color-status-success)' },
+  warning: { background: 'var(--color-status-warning-muted)', color: 'var(--color-status-warning)' },
+  danger: { background: 'var(--color-destructive-muted)', color: 'var(--color-destructive)' },
+  brand: { background: 'var(--color-accent-100)', color: 'var(--color-primary-foreground)' },
 }
 
 // Links inherit the banner's accent color and just underline.
@@ -63,7 +63,7 @@ export default function AnnouncementBanner() {
 
   return (
     <div
-      className="px-4 py-2.5 flex items-start gap-3 border-b border-kumo-line"
+      className="px-4 py-2.5 flex items-start gap-3 border-b border-border"
       style={COLOR_STYLES[color] ?? COLOR_STYLES.info}
     >
       <div className="flex-1 text-sm leading-snug text-center [&_a]:font-medium">

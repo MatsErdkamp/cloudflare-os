@@ -4,8 +4,7 @@ import { PublicApi } from '@gadgets/workshop-shared/api'
 import { useAuth, CF_ACCESS_MODE } from './useAuth'
 import { AuthProvider } from './AuthContext'
 import LoginPage from './LoginPage'
-import { Loader, Banner, Button } from '@cloudflare/kumo'
-
+import { Spinner, Banner, Button } from '@matser/ui'
 interface ProtectedRouteProps {
   children: ReactNode
   rpcStub: RpcStub<PublicApi>
@@ -34,7 +33,7 @@ export default function ProtectedRoute({ children, rpcStub }: ProtectedRouteProp
           gap: 16,
         }}
       >
-        <Loader size="lg" />
+        <Spinner size={24} />
         <div style={{ textAlign: 'center' }}>
           Loading...
         </div>
@@ -56,7 +55,7 @@ export default function ProtectedRoute({ children, rpcStub }: ProtectedRouteProp
         }}
       >
         <Banner
-          variant="error"
+          variant="destructive"
           title={`Authentication error: ${error}`}
           className="mb-4"
         />
@@ -83,7 +82,7 @@ export default function ProtectedRoute({ children, rpcStub }: ProtectedRouteProp
             gap: 16,
           }}
         >
-          <Loader size="lg" />
+          <Spinner size={24} />
           <div style={{ textAlign: 'center' }}>
             Authenticating...
           </div>

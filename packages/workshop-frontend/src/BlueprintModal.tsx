@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Dialog, useKumoToastManager } from '@cloudflare/kumo'
+import {useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { ArrowsClockwise, Check, Copy, ImageSquare, Pencil, Plus, Trash, Warning, X } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
 import { BlueprintGadgetSummary, GadgetClient, GadgetMetadata, Overseer, BlueprintBindingAnnotation, BlueprintScreenshotUpload } from '@gadgets/workshop-shared/api'
-import { WorkshopButton, WorkshopIconButton, WorkshopInput, WorkshopInputArea } from './components/WorkshopControls'
 import { copyToClipboard } from './clipboard'
 import {
   BindingCardData,
   BlueprintBindingCard,
   loadBindingCardData,
 } from './components/BlueprintBindingCard'
-
+import { Dialog, useToast, DialogContent, DialogTitle, DialogDescription, DialogClose, Button, Input, Textarea} from '@matser/ui'
 const BLUEPRINT_SCREENSHOT_WIDTH = 1280
 const BLUEPRINT_SCREENSHOT_HEIGHT = 720
 const MAX_BLUEPRINT_SCREENSHOT_BYTES = 700 * 1024
@@ -71,7 +69,7 @@ type Props = {
 }
 
 export default function BlueprintModal({ open, onClose, overseer, gadget, metadata }: Props) {
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [blueprints, setBlueprints] = useState<BlueprintGadgetSummary[]>([])
   const [loading, setLoading] = useState(false)
@@ -99,7 +97,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
       setBlueprints(await overseer.listBlueprints())
     } catch (err) {
       console.error('Failed to load blueprints:', err)
-      toasts.add({ title: 'Failed to load blueprints', variant: 'error' })
+      toasts.add({ title: 'Failed to load blueprints', type: 'error' })
     } finally {
       setLoading(false)
     }
@@ -157,7 +155,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
     if (!file) return
 
     if (!file.type.startsWith('image/')) {
-      toasts.add({ title: 'Please select an image file.', variant: 'error' })
+      toasts.add({ title: 'Please select an image file.', type: 'error' })
       return
     }
 
@@ -172,7 +170,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
       setClearScreenshot(false)
     } catch (err) {
       console.error('Failed to process blueprint screenshot:', err)
-      toasts.add({ title: 'Failed to process screenshot', variant: 'error' })
+      toasts.add({ title: 'Failed to process screenshot', type: 'error' })
     } finally {
       setProcessingScreenshot(false)
     }
@@ -205,7 +203,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
         newDescription.trim() || undefined,
         screenshot,
       )
-      toasts.add({ title: 'Blueprint created.', variant: 'success' })
+      toasts.add({ title: 'Blueprint created.', type: 'success' })
       setFormMode('list')
       setNewTitle(metadata.title)
       setNewDescription('')
@@ -244,7 +242,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
         updateBindings: true,
         screenshot,
       })
-      toasts.add({ title: 'Blueprint updated.', variant: 'success' })
+      toasts.add({ title: 'Blueprint updated.', type: 'success' })
       setFormMode('list')
       setEditingBlueprint(null)
       setNewScreenshotBlob(null)
@@ -262,11 +260,11 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
     setDeletingId(id)
     try {
       await overseer.deleteBlueprint(id)
-      toasts.add({ title: 'Blueprint deleted.', variant: 'success' })
+      toasts.add({ title: 'Blueprint deleted.', type: 'success' })
       setConfirmingDeleteId(null)
       await loadBlueprints()
     } catch (err: any) {
-      toasts.add({ title: err.message || 'Failed to delete blueprint.', variant: 'error' })
+      toasts.add({ title: err.message || 'Failed to delete blueprint.', type: 'error' })
     } finally {
       setDeletingId(null)
     }
@@ -278,31 +276,31 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
   const screenshotPreviewUrl = newScreenshotUrl ?? savedScreenshotUrl
 
   return (
-    <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <Dialog className="!z-[1000] !w-[min(640px,calc(100vw-32px))] overflow-hidden bg-kumo-base p-0 !top-[10%] !-translate-y-0" size="lg">
-          <div className="flex items-start justify-between gap-4 border-b border-kumo-line px-4 py-5 sm:px-6">
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="!z-[1000] !w-[min(640px,calc(100vw-32px))] overflow-hidden bg-background p-0 !top-[10%] !-translate-y-0" size="lg">
+          <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-5 sm:px-6">
             <div className="flex min-w-0 items-start gap-3">
               <div className="min-w-0">
-              <Dialog.Title className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-kumo-default">
+              <DialogTitle className="text-[17px] leading-6 font-medium tracking-[-0.35px] text-foreground">
                 {formMode === 'create' ? 'Create blueprint' : formMode === 'edit' ? 'Edit blueprint' : 'Blueprints'}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+              </DialogTitle>
+              <DialogDescription className="mt-1 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                 {formMode === 'create'
                   ? 'Describe what people get when they start from this blueprint.'
                   : formMode === 'edit'
                     ? 'Update the details, screenshot, and connection guidance for this blueprint.'
                     : 'Turn this gadget into a reusable starting point.'}
-              </Dialog.Description>
+              </DialogDescription>
               </div>
             </div>
-            <Dialog.Close
+            <DialogClose
               render={(props) => (
-                <WorkshopIconButton
+                <Button
                   {...props}
                   aria-label="Close"
-                >
+                 className="!flex !h-8 !w-8 shrink-0 cursor-pointer items-center justify-center rounded-md !p-0 transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100" variant="ghost" size="icon-sm">
                   <X size={18} />
-                </WorkshopIconButton>
+                </Button>
               )}
             />
           </div>
@@ -315,20 +313,20 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
               <>
                 <div className="flex-1 overflow-y-auto chat-panel space-y-5 px-4 py-5 sm:px-6">
                   <div className="space-y-3">
-                    <WorkshopInput
+                    <Input
                       placeholder="Title"
                       aria-label="Blueprint title"
                       value={newTitle}
                       onChange={(e) => setNewTitle(e.target.value)}
-                      className="w-full"
+                      className="!h-9 rounded-lg border border-border bg-background px-3 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/15 w-full"
                     />
-                    <WorkshopInputArea
+                    <Textarea
                       placeholder="Description (optional)"
                       aria-label="Blueprint description"
                       value={newDescription}
                       onChange={(e) => setNewDescription(e.target.value)}
                       rows={3}
-                      className="w-full"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-foreground placeholder:text-muted-foreground shadow-none focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/15 w-full"
                     />
                     <input
                       ref={screenshotInputRef}
@@ -337,21 +335,21 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                       className="hidden"
                       onChange={handleScreenshotSelected}
                     />
-                    <div className="rounded-xl border border-kumo-line bg-kumo-base p-3">
+                    <div className="rounded-xl border border-border bg-background p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="m-0 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+                          <p className="m-0 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                             Screenshot
                           </p>
-                          <p className="m-0 mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                          <p className="m-0 mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                             Optional image shown on Explore and the blueprint detail page.
                             {formMode === 'edit' && !newScreenshotUrl && editingBlueprint?.screenshotUrl && !clearScreenshot ? ' The current screenshot will stay unless you upload a new one.' : ''}
                           </p>
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5">
                           {(newScreenshotUrl || (formMode === 'edit' && editingBlueprint?.screenshotUrl && !clearScreenshot)) && (
-                            <WorkshopButton
-                              className="!h-8"
+                            <Button
+                              className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-8"
                               onClick={() => {
                                 setNewScreenshotBlob(null)
                                 setNewScreenshotUrl(prev => {
@@ -361,22 +359,22 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                                 setClearScreenshot(true)
                               }}
                               disabled={processingScreenshot || creating}
-                            >
+                             variant="secondary">
                               Clear
-                            </WorkshopButton>
+                            </Button>
                           )}
-                          <WorkshopButton
-                            className="!h-8"
+                          <Button
+                            className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-8"
                             onClick={() => screenshotInputRef.current?.click()}
                             disabled={processingScreenshot || creating}
-                          >
+                           variant="secondary">
                             <ImageSquare size={13} weight="bold" />
                             {processingScreenshot ? 'Processing...' : newScreenshotUrl || (formMode === 'edit' && editingBlueprint?.screenshotUrl && !clearScreenshot) ? 'Change' : 'Upload'}
-                          </WorkshopButton>
+                          </Button>
                         </div>
                       </div>
                       {screenshotPreviewUrl && (
-                        <div className="mt-3 overflow-hidden rounded-lg border border-kumo-line bg-kumo-tint">
+                        <div className="mt-3 overflow-hidden rounded-lg border border-border bg-muted">
                           <img
                             src={screenshotPreviewUrl}
                             alt="Blueprint screenshot preview"
@@ -385,7 +383,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                         </div>
                       )}
                       {clearScreenshot && !newScreenshotUrl && (
-                        <div className="mt-3 rounded-lg border border-dashed border-kumo-line bg-kumo-tint px-3 py-2 text-[12px] leading-4 text-kumo-subtle">
+                        <div className="mt-3 rounded-lg border border-dashed border-border bg-muted px-3 py-2 text-[12px] leading-4 text-muted-foreground">
                           Screenshot will be removed when you save.
                         </div>
                       )}
@@ -393,19 +391,19 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                   </div>
 
                   {bindingsLoading ? (
-                    <div className="rounded-xl border border-kumo-line bg-kumo-base px-4 py-6 text-center text-[13px] text-kumo-subtle">
+                    <div className="rounded-xl border border-border bg-background px-4 py-6 text-center text-[13px] text-muted-foreground">
                       Loading connections...
                     </div>
                   ) : bindingsError ? (
-                    <div className="rounded-xl border border-kumo-line bg-kumo-base px-4 py-3 text-[13px] text-kumo-subtle">
+                    <div className="rounded-xl border border-border bg-background px-4 py-3 text-[13px] text-muted-foreground">
                       {bindingsError}
                     </div>
                   ) : bindings.length > 0 ? (
                     <section>
-                      <h3 className="m-0 mb-1 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+                      <h3 className="m-0 mb-1 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                         Connections
                       </h3>
-                      <p className="m-0 mb-3 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+                      <p className="m-0 mb-3 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
                         Name each connection and add guidance for people using this blueprint.
                       </p>
                       <div className="space-y-2">
@@ -421,36 +419,36 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                   ) : null}
                 </div>
 
-                <div className="border-t border-kumo-line px-4 py-4 sm:px-6">
+                <div className="border-t border-border px-4 py-4 sm:px-6">
                   {createError && (
-                    <div className="mb-3 flex items-start gap-2 rounded-lg border border-l-2 border-l-kumo-brand border-y-kumo-line border-r-kumo-line bg-kumo-base px-3 py-2 text-[12px] leading-[18px] font-normal tracking-[-0.2px] text-kumo-default">
-                      <Warning size={14} weight="fill" className="mt-0.5 shrink-0 text-kumo-brand" />
+                    <div className="mb-3 flex items-start gap-2 rounded-lg border border-l-2 border-l-primary border-y-border border-r-border bg-background px-3 py-2 text-[12px] leading-[18px] font-normal tracking-[-0.2px] text-foreground">
+                      <Warning size={14} weight="fill" className="mt-0.5 shrink-0 text-primary" />
                       <span>{createError}</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between">
-                    <WorkshopButton
-                      className="!h-9 min-w-[64px]"
+                    <Button
+                      className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-8 border border-border bg-background px-3 text-foreground enabled:hover:bg-card disabled:opacity-40 !h-9 min-w-[64px]"
                       onClick={() => {
                         setFormMode('list')
                         setEditingBlueprint(null)
                       }}
                       disabled={creating}
-                    >
+                     variant="secondary">
                       Back
-                    </WorkshopButton>
-                    <WorkshopButton
-                      tone="primary"
-                      className="min-w-[64px]"
+                    </Button>
+                    <Button
+
+                      className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 min-w-[64px]"
                       onClick={formMode === 'create' ? createBlueprint : saveBlueprintEdits}
                       disabled={creating || bindingsLoading || processingScreenshot}
-                    >
+                     variant="primary">
                       {creating
                         ? formMode === 'create' ? 'Creating...' : 'Saving...'
                         : processingScreenshot ? 'Processing...'
                           : bindingsLoading ? 'Loading...'
                             : formMode === 'create' ? 'Create' : 'Save'}
-                    </WorkshopButton>
+                    </Button>
                   </div>
                 </div>
               </>
@@ -467,36 +465,36 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                   setEditingBlueprint(null)
                   setFormMode('create')
                 }}
-                className="flex w-full items-center justify-between rounded-xl border border-kumo-line bg-kumo-base px-4 py-3 text-left transition-colors hover:bg-kumo-elevated"
+                className="flex w-full items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-card"
               >
                 <span>
-                  <span className="block text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+                  <span className="block text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                     Create blueprint
                   </span>
-                  <span className="mt-0.5 block text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+                  <span className="mt-0.5 block text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                     Publish this gadget as a reusable template.
                   </span>
                 </span>
-                <Plus size={16} className="text-kumo-subtle" />
+                <Plus size={16} className="text-muted-foreground" />
               </button>
 
             <section>
-              <h3 className="mb-2 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-default">
+              <h3 className="mb-2 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
                 Existing blueprints
               </h3>
 
               {loading ? (
-                <div className="rounded-xl border border-kumo-line bg-kumo-base px-4 py-6 text-center text-[13px] text-kumo-subtle">
+                <div className="rounded-xl border border-border bg-background px-4 py-6 text-center text-[13px] text-muted-foreground">
                   Loading blueprints...
                 </div>
               ) : blueprints.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-kumo-line bg-kumo-base px-4 py-6 text-center">
-                  <p className="text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle">
+                <div className="rounded-xl border border-dashed border-border bg-background px-4 py-6 text-center">
+                  <p className="text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
                     No blueprints yet.
                   </p>
                 </div>
               ) : (
-                <div className="overflow-hidden rounded-xl border border-kumo-line bg-kumo-base">
+                <div className="overflow-hidden rounded-xl border border-border bg-background">
                   {blueprints.map((bp, index) => (
                     <BlueprintRow
                       key={bp.id}
@@ -514,19 +512,19 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                       onUpdateCode={async () => {
                         try {
                           await overseer.updateBlueprint(bp.id, { updateCode: true })
-                          toasts.add({ title: 'Blueprint updated to current code.', variant: 'success' })
+                          toasts.add({ title: 'Blueprint updated to current code.', type: 'success' })
                           loadBlueprints()
                         } catch (err: any) {
-                          toasts.add({ title: err.message || 'Failed to update blueprint.', variant: 'error' })
+                          toasts.add({ title: err.message || 'Failed to update blueprint.', type: 'error' })
                         }
                       }}
                       onRetryPublish={async () => {
                         try {
                           await overseer.retryBlueprintPublish(bp.id)
-                          toasts.add({ title: 'Blueprint published successfully.', variant: 'success' })
+                          toasts.add({ title: 'Blueprint published successfully.', type: 'success' })
                           loadBlueprints()
                         } catch (err: any) {
-                          toasts.add({ title: err.message || 'Retry failed.', variant: 'error' })
+                          toasts.add({ title: err.message || 'Retry failed.', type: 'error' })
                         }
                       }}
                       onCopyLink={async () => {
@@ -546,8 +544,8 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
               </div>
             )}
           </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -587,14 +585,14 @@ function BlueprintRow({
   if (isConfirmingDelete) {
     return (
       <div
-        className={`flex items-center px-4 py-4 ${ROW_MIN_H} ${isFirst ? '' : 'border-t border-kumo-line'} bg-kumo-danger-tint/40`}
+        className={`flex items-center px-4 py-4 ${ROW_MIN_H} ${isFirst ? '' : 'border-t border-border'} bg-destructive-muted/40`}
       >
         <div className="flex w-full flex-wrap items-center gap-3">
           <div className="min-w-0 flex-1">
-            <p className="m-0 truncate text-[14px] leading-5 font-semibold tracking-[-0.3px] text-kumo-danger">
+            <p className="m-0 truncate text-[14px] leading-5 font-semibold tracking-[-0.3px] text-destructive">
               Delete "{bp.title}"?
             </p>
-            <p className="m-0 mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
+            <p className="m-0 mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
               People who started a gadget from this blueprint won't be affected, but the link will stop working.
             </p>
           </div>
@@ -602,7 +600,7 @@ function BlueprintRow({
             type="button"
             onClick={onConfirmDelete}
             disabled={isDeleting}
-            className="inline-flex h-7 shrink-0 cursor-pointer items-center rounded-md bg-kumo-danger px-2.5 text-[12px] leading-4 font-medium tracking-[-0.2px] text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-7 shrink-0 cursor-pointer items-center rounded-md bg-destructive px-2.5 text-[12px] leading-4 font-medium tracking-[-0.2px] text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isDeleting ? 'Deleting...' : 'Delete'}
           </button>
@@ -610,7 +608,7 @@ function BlueprintRow({
             type="button"
             onClick={onCancelDelete}
             disabled={isDeleting}
-            className="inline-flex h-7 shrink-0 cursor-pointer items-center rounded-md bg-transparent px-2.5 text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-subtle transition-colors hover:bg-kumo-tint hover:text-kumo-default disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-7 shrink-0 cursor-pointer items-center rounded-md bg-transparent px-2.5 text-[12px] leading-4 font-medium tracking-[-0.2px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
             Cancel
           </button>
@@ -621,24 +619,24 @@ function BlueprintRow({
 
   return (
     <div
-      className={`group/row relative px-4 py-4 ${ROW_MIN_H} ${isFirst ? '' : 'border-t border-kumo-line'}`}
+      className={`group/row relative px-4 py-4 ${ROW_MIN_H} ${isFirst ? '' : 'border-t border-border'}`}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-3">
-        <p className="m-0 min-w-0 flex-1 truncate text-[15px] leading-5 font-semibold tracking-[-0.3px] text-kumo-default">
+        <p className="m-0 min-w-0 flex-1 truncate text-[15px] leading-5 font-semibold tracking-[-0.3px] text-foreground">
           {bp.title}
         </p>
 
         <span
           className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] leading-4 font-semibold tracking-[-0.1px] ${
             bp.dirty
-              ? 'border-kumo-brand/25 bg-kumo-brand/10 text-kumo-brand'
-              : 'border-kumo-line bg-kumo-tint text-kumo-subtle'
+              ? 'border-primary/25 bg-primary/10 text-primary'
+              : 'border-border bg-muted text-muted-foreground'
           }`}
           title={bp.dirty ? 'Last publish failed' : undefined}
         >
           {bp.dirty && (
             <span
-              className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-kumo-brand"
+              className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
               aria-hidden="true"
             />
           )}
@@ -648,11 +646,11 @@ function BlueprintRow({
 
       <div className="mt-1.5 min-h-[18px]">
         {bp.description ? (
-          <p className="m-0 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-subtle whitespace-pre-wrap">
+          <p className="m-0 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground whitespace-pre-wrap">
             {bp.description}
           </p>
         ) : (
-          <p className="m-0 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-kumo-inactive">
+          <p className="m-0 text-[13px] leading-[18px] font-normal tracking-[-0.25px] text-muted-foreground">
             No description
           </p>
         )}
@@ -674,7 +672,7 @@ function BlueprintRow({
             }}
             icon={
               copyState === 'copied' ? (
-                <Check size={13} className="text-kumo-success" />
+                <Check size={13} className="text-status-success" />
               ) : (
                 <Copy size={13} />
               )
@@ -687,7 +685,7 @@ function BlueprintRow({
           <button
             type="button"
             onClick={onStartEdit}
-            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md bg-transparent text-kumo-subtle transition-colors hover:bg-kumo-tint hover:text-kumo-default"
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             aria-label="Edit blueprint"
           >
             <Pencil size={13} />
@@ -695,7 +693,7 @@ function BlueprintRow({
           <button
             type="button"
             onClick={onStartDelete}
-            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md bg-transparent text-kumo-subtle transition-colors hover:bg-kumo-danger-tint hover:text-kumo-danger"
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground transition-colors hover:bg-destructive-muted hover:text-destructive"
             aria-label="Delete blueprint"
           >
             <Trash size={13} />
@@ -719,7 +717,7 @@ function GhostButton({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-transparent px-2 text-[12px] leading-4 font-medium tracking-[-0.2px] text-kumo-subtle transition-colors hover:bg-kumo-tint hover:text-kumo-default"
+      className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-transparent px-2 text-[12px] leading-4 font-medium tracking-[-0.2px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       {icon}
       {children}

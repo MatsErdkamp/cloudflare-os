@@ -1,8 +1,7 @@
-import { Text, Loader } from '@cloudflare/kumo'
 import { LinkSimple } from '@phosphor-icons/react'
 import { VendorDescription } from '@gadgets/workshop-shared/gatekeeper'
 import Avatar from './components/Avatar'
-
+import { Text, Spinner } from '@matser/ui'
 export interface VendorCardProps {
   vendor: VendorDescription
   onClick: () => void
@@ -21,8 +20,8 @@ export default function VendorCard({
   return (
     <div
       onClick={disabled ? undefined : onClick}
-      className={`flex items-center gap-4 p-4 border border-kumo-line rounded-lg transition-all ${
-        disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:border-kumo-brand hover:bg-kumo-tint'
+      className={`flex items-center gap-4 p-4 border border-border rounded-lg transition-all ${
+        disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:border-primary hover:bg-muted'
       } ${disabled && !loading ? 'opacity-50' : ''}`}
     >
       <Avatar
@@ -32,16 +31,16 @@ export default function VendorCard({
         fallback={<LinkSimple size={22} />}
       />
       <div className="flex-1">
-        <Text variant="body" bold as="span" DANGEROUS_className="block text-base">
+        <Text variant="body" weight="semibold" as="span" className="block text-base">
           {vendor.displayName}
         </Text>
         {vendor.url && (
-          <Text variant="secondary" size="xs" as="span">
+          <Text variant="muted" size="xs" as="span">
             {vendor.url}
           </Text>
         )}
       </div>
-      {loading && <Loader size="sm" />}
+      {loading && <Spinner size={16} />}
     </div>
   )
 }

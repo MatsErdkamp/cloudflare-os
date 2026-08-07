@@ -10,10 +10,9 @@ import {
   UploadSimple,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from '../AuthContext'
 import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from './menuStyles'
-
+import { DropdownMenu, useToast, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@matser/ui'
 // A unified row item, merged from the user's published blueprints (`listOwnBlueprints`) and their
 // library (`listLibraryBlueprints`). Mirrors the sidebar's SidebarBlueprintItem but adds the bits
 // the full-page list shows (description, timestamp) and tracks whether the user owns it.
@@ -30,7 +29,7 @@ type BlueprintItem = {
 // Chrome shared by the page's secondary actions. `w-full` + `justify-center` are what let a pair of
 // these sit in a 2-column grid and come out the same width whatever their labels say.
 const ACTION_BUTTON =
-  'press inline-flex h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-kumo-line bg-kumo-base px-3.5 text-[13px] font-medium tracking-[-0.25px] text-kumo-default transition-colors hover:bg-kumo-tint disabled:cursor-default disabled:opacity-50'
+  'press inline-flex h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-3.5 text-[13px] font-medium tracking-[-0.25px] text-foreground transition-colors hover:bg-muted disabled:cursor-default disabled:opacity-50'
 
 function formatRelativeTime(date: Date): string {
   const diff = Date.now() - date.getTime()
@@ -64,26 +63,26 @@ function BlueprintRow({
     <Link
       to="/blueprint/$id"
       params={{ id: item.id }}
-      className="group flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-150 ease-out hover:bg-kumo-tint"
+      className="group flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-150 ease-out hover:bg-muted"
     >
       {/* Neutral monogram */}
-      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-kumo-fill text-kumo-subtle">
+      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent text-muted-foreground">
         <BlueprintIcon size={16} weight="regular" />
       </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          {item.pinned && <Star size={12} weight="fill" className="flex-shrink-0 text-kumo-brand" />}
-          <h3 className="truncate text-sm font-medium text-kumo-default">
+          {item.pinned && <Star size={12} weight="fill" className="flex-shrink-0 text-primary" />}
+          <h3 className="truncate text-sm font-medium text-foreground">
             {item.title || 'Untitled blueprint'}
           </h3>
         </div>
         {item.description && (
-          <p className="mt-0.5 truncate text-xs text-kumo-subtle">{item.description}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.description}</p>
         )}
       </div>
 
-      <span className="hidden flex-shrink-0 items-center gap-1 text-xs text-kumo-inactive lg:flex">
+      <span className="hidden flex-shrink-0 items-center gap-1 text-xs text-muted-foreground lg:flex">
         <Clock size={10} />
         {formatRelativeTime(new Date(item.recency))}
       </span>
@@ -92,28 +91,28 @@ function BlueprintRow({
           is needed to stop the native <a> from navigating. */}
       <div onClick={(e) => { e.stopPropagation(); e.preventDefault() }}>
         <DropdownMenu>
-          <DropdownMenu.Trigger
+          <DropdownMenuTrigger
             render={
               <button
                 type="button"
-                className="rounded-md p-1.5 text-kumo-subtle transition-colors hover:bg-kumo-fill hover:text-kumo-default focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
               >
                 <DotsThreeVertical size={16} />
               </button>
             }
           />
-          <DropdownMenu.Content className={MENU_CONTENT}>
-            <DropdownMenu.Item onClick={() => onTogglePin(item)} className={MENU_ITEM}>
+          <DropdownMenuContent className={MENU_CONTENT}>
+            <DropdownMenuItem onClick={() => onTogglePin(item)} className={MENU_ITEM}>
               <Star size={13} className="mr-2" weight={item.pinned ? 'fill' : 'regular'} />
               {item.pinned ? 'Unfavorite' : 'Favorite'}
-            </DropdownMenu.Item>
+            </DropdownMenuItem>
             {item.inLibrary && (
-              <DropdownMenu.Item variant="danger" onClick={() => onRemoveFromLibrary(item)} className={MENU_ITEM_DANGER}>
+              <DropdownMenuItem variant="destructive" onClick={() => onRemoveFromLibrary(item)} className={MENU_ITEM_DANGER}>
                 <Trash size={13} className="mr-2" />
                 Remove from library
-              </DropdownMenu.Item>
+              </DropdownMenuItem>
             )}
-          </DropdownMenu.Content>
+          </DropdownMenuContent>
         </DropdownMenu>
       </div>
     </Link>
@@ -122,7 +121,7 @@ function BlueprintRow({
 
 export default function BlueprintList() {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
 
   const [items, setItems] = useState<BlueprintItem[]>([])
   const [search, setSearch] = useState('')
@@ -193,11 +192,11 @@ export default function BlueprintList() {
     setUploading(true)
     try {
       await authenticatedApi.importBlueprint(file.stream() as ReadableStream<Uint8Array>)
-      toasts.add({ title: 'Blueprint uploaded', variant: 'success' })
+      toasts.add({ title: 'Blueprint uploaded', type: 'success' })
       load()
     } catch (err) {
       console.error('Failed to upload blueprint:', err)
-      toasts.add({ title: 'Failed to upload blueprint', variant: 'error' })
+      toasts.add({ title: 'Failed to upload blueprint', type: 'error' })
     } finally {
       setUploading(false)
     }
@@ -211,7 +210,7 @@ export default function BlueprintList() {
     } catch (err) {
       console.error('Failed to update blueprint pin:', err)
       setItems((prev) => sortItems(prev.map((b) => (b.id === item.id ? { ...b, pinned: item.pinned } : b))))
-      toasts.add({ title: 'Failed to update favorite', variant: 'error' })
+      toasts.add({ title: 'Failed to update favorite', type: 'error' })
     }
   }
 
@@ -225,10 +224,10 @@ export default function BlueprintList() {
           .map((b) => (b.id === item.id ? { ...b, inLibrary: false } : b))
           .filter((b) => b.inLibrary || b.isOwn),
       )
-      toasts.add({ title: 'Removed from library', variant: 'success' })
+      toasts.add({ title: 'Removed from library', type: 'success' })
     } catch (err) {
       console.error('Failed to remove blueprint from library:', err)
-      toasts.add({ title: 'Failed to remove blueprint', variant: 'error' })
+      toasts.add({ title: 'Failed to remove blueprint', type: 'error' })
     }
   }
 
@@ -254,13 +253,13 @@ export default function BlueprintList() {
       {!loading && items.length > 0 && (
         <div className="mb-4 flex items-center gap-2 px-3">
           <div className="relative flex-1">
-            <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-kumo-inactive" />
+            <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search blueprints…"
-              className="h-9 w-full rounded-lg border border-kumo-line bg-kumo-base pl-9 pr-4 text-[13px] tracking-[-0.25px] text-kumo-default placeholder:text-kumo-inactive transition-[border-color,box-shadow] duration-150 ease-out focus:border-kumo-ring focus:outline-none focus:ring-[3px] focus:ring-kumo-ring/15"
+              className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-4 text-[13px] tracking-[-0.25px] text-foreground placeholder:text-muted-foreground transition-[border-color,box-shadow] duration-150 ease-out focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring/15"
             />
           </div>
           {/* Grid, not flex: 1fr columns give the two buttons a matching width, where flex would
@@ -290,25 +289,25 @@ export default function BlueprintList() {
         {loading ? (
           <div className="flex flex-col gap-0.5 px-3">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-[56px] rounded-xl bg-kumo-elevated animate-pulse" />
+              <div key={i} className="h-[56px] rounded-xl bg-card animate-pulse" />
             ))}
           </div>
         ) : loadError ? (
           <div className="py-12 text-center text-sm">
-            <p className="text-kumo-danger">Something went wrong loading your blueprints.</p>
-            <button type="button" onClick={load} className="mt-1 text-kumo-brand underline">Try again</button>
+            <p className="text-destructive">Something went wrong loading your blueprints.</p>
+            <button type="button" onClick={load} className="mt-1 text-primary underline">Try again</button>
           </div>
         ) : filtered.length === 0 ? (
           search ? (
-            <div className="py-12 text-center text-sm text-kumo-inactive">No blueprints found</div>
+            <div className="py-12 text-center text-sm text-muted-foreground">No blueprints found</div>
           ) : (
             <div className="flex flex-col items-center gap-3 px-3 py-16 text-center">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-kumo-fill text-kumo-subtle">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-muted-foreground">
                 <BlueprintIcon size={18} />
               </div>
               <div>
-                <p className="text-sm font-medium text-kumo-default">No blueprints yet</p>
-                <p className="mt-1 text-[13px] leading-[18px] text-kumo-subtle">
+                <p className="text-sm font-medium text-foreground">No blueprints yet</p>
+                <p className="mt-1 text-[13px] leading-[18px] text-muted-foreground">
                   Publish a workspace as a blueprint, or add one from Explore.
                 </p>
               </div>

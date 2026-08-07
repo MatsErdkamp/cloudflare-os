@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CloudflareUsageInfo, CloudflareAccountOption } from '@gadgets/workshop-shared/api'
-import { Dialog, Button, Loader, Radio, useKumoToastManager } from '@cloudflare/kumo'
 import { Warning } from '@phosphor-icons/react'
 import { useOptionalAuthenticatedApi } from '../../AuthContext'
 import { useCloudflareLimitsEnabled } from '../../ServerConfigContext'
-
+import { Dialog, Button, Spinner, useToast, DialogContent, DialogTitle, RadioGroup, RadioGroupItem } from '@matser/ui'
 // Global, mandatory modal that forces the user to pick which Cloudflare account to bill whenever
 // they're connected but have access to more than one account. Auto-opens (and re-opens) as long as
 // the selection is pending, so it can't be missed after connecting. Mounted once in the app shell.
 export default function AccountSelectionModal() {
   const limitsEnabled = useCloudflareLimitsEnabled()
   const auth = useOptionalAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToast()
   const [needsSelection, setNeedsSelection] = useState(false)
   const [accounts, setAccounts] = useState<CloudflareAccountOption[] | null>(null)
   const [chosen, setChosen] = useState<string | undefined>(undefined)
@@ -53,12 +52,12 @@ export default function AccountSelectionModal() {
     setSaving(true)
     try {
       await auth.authenticatedApi.selectCloudflareAccount(chosen)
-      toasts.add({ title: 'Cloudflare account selected', variant: 'success' })
+      toasts.add({ title: 'Cloudflare account selected', type: 'success' })
       setNeedsSelection(false)
       setAccounts(null)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to select account'
-      toasts.add({ title: msg, variant: 'error' })
+      toasts.add({ title: msg, type: 'error' })
     } finally {
       setSaving(false)
     }
@@ -67,35 +66,34 @@ export default function AccountSelectionModal() {
   return (
     // role="alertdialog" + no close affordance: the choice is mandatory, so it isn't dismissible by
     // clicking outside.
-    <Dialog.Root open role="alertdialog">
-      <Dialog className="p-6 sm:w-[480px]" size="base">
-        <Dialog.Title className="text-lg font-semibold mb-2 flex items-center gap-2">
-          <Warning size={22} weight="bold" className="text-kumo-warning" />
+    <Dialog open>
+      <DialogContent role="alertdialog" className="p-6 sm:w-[480px]" size="md">
+        <DialogTitle className="text-lg font-semibold mb-2 flex items-center gap-2">
+          <Warning size={22} weight="bold" className="text-status-warning" />
           Choose a Cloudflare account
-        </Dialog.Title>
+        </DialogTitle>
 
         <div className="space-y-4">
-          <p className="text-sm text-kumo-subtle">
+          <p className="text-sm text-muted-foreground">
             Your Cloudflare connection has access to multiple accounts. Select the one whose credits
             should be billed for usage beyond the free tier.
           </p>
 
           {accounts === null ? (
-            <div className="flex justify-center py-6"><Loader size="base" /></div>
+            <div className="flex justify-center py-6"><Spinner size={20} /></div>
           ) : accounts.length === 0 ? (
-            <p className="text-sm text-kumo-subtle">No accounts available on this connection.</p>
+            <p className="text-sm text-muted-foreground">No accounts available on this connection.</p>
           ) : (
-            <Radio.Group
-              appearance="card"
+            <RadioGroup
               value={chosen}
-              onValueChange={setChosen}
+              onValueChange={(value) => setChosen(value as string)}
               disabled={saving}
             >
-              <Radio.Legend className="sr-only">Cloudflare account</Radio.Legend>
+              <div className="sr-only">Cloudflare account</div>
               {accounts.map((a) => (
-                <Radio.Item key={a.accountId} value={a.accountId} label={a.accountName} />
+                <RadioGroupItem key={a.accountId} index={accounts.indexOf(a)} value={a.accountId} label={a.accountName} />
               ))}
-            </Radio.Group>
+            </RadioGroup>
           )}
 
           <div className="flex justify-end gap-2 pt-1">
@@ -123,7 +121,7 @@ export default function AccountSelectionModal() {
             )}
           </div>
         </div>
-      </Dialog>
-    </Dialog.Root>
+      </DialogContent>
+    </Dialog>
   )
 }
