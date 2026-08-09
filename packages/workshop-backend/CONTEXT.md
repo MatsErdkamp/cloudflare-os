@@ -168,6 +168,14 @@ _Avoid_: Grant, permission
 The materialized, generation-acknowledged Contract Instance Facet through which one Binding's capability graph is invoked and synchronously invalidated.
 _Avoid_: Raw Facet Fetcher, separate Binding authority store, Overseer dispatcher
 
+**Invalidation Intent**:
+A durable, generation-bound record that prevents republishing an old Binding while its Binding Enforcement Endpoint is being invalidated; it is not yet a completed revocation.
+_Avoid_: Revocation, cleanup request
+
+**Revocation Commit Point**:
+The atomic Workspace transaction that, after every old-generation enforcement endpoint acknowledges invalidation, changes canonical authority, appends its Authority Events, and roots predecessor cleanup responsibility. This is the externally visible authority-status completion of local revocation or replacement.
+_Avoid_: Invalidation request, provider cleanup, stub disposal
+
 **Authority Debt**:
 The reviewed difference between provider-native authority and narrower effective standing or task authority, preserving enforcement layer, revocation granularity, risk, exception owner, production eligibility, and remediation.
 _Avoid_: Enforcement Gap, accepted risk, task scope, hidden provider scope
