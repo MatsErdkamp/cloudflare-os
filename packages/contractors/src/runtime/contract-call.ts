@@ -1,4 +1,5 @@
-import type { ContractCaller } from "../authoring/contract-context.js";
+/** Bounded task-neutral caller attribution retained by generic Contract operations. */
+export type ContractCaller = Readonly<Record<string, unknown>>;
 
 /** Audit context minted for every public Contract session. */
 export interface ContractCallContext<WorkpieceId = number, Caller = ContractCaller> {

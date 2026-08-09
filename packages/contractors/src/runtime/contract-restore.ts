@@ -1,4 +1,5 @@
 import type {RpcStub, RpcTarget} from "cloudflare:workers";
+import type {ContractRestorationReference} from "./capability-lifecycle.js";
 
 /** Stable prefix used for Contract-owned persistent restoration parameters. */
 export const CONTRACT_RESTORATION_STORAGE_PREFIX = "contract:restoration:";
@@ -10,5 +11,5 @@ export function contractRestorationStorageKey(restorationId: string): string {
 }
 /** Narrow Manager capability used by a Contract facet to mint retractable restored stubs. */
 export interface ContractRestoreHost {
-  restore<T extends RpcTarget>(restorationId: string): RpcStub<T>;
+  restore<T extends RpcTarget>(reference: ContractRestorationReference): RpcStub<T>;
 }

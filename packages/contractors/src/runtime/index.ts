@@ -1,14 +1,8 @@
 export {
   CONTRACT_HARNESS,
-  CONTRACT_HARNESS_V8,
-  CONTRACT_RUNTIME_HARNESS_VERSION,
-  CONTRACT_RUNTIME_HARNESS_V8_VERSION,
-  contractHarnessForVersion,
+  CONTRACT_MAX_COMPOSITION_DEPTH,
+  CONTRACT_OBSERVER_DRAIN_TIMEOUT_MS,
 } from "./contract-harness.js";
-export { canonicalContractJson, hashArtifact, hashSourceTypes } from "../artifact/hash-artifact.js";
-export { validateDependencyPolicy } from "../artifact/dependency-policy.js";
-export type { DependencyPolicy } from "../artifact/dependency-policy.js";
-export { createContractPolicy } from "./contract-session.js";
 export { assertContractStructuredData } from "../host/shared-state-host.js";
 export {
   ContractApprovalRejected,
@@ -21,14 +15,31 @@ export {
   contractRestorationStorageKey,
 } from "./contract-restore.js";
 export type { ContractRestoreHost } from "./contract-restore.js";
-export type { ContractArtifact } from "../artifact/contract-artifact.js";
-export type { ContractActionAttribution, ContractCallContext } from "./contract-call.js";
+export type {
+  ContractActionAttribution,
+  ContractCallContext,
+  ContractCaller,
+} from "./contract-call.js";
 export type {
   ContractInvocationEvidence,
   ContractInvocationEvidenceInput,
   ContractInvocationGenerations,
 } from "./contract-invocation.js";
-export type { CreateContractPolicyInput } from "./contract-session.js";
+export {
+  ContractLifecycleError,
+} from "./capability-lifecycle.js";
+export type {
+  ContractInvalidationAcknowledgement,
+  ContractLifecycleEndpoint,
+  ContractLifecycleErrorCode,
+  ContractLifecycleObservation,
+  ContractLifecycleObserver,
+  ContractLifecycleSession,
+  ContractReachabilitySnapshot,
+  ContractRestorationRecord,
+  ContractRestorationReference,
+  ContractUpstreamCancellation,
+} from "./capability-lifecycle.js";
 export type {
   ContractOperationAttribution,
   ContractOperationDecision,
@@ -36,15 +47,3 @@ export type {
   ContractOperationState,
 } from "./contract-operation.js";
 export type { ContractOperationHost } from "../host/operation-host.js";
-// Compatibility facade for existing Workshop hosts; new consumers use ./cloudflare-os.
-export type { ContractSourceApprovalMode } from "../cloudflare-os/source-session.js";
-export { contractActionAttribution } from "../cloudflare-os/action-attribution.js";
-export type {
-  ContractApprovalDescription,
-  ContractApprovalRequirement,
-} from "../authoring/contract-policy.js";
-export {
-  isContractPackageName,
-  isExactContractDependencyVersion,
-  isWorkerCompatibilityDate,
-} from "../artifact/validation.js";

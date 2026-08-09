@@ -6,7 +6,7 @@ import type {
 } from "./contract-policy.js";
 import type { ContractInvocationEvidence } from "../runtime/contract-invocation.js";
 
-/** Direct approval capability supplied to v8 Contract code. */
+/** Direct approval capability supplied to Contract code. */
 export interface ContractApproval<Source> {
   /** Runs one operation after the host releases its already-present Source authority. */
   manual<T>(
@@ -28,7 +28,7 @@ export interface SharedContractState {
   delete(key: string): Promise<void>;
 }
 
-/** Capabilities supplied to v8 Contract code for one instance. */
+/** Capabilities supplied to Contract code for one instance. */
 export interface ContractContext<Source> {
   /** Exact attenuated Upstream Authority for this Contract Instance. */
   readonly source: Source;
@@ -50,18 +50,18 @@ export interface ContractContext<Source> {
   restore<T extends RpcTarget>(params: unknown): RpcStub<T>;
 }
 
-/** Creates the public root capability for one v8 Contract session. */
+/** Creates the public root capability for one Contract session. */
 export type ContractFactory<Source, Binding extends RpcTarget> = (
   context: ContractContext<Source>,
 ) => Binding | Promise<Binding>;
 
-/** Optional v8 export used to rebuild persistent Contract-owned capabilities. */
+/** Optional export used to rebuild persistent Contract-owned capabilities. */
 export type ContractCapabilityRestorer<Source> = (
   context: ContractContext<Source>,
   params: unknown,
 ) => RpcTarget | Promise<RpcTarget>;
 
-/** Declares a v8 Contract factory without adding or interpreting policy. */
+/** Declares a Contract factory without adding or interpreting policy. */
 export function defineContract<Source, Binding extends RpcTarget>(
   factory: ContractFactory<Source, Binding>,
 ): ContractFactory<Source, Binding> {

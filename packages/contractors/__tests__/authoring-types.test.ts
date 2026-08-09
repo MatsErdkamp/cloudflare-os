@@ -14,7 +14,7 @@ it("types persistent restoration with the full Source-bearing Contract context",
     .toEqualTypeOf<ContractContext<EmailSource>>();
 });
 
-it("exposes direct approval without legacy policy or arbitrary caller records", () => {
+it("exposes direct approval without obsolete policy or arbitrary caller records", () => {
   type Context = ContractContext<EmailSource>;
   expectTypeOf<Context["approval"]["manual"]>().toBeFunction();
   expectTypeOf<Context["invocation"]["generations"]["binding"]>().toBeNumber();

@@ -2,13 +2,7 @@
   "name": "@gadgets/contractors",
   "version": "0.1.0",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
     "./artifact": {
       "types": "./dist/artifact/index.d.ts",
       "import": "./dist/artifact/index.js"
@@ -20,6 +14,10 @@
     "./cloudflare-os": {
       "types": "./dist/cloudflare-os/index.d.ts",
       "import": "./dist/cloudflare-os/index.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler/index.d.ts",
+      "import": "./dist/compiler/index.js"
     },
     "./host": {
       "types": "./dist/host/index.d.ts",

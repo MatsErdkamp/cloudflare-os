@@ -1,12 +1,12 @@
-/** Declares one v8 Contract factory. */
-export { defineContract } from "./v8.js";
+/** Declares one Contract factory. */
+export { defineContract } from "./contract-authoring.js";
 export type {
   ContractApproval,
   ContractCapabilityRestorer,
   ContractContext,
   ContractFactory,
   SharedContractState,
-} from "./v8.js";
+} from "./contract-authoring.js";
 export type {
   ContractApprovalDescription,
   ContractApprovalRequirement,

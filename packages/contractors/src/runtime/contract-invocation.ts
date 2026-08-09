@@ -9,7 +9,6 @@ export interface ContractInvocationGenerations {
 
 /** Immutable task-neutral invocation evidence produced by a Contract host. */
 export interface ContractInvocationEvidence {
-  readonly schemaVersion: 1;
   readonly invocationId: string;
   readonly consumerId: string;
   readonly bindingId: string;
@@ -23,4 +22,4 @@ export interface ContractInvocationEvidence {
 }
 
 /** Exact validated input accepted only at the Contract host seam. */
-export type ContractInvocationEvidenceInput = Omit<ContractInvocationEvidence, "schemaVersion">;
+export type ContractInvocationEvidenceInput = ContractInvocationEvidence;

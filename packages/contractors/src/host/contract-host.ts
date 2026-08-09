@@ -1,4 +1,4 @@
-import type {SharedContractState} from "../authoring/contract-context.js";
+import type {SharedContractState} from "../authoring/contract-authoring.js";
 import type {ArtifactStore} from "./artifact-store.js";
 import type {ContractOperationHost} from "./operation-host.js";
 

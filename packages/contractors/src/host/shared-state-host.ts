@@ -1,4 +1,4 @@
-import type { SharedContractState } from "../authoring/contract-context.js";
+import type { SharedContractState } from "../authoring/contract-authoring.js";
 
 /** Manager-owned structured key-value persistence used by explicitly shared instances. */
 export interface SharedStateBackend {

@@ -11,3 +11,7 @@ export type {
   ContractInvocationEvidenceInput,
   ContractInvocationGenerations,
 } from "../runtime/contract-invocation.js";
+/** Validates and freezes one host-produced lifecycle snapshot. */
+export { validateContractReachabilitySnapshot } from "../runtime/capability-lifecycle.js";
+/** Seals capability-free restoration parameters to one exact lifecycle snapshot. */
+export { createContractRestorationRecord } from "../runtime/capability-lifecycle.js";

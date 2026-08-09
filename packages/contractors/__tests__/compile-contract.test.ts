@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { compileContract, hashArtifact } from "../src/artifact/index";
+import { compileContract, type CompileContractInput } from "../src/compiler/index";
 import { ContractCompilationError } from "../src/runtime/index";
 
 const VALID_CONTRACT = `
-  import { defineContract } from "@gadgets/contractors";
+  import { defineContract } from "@gadgets/contractors/authoring";
   import { RpcTarget } from "cloudflare:workers";
   import type { Source } from "contract:source";
 
@@ -39,36 +39,14 @@ function input(source = VALID_CONTRACT) {
   };
 }
 
+async function compileArtifact(buildInput: CompileContractInput) {
+  return (await compileContract(buildInput)).artifact;
+}
+
 describe("compileContract", () => {
-  it("keeps historical v1-v7 artifact identities byte-stable", async () => {
-    const base = {
-      mainModule: "contract.js",
-      modules: { "contract.js": "export default function(){}" },
-      publicTypes: "export interface ContractBinding { ping(): string; }",
-      publicRootType: "ContractBinding" as const,
-      sourceTypeHash: "0123456789abcdef",
-      sourceRootType: "FixtureSource",
-      dependencies: [],
-      compatibilityDate: "2026-08-05",
-    };
-    const fixtures = {
-      "1": "sha256:131e6d95b5edd631378adbced1112900a13d9a23e71f0ad9443edfcdd719f425",
-      "2": "sha256:0c38b22bf94e02b5482f14da206a9e0d9c2f407132b8550ee60529f3768954a3",
-      "3": "sha256:93ef5255be6c5430bb6023e74ffed6d3d114faf343e99b655ddb3ad41fbc0569",
-      "4": "sha256:084b5e80c14e8b94ebf52f45d91455d72b89ca75f946f227d794963fcc1a5b79",
-      "5": "sha256:82c9eb4c452a6c4a915f5355eec5bb3b4d1a674aede29db2f5fa404ca6f4468c",
-      "6": "sha256:ba7aa9fba8abddcb8d6448dc001a7dc623b0a39d135716d0578f910b39776655",
-      "7": "sha256:31fd921a1149e416f1f211123f5007afe82e8d3d98d6b7ab0a072d253b1bd7b2",
-    } as const;
-
-    for (const [runtimeHarnessVersion, expected] of Object.entries(fixtures)) {
-      await expect(hashArtifact({ ...base, runtimeHarnessVersion })).resolves.toBe(expected);
-    }
-  });
-
   it("produces a deterministic immutable artifact with public ContractBinding types", async () => {
-    const first = await compileContract(input());
-    const second = await compileContract(input());
+    const first = await compileArtifact(input());
+    const second = await compileArtifact(input());
 
     expect(first.hash).toBe(second.hash);
     expect(first.mainModule).toBe("contract.js");
@@ -79,11 +57,10 @@ describe("compileContract", () => {
     expect(first.publicTypes).not.toContain("EmailSource");
     expect(first.sourceRootType).toBe("EmailSource");
     expect(first.publicRootType).toBe("ContractBinding");
-    expect(first.runtimeHarnessVersion).toBe("7");
   });
 
   it("omits private implementation declarations from Consumer-facing types", async () => {
-    const artifact = await compileContract(input(`
+    const artifact = await compileArtifact(input(`
       import { RpcTarget } from "cloudflare:workers";
       export interface ContractBinding extends RpcTarget { ping(): string; }
       class PrivateImplementation extends RpcTarget implements ContractBinding {
@@ -105,7 +82,7 @@ describe("compileContract", () => {
       export default function createContract() { return new ContractBinding(); }
     `;
 
-    const artifact = await compileContract({
+    const artifact = await compileArtifact({
       ...input(source),
       modules: {"contract.js": source},
       mainModule: "contract.js",
@@ -124,7 +101,7 @@ describe("compileContract", () => {
       export default function createContract(): CustomerEmail { return new Binding(); }
     `;
 
-    const artifact = await compileContract(input(source));
+    const artifact = await compileArtifact(input(source));
     expect(artifact.publicTypes).toContain("CustomerEmail as ContractBinding");
   });
 
@@ -134,7 +111,7 @@ describe("compileContract", () => {
         'import type { Source } from "contract:source";\nimport { normalize } from "./helper";')
       .replace("return message.subject;", "return normalize(message.subject);");
 
-    const artifact = await compileContract({
+    const artifact = await compileArtifact({
       ...input(source),
       modules: {
         "contract.ts": source,
@@ -157,7 +134,7 @@ describe("compileContract", () => {
       }
       export default function createContract(): ContractBinding { return new Binding(); }
     `;
-    const artifact = await compileContract({
+    const artifact = await compileArtifact({
       ...input(source),
       modules: {
         "contract.ts": source,
@@ -184,7 +161,7 @@ describe("compileContract", () => {
       .replace("async subject(id: string) {", "async rawSource() {")
       .replace("const message = await this.source.readEmail(id);\n      return message.subject;", "return this.source;");
 
-    const artifact = await compileContract(input(exposed));
+    const artifact = await compileArtifact(input(exposed));
 
     expect(artifact.publicTypes).toContain("interface EmailSource");
     expect(artifact.publicTypes).toContain("type Source = EmailSource");
@@ -253,36 +230,18 @@ describe("compileContract", () => {
   });
 
   it("changes the hash when compatibility or dependency authority changes", async () => {
-    const original = await compileContract(input());
-    const compatibilityChanged = await compileContract({
+    const original = await compileArtifact(input());
+    const compatibilityChanged = await compileArtifact({
       ...input(),
       compatibilityDate: "2026-08-06",
     });
-    const dependencyChanged = await compileContract({
+    const dependencyChanged = await compileArtifact({
       ...input(),
       dependencies: { zod: "4.2.0" },
     });
 
     expect(compatibilityChanged.hash).not.toBe(original.hash);
     expect(dependencyChanged.hash).not.toBe(original.hash);
-  });
-
-  it("canonicalizes optional undefined fields exactly as JSON persistence does", async () => {
-    const authority = {
-      mainModule: "contract.js",
-      modules: {"contract.js": "export default () => ({})"},
-      publicTypes: "export interface ContractBinding {}",
-      publicRootType: "ContractBinding" as const,
-      sourceTypeHash: "source",
-      sourceRootType: "Source",
-      dependencies: [{name: "example", version: "1.0.0"}],
-      compatibilityDate: "2026-08-05",
-      runtimeHarnessVersion: "6",
-    };
-    await expect(hashArtifact({
-      ...authority,
-      dependencies: [{name: "example", version: "1.0.0", integrity: undefined}],
-    })).resolves.toBe(await hashArtifact(authority));
   });
 
   it("enforces dependency and bundle-size policy before returning an artifact", async () => {
@@ -316,7 +275,7 @@ describe("compileContract", () => {
       .replace('import { RpcTarget } from "cloudflare:workers";',
         'import { RpcTarget } from "cloudflare:workers";\nimport { z } from "zod";')
       .replace("async subject(id: string) {", "async subject(id: string) {\n      z.string().parse(id);");
-    const artifact = await compileContract({
+    const artifact = await compileArtifact({
       ...input(source),
       dependencies: {zod: "4.2.0"},
     });

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath, URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { compileContractV2 } from "../src/artifact/index.js";
+import { compileContract } from "../src/compiler/index.js";
 
 const CONTRACT_PATH = fileURLToPath(
   new URL("../../gatekeeper-r2/examples/folder-contract.ts", import.meta.url),
@@ -18,7 +18,7 @@ describe("R2 folder Contract example", () => {
       readFile(SOURCE_TYPES_PATH, "utf8"),
     ]);
 
-    const candidate = await compileContractV2({
+    const candidate = await compileContract({
       modules: { "contract.ts": contract },
       mainModule: "contract.ts",
       sourceTypes,

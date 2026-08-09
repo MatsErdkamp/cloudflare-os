@@ -88,7 +88,7 @@ function publicTypeStatements(source: ts.SourceFile): readonly ts.Statement[] {
       }
     } else if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) &&
         statement.moduleSpecifier.text !== "contract:source" &&
-        statement.moduleSpecifier.text !== "@gadgets/contractors") {
+        statement.moduleSpecifier.text !== "@gadgets/contractors/authoring") {
       result.push(statement);
     }
   }

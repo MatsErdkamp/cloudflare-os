@@ -62,7 +62,6 @@ export function createContractInvocationEvidence(
     authority: input.generations.authority,
   });
   return Object.freeze({
-    schemaVersion: 1,
     invocationId: input.invocationId,
     consumerId: input.consumerId,
     bindingId: input.bindingId,

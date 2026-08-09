@@ -4,17 +4,17 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
 
-import * as v8Authoring from "../src/authoring/index.js";
+import * as contractAuthoring from "../src/authoring/index.js";
 import {
   canonicalContractJson,
-  compileContractV2,
   hashArtifact,
   hashSourceTypes,
 } from "../src/artifact/index.js";
+import {compileContract} from "../src/compiler/index.js";
 import { createContractInvocationEvidence } from "../src/host/index.js";
-import { CONTRACT_AUTHORING_ABI_V8 } from "../src/authoring/abi.js";
+import { CONTRACT_AUTHORING_ABI } from "../src/authoring/abi.js";
 
-const V8_CONTRACT = `
+const CONTRACT_SOURCE = `
   import {
     defineContract,
     type ContractApproval,
@@ -51,7 +51,7 @@ const SOURCE_TYPES = `interface ItemSource { remove(id: string): Promise<string>
 
 function input(flags: readonly string[] = ["nodejs_compat", "strict_crypto_checks"]) {
   return {
-    modules: { "contract.ts": V8_CONTRACT },
+    modules: { "contract.ts": CONTRACT_SOURCE },
     mainModule: "contract.ts",
     sourceTypes: SOURCE_TYPES,
     sourceRootType: "ItemSource",
@@ -61,9 +61,9 @@ function input(flags: readonly string[] = ["nodejs_compat", "strict_crypto_check
   };
 }
 
-describe("Contractors v8 interface", () => {
-  it("provides a narrow additive v8 authoring seam", () => {
-    expect(Object.keys(v8Authoring).toSorted()).toEqual(["defineContract"]);
+describe("Contractors interface", () => {
+  it("provides one narrow authoring seam", () => {
+    expect(Object.keys(contractAuthoring).toSorted()).toEqual(["defineContract"]);
   });
 
   it("keeps every exported authoring declaration structurally equal to the hashed ABI", () => {
@@ -136,7 +136,7 @@ describe("Contractors v8 interface", () => {
     const base = ts.createCompilerHost(options);
     const virtualFiles = new Map([
       [conformancePath, conformanceSource],
-      [ambientPath, CONTRACT_AUTHORING_ABI_V8.replace(
+      [ambientPath, CONTRACT_AUTHORING_ABI.replace(
         "@gadgets/contractors/authoring",
         ambientSpecifier,
       )],
@@ -174,14 +174,13 @@ describe("Contractors v8 interface", () => {
     expect(exportNames(actualSymbol)).toEqual(exportNames(ambientSymbol));
   });
 
-  it("returns an unapproved v2 build candidate with exact inputs and trace", async () => {
-    const candidate = await compileContractV2(input());
+  it("returns an unapproved build candidate with exact inputs and trace", async () => {
+    const candidate = await compileContract(input());
 
-    expect(candidate.artifact.formatVersion).toBe(2);
     expect(candidate.artifact).not.toHaveProperty("createdAt");
     expect(candidate).not.toHaveProperty("approval");
     expect(candidate).not.toHaveProperty("approved");
-    expect(candidate.inputs.modules["contract.ts"]).toBe(V8_CONTRACT);
+    expect(candidate.inputs.modules["contract.ts"]).toBe(CONTRACT_SOURCE);
     expect(candidate.trace.artifactHash).toBe(candidate.artifact.hash);
     expect(candidate.trace.entries.map((entry) => entry.kind)).toEqual([
       "authoringAbi",
@@ -194,17 +193,37 @@ describe("Contractors v8 interface", () => {
     expect(candidate.artifact.runtimeProfile).toMatchObject({
       compatibilityFlags: ["nodejs_compat", "strict_crypto_checks"],
       globalOutbound: "none",
-      runtimeHarnessVersion: "8",
-      authoringAbi: { version: "8" },
+      authoringAbi: { declarationHash: expect.stringMatching(/^sha256:/) },
+      lifecycle: {
+        maxCompositionDepth: 8,
+        rawReadableStreams: "unsupported",
+        rawAbortSignals: "unsupported",
+        upstreamCancellation: "mediated",
+      },
     });
     await expect(hashSourceTypes(canonicalContractJson(candidate.artifact.runtimeProfile)))
       .resolves.toBe(candidate.artifact.runtimeProfileHash.slice("sha256:".length));
   });
 
+  it("accepts another Contract Binding as typed Source without control-plane records", async () => {
+    const candidate = await compileContract({
+      ...input(),
+      sourceTypes: `interface UpstreamBinding {
+        remove(id: string): Promise<string>;
+      }`,
+      sourceRootType: "UpstreamBinding",
+    });
+
+    expect(candidate.artifact.sourceRootType).toBe("UpstreamBinding");
+    expect(candidate.artifact.modules["contract.js"]).not.toMatch(
+      /Installation Decision|Task Template|Task Dispatch|Trust Ratchet/,
+    );
+  });
+
   it("hashes exact flags and ABI/runtime bytes while excluding creation metadata", async () => {
-    const first = await compileContractV2(input(["strict_crypto_checks", "nodejs_compat"]));
-    const reordered = await compileContractV2(input(["nodejs_compat", "strict_crypto_checks"]));
-    const changed = await compileContractV2(input(["nodejs_compat"]));
+    const first = await compileContract(input(["strict_crypto_checks", "nodejs_compat"]));
+    const reordered = await compileContract(input(["nodejs_compat", "strict_crypto_checks"]));
+    const changed = await compileContract(input(["nodejs_compat"]));
 
     expect(reordered.artifact.hash).toBe(first.artifact.hash);
     expect(reordered.artifact.runtimeProfileHash).toBe(first.artifact.runtimeProfileHash);
@@ -235,7 +254,7 @@ describe("Contractors v8 interface", () => {
 
   it("deep-copies and freezes every nested candidate record", async () => {
     const allowedPackages: string[] = [];
-    const candidate = await compileContractV2({
+    const candidate = await compileContract({
       ...input(),
       organizationPolicy: { allowedPackages },
     });
@@ -251,15 +270,15 @@ describe("Contractors v8 interface", () => {
     expect(() => (candidate.trace.entries as unknown[]).push({})).toThrow();
   });
 
-  it("rejects duplicate, noncanonical, and legacy authoring inputs", async () => {
-    await expect(compileContractV2(input(["nodejs_compat", "nodejs_compat"])))
+  it("rejects duplicate, noncanonical, and obsolete root authoring imports", async () => {
+    await expect(compileContract(input(["nodejs_compat", "nodejs_compat"])))
       .rejects.toThrow("must be unique");
-    await expect(compileContractV2(input(["NodeJS_Compat"])))
+    await expect(compileContract(input(["NodeJS_Compat"])))
       .rejects.toThrow("lower-case");
-    await expect(compileContractV2({
+    await expect(compileContract({
       ...input(),
       modules: {
-        "contract.ts": V8_CONTRACT.replace(
+        "contract.ts": CONTRACT_SOURCE.replace(
           "@gadgets/contractors/authoring",
           "@gadgets/contractors",
         ),
@@ -291,7 +310,6 @@ describe("Contractors v8 interface", () => {
 
     generations.binding = 99;
     expect(evidence).toEqual({
-      schemaVersion: 1,
       invocationId: "invocation-1",
       consumerId: "consumer-1",
       bindingId: "binding-1",

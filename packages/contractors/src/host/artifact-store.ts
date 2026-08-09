@@ -7,8 +7,8 @@ export interface ArtifactStore {
   put(artifact: ContractArtifact): Promise<void>;
 }
 
-function authority(artifact: ContractArtifact): Omit<ContractArtifact, "hash" | "createdAt"> {
-  const {hash: _hash, createdAt: _createdAt, ...value} = artifact;
+function authority(artifact: ContractArtifact): Omit<ContractArtifact, "hash"> {
+  const {hash: _hash, ...value} = artifact;
   return value;
 }
 

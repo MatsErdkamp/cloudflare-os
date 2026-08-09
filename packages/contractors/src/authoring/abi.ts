@@ -1,8 +1,5 @@
-/** Stable version of the additive direct-approval Contract authoring interface. */
-export const CONTRACT_AUTHORING_ABI_VERSION = "8";
-
-/** Exact ambient declaration hashed into every v8 Contract Artifact. */
-export const CONTRACT_AUTHORING_ABI_V8 = `
+/** Exact ambient declaration hashed into every Contract Artifact. */
+export const CONTRACT_AUTHORING_ABI = `
   declare module "@gadgets/contractors/authoring" {
     import type { RpcTarget } from "cloudflare:workers";
     export interface ContractApprovalDescription {
@@ -30,7 +27,6 @@ export const CONTRACT_AUTHORING_ABI_V8 = `
       readonly authority: number;
     }
     export interface ContractInvocationEvidence {
-      readonly schemaVersion: 1;
       readonly invocationId: string;
       readonly consumerId: string;
       readonly bindingId: string;

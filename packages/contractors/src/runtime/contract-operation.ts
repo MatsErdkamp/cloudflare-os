@@ -1,4 +1,4 @@
-import type { ContractCaller } from "../authoring/contract-context.js";
+import type { ContractCaller } from "./contract-call.js";
 
 /** Lifecycle of an explicitly authored Contract operation. */
 export type ContractOperationState =

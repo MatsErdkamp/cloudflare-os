@@ -17,9 +17,26 @@ function artifact(hash: string): ContractArtifact {
     sourceTypeHash: "source",
     sourceRootType: "Source",
     dependencies: [],
-    compatibilityDate: "2026-08-05",
-    runtimeHarnessVersion: "1",
-    createdAt: "2026-08-05T00:00:00.000Z",
+    runtimeProfileHash: "sha256:profile",
+    runtimeProfile: {
+      profile: "cloudflare-workers-dynamic",
+      compatibilityDate: "2026-08-05",
+      compatibilityFlags: [],
+      globalOutbound: "none",
+      runtimeHarnessHash: "sha256:harness",
+      runtimeModuleSetHash: "sha256:modules",
+      authoringAbi: { declarationHash: "sha256:abi" },
+      lifecycle: {
+      maxCompositionDepth: 8,
+      observerDrainTimeoutMs: 1_000,
+        rawReadableStreams: "unsupported",
+        rawWritableStreams: "unsupported",
+        rawTransformStreams: "unsupported",
+        rawAsyncIterators: "unsupported",
+        rawAbortSignals: "unsupported",
+        upstreamCancellation: "mediated",
+      },
+    },
   };
 }
 
@@ -29,7 +46,6 @@ describe("Contract host storage", () => {
     const first = artifact("sha256:first");
     await store.put(first);
     await store.put(first);
-    await store.put({...first, createdAt: "2026-08-06T00:00:00.000Z"});
 
     await expect(store.put({ ...first, modules: { "contract.js": "changed" } }))
       .rejects.toThrow("already contains different content");

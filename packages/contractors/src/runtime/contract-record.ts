@@ -2,8 +2,8 @@
 export interface ContractRecord<WorkpieceId = number> {
   readonly id: WorkpieceId;
   readonly artifactHash: string;
-  /** Exact retained runtime harness included in the installed artifact hash. */
-  readonly runtimeHarnessVersion: string;
+  /** Exact execution profile included in the installed Artifact hash. */
+  readonly runtimeProfileHash: string;
   readonly sourceGatekeeperId: WorkpieceId;
   readonly title: string;
   readonly publicTypes: string;

@@ -7,26 +7,18 @@ import { readFileSync, readdirSync, readlinkSync } from "node:fs";
 import { build, type Plugin } from "esbuild";
 import ts from "typescript";
 
-import type { ContractArtifact, ContractArtifactHashInput } from "./contract-artifact.js";
 import type {
-  ContractArtifactV2HashInput,
-  ContractBuildCandidateV2,
-  ContractBuildInputsV2,
-} from "./contract-artifact-v2.js";
-import { freezeContractBuildCandidateV2 } from "./contract-artifact-v2.js";
+  ContractArtifactHashInput,
+  ContractBuildCandidate,
+  ContractBuildInputs,
+} from "./contract-artifact.js";
+import { freezeContractBuildCandidate } from "./contract-artifact.js";
 import { DependencyPolicyError, type DependencyPolicy, validateDependencyPolicy } from "./dependency-policy.js";
 import { canonicalContractJson, hashArtifact, hashSourceTypes } from "./hash-artifact.js";
 import { extractPublicTypesFromModules } from "./public-types.js";
-import {
-  CONTRACT_AUTHORING_ABI_V8,
-  CONTRACT_AUTHORING_ABI_VERSION,
-} from "../authoring/abi.js";
+import { CONTRACT_AUTHORING_ABI } from "../authoring/abi.js";
 import { ContractCompilationError } from "../runtime/errors.js";
-import {
-  CONTRACT_HARNESS_V8,
-  CONTRACT_RUNTIME_HARNESS_VERSION,
-  CONTRACT_RUNTIME_HARNESS_V8_VERSION,
-} from "../runtime/contract-harness.js";
+import {createContractRuntimeProfile} from "./current-runtime-profile.js";
 import {
   isContractPackageName,
   isExactContractDependencyVersion,
@@ -41,52 +33,9 @@ export interface CompileContractInput {
   readonly sourceRootType: string;
   readonly dependencies: Readonly<Record<string, string>>;
   readonly compatibilityDate: string;
+  readonly compatibilityFlags?: readonly string[];
   readonly organizationPolicy?: DependencyPolicy;
 }
-
-/** Exact additive input for a v8 build candidate and Artifact v2 identity. */
-export interface CompileContractV2Input extends CompileContractInput {
-  readonly compatibilityFlags?: readonly string[];
-}
-
-const LEGACY_AUTHORING_DECLARATION = `
-  declare module "@gadgets/contractors" {
-    import type { RpcTarget } from "cloudflare:workers";
-    export interface ContractApprovalDescription {
-      readonly title: string;
-      readonly description: string;
-    }
-    export interface ContractApprovalRequirement extends ContractApprovalDescription {
-      readonly key: string;
-    }
-    export interface ContractPolicy<Source> {
-      readonly approval: {
-        manual<T>(description: ContractApprovalDescription,
-          operation: (context: {readonly source: Source}) => Promise<T> | T): Promise<T>;
-        require(description: ContractApprovalRequirement): Promise<void>;
-      };
-    }
-    export interface SharedContractState {
-      get<T>(key: string): Promise<T | undefined>;
-      put<T>(key: string, value: T): Promise<void>;
-      delete(key: string): Promise<void>;
-    }
-    export interface ContractContext<Source> {
-      readonly source: Source;
-      readonly policy: ContractPolicy<Source>;
-      readonly storage: DurableObjectStorage;
-      readonly sharedState?: SharedContractState;
-      readonly caller: Readonly<Record<string, unknown>>;
-      readonly contract: { readonly id: string; readonly artifactHash: string };
-      restore<T extends RpcTarget>(params: unknown): import("cloudflare:workers").RpcStub<T>;
-    }
-    export type ContractFactory<Source, Binding extends RpcTarget> =
-      (context: ContractContext<Source>) => Binding | Promise<Binding>;
-    export function defineContract<Source, Binding extends RpcTarget>(
-      factory: ContractFactory<Source, Binding>,
-    ): ContractFactory<Source, Binding>;
-  }
-`;
 
 const AUTHORING_RUNTIME = `export const defineContract = (factory) => factory;`;
 const WORKERS_TYPES_PATH = path.join(
@@ -425,11 +374,25 @@ function inMemoryPlugin(
   };
 }
 
+interface CompiledContractExecutable {
+  readonly mainModule: "contract.js";
+  readonly modules: Readonly<Record<string, string>>;
+  readonly publicTypes: string;
+  readonly publicRootType: "ContractBinding";
+  readonly sourceTypeHash: string;
+  readonly sourceRootType: string;
+  readonly dependencies: ReadonlyArray<{
+    readonly name: string;
+    readonly version: string;
+    readonly integrity?: string;
+  }>;
+}
+
 async function compileContractExecutable(
   input: CompileContractInput,
   authoringDeclaration: string,
   authoringSpecifier: string,
-): Promise<Omit<ContractArtifactHashInput, "runtimeHarnessVersion">> {
+): Promise<CompiledContractExecutable> {
   if (!isWorkerCompatibilityDate(input.compatibilityDate)) {
     throw new ContractCompilationError(
       "INVALID_INPUT",
@@ -548,27 +511,6 @@ async function compileContractExecutable(
     sourceTypeHash,
     sourceRootType: input.sourceRootType,
     dependencies,
-    compatibilityDate: input.compatibilityDate,
-  };
-}
-
-/** Type-checks and bundles one legacy candidate without changing its v7 artifact identity. */
-export async function compileContract(input: CompileContractInput): Promise<ContractArtifact> {
-  const executable = await compileContractExecutable(
-    input,
-    LEGACY_AUTHORING_DECLARATION,
-    "@gadgets/contractors",
-  );
-  const artifactWithoutHash = {
-    ...executable,
-    runtimeHarnessVersion: CONTRACT_RUNTIME_HARNESS_VERSION,
-  };
-  const hash = await hashArtifact(artifactWithoutHash);
-
-  return {
-    hash,
-    ...artifactWithoutHash,
-    createdAt: new Date().toISOString(),
   };
 }
 
@@ -594,12 +536,12 @@ async function valueIdentityHash(value: unknown): Promise<string> {
   return textIdentityHash(canonicalContractJson(value));
 }
 
-/** Builds one v8 candidate with exact inputs and trace but no review or approval claim. */
-export async function compileContractV2(
-  input: CompileContractV2Input,
-): Promise<ContractBuildCandidateV2> {
+/** Builds one candidate with exact inputs and trace but no review or approval claim. */
+export async function compileContract(
+  input: CompileContractInput,
+): Promise<ContractBuildCandidate> {
   const compatibilityFlags = normalizedCompatibilityFlags(input.compatibilityFlags);
-  const exactInputs: ContractBuildInputsV2 = {
+  const exactInputs: ContractBuildInputs = {
     modules: Object.freeze({ ...input.modules }),
     mainModule: input.mainModule,
     sourceTypes: input.sourceTypes,
@@ -621,26 +563,16 @@ export async function compileContractV2(
   };
   const executable = await compileContractExecutable(
     input,
-    CONTRACT_AUTHORING_ABI_V8,
+    CONTRACT_AUTHORING_ABI,
     "@gadgets/contractors/authoring",
   );
-  const authoringAbi = Object.freeze({
-    version: CONTRACT_AUTHORING_ABI_VERSION,
-    declarationHash: await textIdentityHash(CONTRACT_AUTHORING_ABI_V8),
-  });
-  const runtimeProfile = Object.freeze({
-    profile: "cloudflare-workers-dynamic" as const,
-    version: "1" as const,
-    compatibilityDate: input.compatibilityDate,
+  const runtimeProfile = await createContractRuntimeProfile(
+    input.compatibilityDate,
     compatibilityFlags,
-    globalOutbound: "none" as const,
-    runtimeHarnessVersion: CONTRACT_RUNTIME_HARNESS_V8_VERSION,
-    runtimeHarnessHash: await textIdentityHash(CONTRACT_HARNESS_V8),
-    authoringAbi,
-  });
+  );
+  const authoringAbi = runtimeProfile.authoringAbi;
   const runtimeProfileHash = await valueIdentityHash(runtimeProfile);
-  const artifactWithoutHash: ContractArtifactV2HashInput = {
-    formatVersion: 2,
+  const artifactWithoutHash: ContractArtifactHashInput = {
     mainModule: "contract.js",
     modules: executable.modules,
     publicTypes: executable.publicTypes,
@@ -669,18 +601,18 @@ export async function compileContractV2(
     hash: dependency.integrity ?? "",
   }));
   const entries = Object.freeze([
-    { kind: "authoringAbi" as const, path: "@gadgets/contractors/authoring@8", hash: authoringAbi.declarationHash },
+    { kind: "authoringAbi" as const, path: "@gadgets/contractors/authoring", hash: authoringAbi.declarationHash },
     { kind: "sourceTypes" as const, path: "contract:source", hash: await textIdentityHash(input.sourceTypes) },
     ...sourceEntries,
     ...dependencyEntries,
     { kind: "publicTypes" as const, path: "contract.d.ts", hash: await textIdentityHash(executable.publicTypes) },
     { kind: "bundle" as const, path: "contract.js", hash: await textIdentityHash(executable.modules["contract.js"] ?? "") },
-    { kind: "runtimeHarness" as const, path: "contract-harness@8", hash: runtimeProfile.runtimeHarnessHash },
+    { kind: "runtimeHarness" as const, path: "contract-harness", hash: runtimeProfile.runtimeHarnessHash },
   ]);
-  return freezeContractBuildCandidateV2({
+  return freezeContractBuildCandidate({
     artifact: { hash, ...artifactWithoutHash },
     inputs: exactInputs,
-    trace: { schemaVersion: 1, entries, artifactHash: hash },
+    trace: { entries, artifactHash: hash },
     creation: { createdAt: new Date().toISOString() },
   });
 }
