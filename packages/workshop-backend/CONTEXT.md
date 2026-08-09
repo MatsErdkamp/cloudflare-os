@@ -12,6 +12,10 @@ _Avoid_: Project, Manager aggregate, Task aggregate
 The workspace-owned authority boundary that decides which approved capabilities its standing and Agent Task Consumers may possess.
 _Avoid_: Manager when referring to the domain concept
 
+**Legacy Manager Source Access**:
+A temporary Manager-authoring capability over one raw Provider Source, isolated from every standing and Agent Task Authority path and measured only to support its retirement.
+_Avoid_: Workspace Authority, Consumer Binding, Task Binding
+
 **Agent Task Authority**:
 The authority for one bounded Agent Task, materialized within Workspace Authority and limited to the approved Task Template ceiling; it may only preserve or reduce effective authority during that execution.
 _Avoid_: Task workspace, parallel authority aggregate

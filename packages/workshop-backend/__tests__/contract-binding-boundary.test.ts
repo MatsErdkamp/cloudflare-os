@@ -98,7 +98,10 @@ describe("Contract binding boundary", () => {
         impl.storage.gadgets.put(gadget);
 
         impl.makeBindingLoopback = vi.fn((target: object) => ({kind: "binding", target}));
-        impl.makeManagerSourceLoopback = vi.fn((id: number) => ({kind: "manager-source", id}));
+        impl.makeManagerSourceLoopback = vi.fn((access: {gatekeeperId: number}) => {
+          const consumed = impl.legacyWorkspaceAuthority.consumeLegacyManagerSourceAccess(access);
+          return {kind: "manager-source", id: consumed.gatekeeperId};
+        });
 
         expect(impl.getEnvForLoader(9, {from: "gadget", gadgetId: 9})).toEqual({
           GADGET: {kind: "binding", target: {type: "gadget", id: 9}},
@@ -111,6 +114,8 @@ describe("Contract binding boundary", () => {
           SOURCE: {kind: "manager-source", id: 17},
           CONTRACT: {kind: "binding", target: {type: "contract", id: 70}},
         });
+        expect(impl.legacyWorkspaceAuthority.queryLegacyManagerSourceTelemetry())
+          .toMatchObject({totalUses: 1, recentUses: [{chatId: 3, gatekeeperId: 17}]});
       },
     );
   });

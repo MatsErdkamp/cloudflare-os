@@ -85,6 +85,13 @@ import {
   type ContractSourceApprovalMode,
 } from "@gadgets/contractors/cloudflare-os";
 import { R2ContractArtifactStore } from "./contract-artifacts";
+import {
+  createWorkspaceAuthorityModule,
+  type LegacyGadgetBindingRecord,
+  type LegacyManagerSourceAccess,
+  type LegacyWorkspaceAuthorityCompatibility,
+  type WorkspaceAuthority,
+} from "./authority/workspace-authority";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
@@ -319,26 +326,8 @@ function gatekeeperVendorId(record: GatekeeperRecord | undefined): string | unde
   return spec && "vendorId" in spec ? spec.vendorId.toLowerCase() : undefined;
 }
 
-// A binding edge from one gadget to a target workpiece (today always a gatekeeper), stored in
-// GadgetRecord.bindings keyed by binding name.
-type BindingRecord = {
-  target: WorkpieceId;
-
-  // User-provided metadata for how this binding should appear in blueprints. Absence means not
-  // yet configured. This lives on the edge, not on the gatekeeper: two gadgets binding the same
-  // gatekeeper can annotate it differently for their respective blueprints.
-  blueprintAnnotation?: BlueprintBindingAnnotation;
-
-  // Present while the binding edge is provisional: it was added within the given chat and
-  // follows that chat's accept/reject lifecycle exactly like code changes and gadget creations
-  // (see GadgetRecord.pending, whose stamping and crash-recovery mechanics this mirrors
-  // edge-for-edge via the "changes" message's `addedBindings`). A pending edge is real in the
-  // registry so the originating chat's own preview/test runs see it, but for *reads* everything
-  // else (mainline loads, other chats, blueprints, "use"-role sharing) treats it as nonexistent.
-  // For *writes* it still occupies its name: another chat attempting to add the same name on
-  // this gadget fails with an explicit error until this chat's changes are accepted or reverted.
-  pending?: {chatId: number, sequence?: number};
-};
+// Compatibility projection retained until canonical Binding cutover.
+type BindingRecord = LegacyGadgetBindingRecord;
 
 // A gadget workpiece. IDs are allocated from the shared workpiece counter (see the
 // `nextGatekeeperId` singleton), so they never collide with gatekeeper IDs -- in particular the
@@ -1137,6 +1126,8 @@ export function sanitizeMessageFormatRefs(
 class OverseerImpl implements AgentHooks {
   public storage: OverseerStorage;
   readonly logger: ReturnType<typeof createWorkshopLogger>;
+  readonly workspaceAuthority: WorkspaceAuthority;
+  readonly legacyWorkspaceAuthority: LegacyWorkspaceAuthorityCompatibility;
 
   // Identifies this DO instance. Sent to chat subscribers so they can detect a full server
   // restart (see AiChatSubscriber.streamGeneration). A timestamp suffices since a DO won't
@@ -1449,6 +1440,17 @@ class OverseerImpl implements AgentHooks {
     // agent-turn restoration below, hook deliveries, and [restore]()-based persistent callbacks.
     // The migration is fully synchronous, so nothing can observe pre-migration state.
     this.#migrateStorage();
+    const authorityModule = createWorkspaceAuthorityModule(ctx.storage, {
+      getGadget: id => this.storage.gadgets.get(id),
+      listGadgets: () => this.storage.gadgets.list(),
+      putGadget: gadget => this.storage.gadgets.put(gadget),
+      hasContract: id => this.storage.contracts.get(id) !== undefined,
+      hasGatekeeper: id => this.storage.gatekeepers.get(id) !== undefined,
+      bumpConsumers: ids => this.bumpVersion([...ids]),
+    });
+    this.workspaceAuthority = authorityModule.authority;
+    this.legacyWorkspaceAuthority = authorityModule.compatibility;
+    this.workspaceAuthority.execute({type: "initialize"});
     this.defaultGadgetId = this.storage.defaultGadgetId.get();
 
     this.#autoApprovalDrainer = new AutoApprovalDrainer(
@@ -1850,8 +1852,10 @@ class OverseerImpl implements AgentHooks {
   // With `forChatId` undefined, only permanent (non-pending) edges are visible (mainline loads,
   // blueprints, sharing, the Connections UI).
   visibleBindings(gadget: GadgetRecord, forChatId?: number): [string, BindingRecord][] {
-    return Object.entries(gadget.bindings).filter(
-        ([, edge]) => !edge.pending || edge.pending.chatId === forChatId);
+    return this.legacyWorkspaceAuthority.queryVisibleBindings({
+      consumerId: gadget.id,
+      forChatId,
+    });
   }
 
   // Bind a Contract instance into gadget `gadgetId`'s env under `name`. If `chatId` is
@@ -1860,82 +1864,28 @@ class OverseerImpl implements AgentHooks {
   // sequence-stamped (see addChatMessages()).
   bindWorkpiece(gadgetId: WorkpieceId, name: string, target: WorkpieceId,
                 chatId?: number): void {
-    validateBindingName(name);
-    if (name === "GADGET") {
-      throw new Error("The binding name `GADGET` is reserved.");
-    }
-    let gadget = this.getGadgetRecord(gadgetId);
-    let existing = gadget.bindings[name];
-    if (existing) {
-      // A pending edge is invisible to other chats for reads but still occupies its name for
-      // writes: allowing a second proposal under the same name would mean accepting both
-      // silently overwrites one with the other.
-      if (existing.pending && existing.pending.chatId !== chatId) {
-        throw new Error(`The binding name "${name}" is already proposed by another chat. ` +
-            `Accept or revert that chat's changes first, or choose a different name.`);
-      }
-      throw new Error(`There is already a binding named "${name}".`);
-    }
-    if (!this.storage.contracts.get(target)) {
-      if (this.storage.gadgets.get(target)) {
-        throw new Error(`Gadget-to-gadget bindings are not supported yet.`);
-      }
-      if (this.storage.gatekeepers.get(target)) {
-        throw new Error("Gadgets can only bind installed Contracts, not raw Sources.");
-      }
-      throw new Error(`No such Contract: ${target}`);
-    }
-    for (let other of this.storage.gadgets.list()) {
-      let placement = Object.entries(other.bindings).find(([, edge]) => edge.target === target);
-      if (placement) {
-        throw new Error(
-          `Contract ${target} is already installed as ${other.title}.${placement[0]}; ` +
-          "create and approve a separate Contract instance for another binding placement.",
-        );
-      }
-    }
-    gadget.bindings[name] = {target, ...(chatId !== undefined ? {pending: {chatId}} : {})};
-    this.storage.gadgets.put(gadget);
-
-    // The gadget's env changed, so its code must reload.
-    this.bumpVersion([gadgetId]);
+    this.legacyWorkspaceAuthority.bindContract({
+      consumerId: gadgetId,
+      name,
+      contractId: target,
+      chatId,
+    });
   }
 
   // Remove the named binding edge from the gadget. The target gatekeeper itself survives,
   // possibly no longer bound by any gadget. `forChatId` scopes visibility: an edge pending in
   // some other chat is treated as nonexistent (it isn't this caller's to remove).
   unbindWorkpiece(gadgetId: WorkpieceId, name: string, forChatId?: number): void {
-    let gadget = this.getGadgetRecord(gadgetId);
-    let edge = gadget.bindings[name];
-    if (!edge || (edge.pending && edge.pending.chatId !== forChatId &&
-                  forChatId !== undefined)) {
-      throw new Error(`No such binding: ${name}`);
-    }
-    delete gadget.bindings[name];
-    this.storage.gadgets.put(gadget);
-    this.bumpVersion([gadgetId]);
+    this.legacyWorkspaceAuthority.unbind({consumerId: gadgetId, name, forChatId});
   }
 
   // Rename a binding edge atomically, preserving edge metadata and restarting the gadget once.
   renameBinding(gadgetId: WorkpieceId, oldName: string, newName: string): void {
-    let gadget = this.getGadgetRecord(gadgetId);
-    let edge = gadget.bindings[oldName];
-    if (!edge) {
-      throw new Error(`No such binding: ${oldName}`);
-    }
-    if (oldName === newName) return;
-    validateBindingName(newName);
-    if (newName === "GADGET") {
-      throw new Error("The binding name `GADGET` is reserved.");
-    }
-    if (gadget.bindings[newName]) {
-      throw new Error(`There is already a binding named "${newName}".`);
-    }
-
-    delete gadget.bindings[oldName];
-    gadget.bindings[newName] = edge;
-    this.storage.gadgets.put(gadget);
-    this.bumpVersion([gadgetId]);
+    this.legacyWorkspaceAuthority.renameBinding({
+      consumerId: gadgetId,
+      oldName,
+      newName,
+    });
   }
 
   // Permanently delete a gadget: its hooks, its files, its registry entry (which carries its
@@ -2231,10 +2181,14 @@ class OverseerImpl implements AgentHooks {
     return this.ctx.exports.BindingLoopback({props});
   }
 
-  makeManagerSourceLoopback(gatekeeperId: WorkpieceId, caller: GatekeeperCaller) {
+  makeManagerSourceLoopback(access: LegacyManagerSourceAccess, caller: GatekeeperCaller) {
+    if (caller.from !== "agent" || caller.chatId !== access.chatId) {
+      throw new Error("Legacy Manager Source access is bound to its authoring chat.");
+    }
+    const consumed = this.legacyWorkspaceAuthority.consumeLegacyManagerSourceAccess(access);
     let props: ManagerSourceLoopbackProps = {
       overseerId: this.ctx.id.toString(),
-      gatekeeperId,
+      gatekeeperId: consumed.gatekeeperId,
       caller,
     };
     return this.ctx.exports.ManagerSourceLoopback({props});
@@ -2295,7 +2249,12 @@ class OverseerImpl implements AgentHooks {
           } else if (this.storage.contracts.get(entry.id)) {
             env[name] = this.makeBindingLoopback({type: "contract", id: entry.id}, caller);
           } else if (this.storage.gatekeepers.get(entry.id)) {
-            env[name] = this.makeManagerSourceLoopback(entry.id, caller);
+            const access = this.legacyWorkspaceAuthority.authorizeLegacyManagerSource({
+              surface: "managerAgentAuthoring",
+              chatId,
+              gatekeeperId: entry.id,
+            });
+            env[name] = this.makeManagerSourceLoopback(access, caller);
           }
           break;
         }
