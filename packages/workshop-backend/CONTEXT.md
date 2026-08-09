@@ -1,12 +1,36 @@
 # Workspace Authority
 
-Workspace Authority is the workspace-owned system that governs Sources, Contract approval, Consumers, environments, and bindings.
+Workspace Authority is the workspace-owned system that governs standing authority and the bounded authority of each Agent Task without owning provider credentials or Contract execution. The Workspace is its sole transactional aggregate.
 
 ## Language
 
+**Workspace**:
+The organizational boundary and sole transactional aggregate for all standing and Agent Task Authority in one workspace.
+_Avoid_: Project, Manager aggregate, Task aggregate
+
 **Workspace Authority**:
-The authority boundary that decides which approved capabilities a workspace's Consumers may possess.
+The workspace-owned authority boundary that decides which approved capabilities its standing and Agent Task Consumers may possess.
 _Avoid_: Manager when referring to the domain concept
+
+**Agent Task Authority**:
+The authority for one bounded Agent Task, materialized within Workspace Authority and limited to the approved Task Template ceiling; it may only preserve or reduce effective authority during that execution.
+_Avoid_: Task workspace, parallel authority aggregate
+
+**Agent Task**:
+One bounded execution with its own authority identity inside a Workspace, distinct from the Chat history that may reference it.
+_Avoid_: Chat turn, reusable session, standing Consumer
+
+**Task Template**:
+An immutable maximum-authority description for a class of Agent Tasks; approval and dispatch cite one exact version.
+_Avoid_: Agent Task, runtime prompt, mutable policy
+
+**Task Environment**:
+The generation-tagged set of exact capabilities and egress materialized for one Agent Task.
+_Avoid_: Ambient environment, Chat bindings
+
+**Trust Ratchet**:
+The monotonic discipline that may preserve or narrow an Agent Task's effective authority but never broaden, extend, or restore it.
+_Avoid_: Scope reset, runtime approval
 
 **Authority Manager**:
 A named workspace member whom the owner has explicitly granted `manageAuthority`. An Authority Manager may make workspace authority decisions but gains no build rights from that permission.
@@ -49,11 +73,11 @@ The stable tuple of Gatekeeper vendor, provider issuer, resource type, and provi
 _Avoid_: Canonical URL, resource title, Source ID
 
 **Project**:
-A stable workspace-owned identity that groups Repository Claims, named Environments, Development Sessions, and Workloads for one body of software.
-_Avoid_: Repository when referring to the aggregate
+A stable cross-repository software scope inside one Workspace that groups Repository Claims, named Environments, Development Sessions, and Workloads.
+_Avoid_: Repository, authority aggregate
 
 **Repository Claim**:
-Attributed metadata asserting that a repository or subdirectory relates to a Project. A claim may aid discovery and review but is never a Consumer identity or source of authority.
+Untrusted attributed provenance and discovery metadata asserting that a repository or subdirectory relates to a Project. A claim is never a Consumer identity or source of authority.
 _Avoid_: Project identity, trusted repository
 
 **Consumer**:
@@ -92,25 +116,45 @@ _Avoid_: Workload identity, authorization claim
 A transient capability session opened after Workload Identity Evidence matches a live Workload Registration. It carries one immutable generation snapshot and is not a durable Consumer or authority decision.
 _Avoid_: Workload, deployment, Development Session
 
+**Agent Service**:
+A role and profile keyed one-to-one to one registered Workload that may execute approved Agent Tasks. It has no independent standing identity, Binding Set, Account, Source, or provider authority.
+_Avoid_: Agent identity, service account, parallel Consumer
+
+**Chat**:
+A history and provenance record that may reference Agent Tasks but never stores reusable live authority.
+_Avoid_: Task, authority boundary, capability session
+
 **Environment**:
 A stable, Project-owned authority target with a unique human-readable name, such as development, preview, or production. Branch names and deployment labels may suggest an Environment but never select one authoritatively.
 _Avoid_: Deployment when referring to the authority configuration
 
-**Binding Requirement**:
-A stable, versioned declaration within a Binding Set that names one capability, pins one Artifact Approval epoch, and constrains how Workspace Authority may select and verify its Source.
-_Avoid_: Grant, environment variable
+**Environment Binding Requirement**:
+A stable, versioned declaration within a Binding Set that names one standing capability, pins one Artifact Approval epoch, and constrains how Workspace Authority may select and verify its upstream authority.
+_Avoid_: Task Binding Requirement, grant, environment variable
+
+**Task Binding Requirement**:
+A stable declaration within one immutable Task Template version that names and constrains one capability within that Task Template's maximum authority ceiling.
+_Avoid_: Environment Binding Requirement, ambient binding, runtime request
+
+**Binding Requirement Reference**:
+The exact reference from a Binding Resolution to either an Environment Binding Requirement version or a Task Binding Requirement in one Task Template version.
+_Avoid_: Binding name, inferred requirement
 
 **Binding Set**:
-A stable, versioned set of Binding Requirements owned by one Environment and assigned explicitly to a Consumer. It is the Consumer's complete desired capability surface for that Environment.
+A stable, versioned set of Environment Binding Requirements owned by one Environment and assigned explicitly to a standing Consumer. It is the Consumer's complete desired capability surface for that Environment.
 _Avoid_: Ambient environment, inferred dependencies
 
 **Authority Mode**:
-The single resolution rule on a Binding Requirement: `personal`, `shared`, or `verified`. Modes constrain Source eligibility and verification; they are not Source types and never define fallback order.
+The single resolution rule on an Environment Binding Requirement: `personal`, `shared`, or `verified`. Modes constrain Source eligibility and verification; they are not Source types and never define fallback order.
 _Avoid_: Source type, automatic fallback
 
 **Binding Resolution**:
-Workspace Authority's immutable result for one Consumer and one Binding Requirement version, recording the exact Source, verification result, Installation Decision, Contract Instance, and expected Binding generation.
+Workspace Authority's canonical immutable placement result for one Consumer and one Binding Requirement Reference. It records the exact Upstream Authority, Artifact Approval, Installation Decision or Task Dispatch Decision, Contract Instance, applicable shared-state choice, and expected Binding generation.
 _Avoid_: Candidate, best match
+
+**Task Dispatch Decision**:
+The Workspace decision that authorizes exact task placement for one Agent Task under one approved Task Template version without granting reusable standing authority.
+_Avoid_: Installation Decision, runtime approval, chat continuation
 
 **Verification Receipt**:
 A bounded, expiring Gatekeeper result proving that one generation of a verifier principal independently satisfied a declared access check for one exact Provider Resource Identity.
@@ -119,6 +163,10 @@ _Avoid_: Permission grant, verifier capability
 **Binding**:
 The generation-tagged, uniquely named association through which one Consumer possesses the capability produced by one Contract Instance.
 _Avoid_: Grant, permission
+
+**Authority Debt**:
+The reviewed difference between provider-native authority and narrower effective standing or task authority, preserving enforcement layer, revocation granularity, risk, exception owner, production eligibility, and remediation.
+_Avoid_: Enforcement Gap, accepted risk, task scope, hidden provider scope
 
 **Legacy Compatibility Binding**:
 A preserved Gadget-only binding created before identity-bound Sources and canonical Contract-only Bindings existed. It retains historical behavior but cannot authorize Projects, Development Sessions, Workloads, or Graduation.
