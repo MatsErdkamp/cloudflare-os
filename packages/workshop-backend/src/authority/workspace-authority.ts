@@ -8,6 +8,8 @@ import type {
   AuthorityId,
   ArtifactApprovalId,
   ArtifactApprovalRecord,
+  ArtifactProposalId,
+  ArtifactProposalRecord,
   AuthorityDebtId,
   AuthorityDebtRecord,
   AuthorityLifecycleTombstoneRecord,
@@ -37,7 +39,68 @@ import type {
 } from "./records";
 
 const LEGACY_MANAGER_SOURCE_SAMPLE_LIMIT = 16;
+const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
 const legacyManagerSourceAccessBrand: unique symbol = Symbol("legacyManagerSourceAccess");
+
+function requireContentHash(value: string, field: string): void {
+  if (!CONTENT_HASH.test(value)) throw new TypeError(`${field} must be a sha256 content hash.`);
+}
+
+function validateArtifactProposal(
+  record: Omit<ArtifactProposalRecord, "id" | "state" | "revision">,
+): void {
+  requireContentHash(record.artifactHash, "Artifact hash");
+  requireContentHash(record.runtimeProfileHash, "Runtime Profile hash");
+  requireContentHash(record.reviewBundleHash, "Review Bundle hash");
+  requireContentHash(record.reviewComparisonHash, "Review Comparison hash");
+  requireContentHash(record.policyHash, "Review policy hash");
+  requireContentHash(record.generatorIdentityHash, "Generator identity hash");
+  if (record.baseline.type === "bundle") {
+    requireContentHash(record.baseline.bundleHash, "Baseline Review Bundle hash");
+  }
+  if (!Number.isSafeInteger(record.proposedAt) || record.proposedAt < 0) {
+    throw new TypeError("Artifact Proposal timestamp must be a non-negative safe integer.");
+  }
+}
+
+function validateArtifactApprovalEvidence(
+  storage: AuthorityStorage,
+  record: LiveArtifactApprovalInput,
+): ArtifactProposalRecord {
+  requireContentHash(record.artifactHash, "Artifact hash");
+  requireContentHash(record.reviewBundleHash, "Review Bundle hash");
+  requireContentHash(record.reviewComparisonHash, "Review Comparison hash");
+  requireContentHash(record.policyHash, "Review policy hash");
+  requireContentHash(record.generatorIdentityHash, "Generator identity hash");
+  if (record.baseline.type === "bundle") {
+    requireContentHash(record.baseline.bundleHash, "Baseline Review Bundle hash");
+  }
+  if (record.proposalId.length === 0) throw new TypeError("Artifact Proposal ID is required.");
+  const proposal = storage.artifactProposals.get(record.proposalId);
+  if (!proposal || proposal.state !== "pending") {
+    throw new Error(`Artifact Proposal is not pending: ${record.proposalId}`);
+  }
+  const expected = {
+    artifactHash: proposal.artifactHash,
+    reviewBundleHash: proposal.reviewBundleHash,
+    reviewComparisonHash: proposal.reviewComparisonHash,
+    policyHash: proposal.policyHash,
+    baseline: proposal.baseline,
+    generatorIdentityHash: proposal.generatorIdentityHash,
+  };
+  const actual = {
+    artifactHash: record.artifactHash,
+    reviewBundleHash: record.reviewBundleHash,
+    reviewComparisonHash: record.reviewComparisonHash,
+    policyHash: record.policyHash,
+    baseline: record.baseline,
+    generatorIdentityHash: record.generatorIdentityHash,
+  };
+  if (!sameAuthorityValue(actual, expected)) {
+    throw new Error("Artifact Approval evidence does not match its Proposal.");
+  }
+  return proposal;
+}
 const textEncoder = new TextEncoder();
 
 function compositeKey(...parts: readonly (string | number)[]): string {
@@ -72,6 +135,7 @@ type WorkspaceAuthorityEvent = {
   sequence: number;
   type:
     | "authorityModuleInitialized"
+    | "artifactProposalRecorded"
     | "artifactApprovalRecorded"
     | "installationDecisionRecorded"
     | "taskDispatchDecisionRecorded"
@@ -147,7 +211,13 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
           byArtifactEpoch(record: ArtifactApprovalRecord) {
             return compositeKey(record.artifactHash, record.approvalEpoch);
           },
+          byProposal(record: ArtifactApprovalRecord) {
+            return record.evidence === "complete" ? record.proposalId : null;
+          },
         },
+      }),
+      artifactProposals: collection<ArtifactProposalRecord>()({
+        primaryKey: "id",
       }),
       installationDecisions: collection<InstallationDecisionRecord>()({
         primaryKey: "id",
@@ -234,9 +304,9 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
 type AuthorityStorage = ReturnType<typeof makeAuthorityStorage>;
 
 type LiveArtifactApprovalInput = Omit<
-  ArtifactApprovalRecord,
-  "id" | "decisionSequence" | "revision" | "evidence"
-> & {evidence: "complete"};
+  Extract<ArtifactApprovalRecord, {evidence: "complete"}>,
+  "id" | "approvalEpoch" | "decisionSequence" | "revision"
+>;
 
 type LiveInstallationDecisionInput = Omit<
   InstallationDecisionRecord,
@@ -277,6 +347,11 @@ export type WorkspaceAuthorityCommand =
   | {type: "backfillLegacyContract"; legacyContractId: WorkpieceId}
   | {type: "markReadyToCutover"; expectedDigest: string}
   | {type: "cutover"; expectedDigest: string}
+  | {
+      type: "recordArtifactProposal";
+      operationId: string;
+      record: Omit<ArtifactProposalRecord, "id" | "state" | "revision">;
+    }
   | {
       type: "recordArtifactApproval";
       operationId: string;
@@ -341,7 +416,13 @@ export type WorkspaceAuthorityCommandResult =
   | {type: "legacyContractBackfilled"; instanceId: ContractInstanceId; changed: boolean}
   | {type: "readyToCutover"; digest: string; revision: number}
   | {type: "cutoverCompleted"; digest: string; sequence: number; revision: number}
-  | {type: "artifactApprovalRecorded"; id: ArtifactApprovalId; sequence: number}
+  | {type: "artifactProposalRecorded"; id: ArtifactProposalId; sequence: number}
+  | {
+      type: "artifactApprovalRecorded";
+      id: ArtifactApprovalId;
+      approvalEpoch: number;
+      sequence: number;
+    }
   | {type: "installationDecisionRecorded"; id: InstallationDecisionId; sequence: number}
   | {type: "taskDispatchDecisionRecorded"; id: TaskDispatchDecisionId; sequence: number}
   | {type: "contractInstancePrepared"; id: ContractInstanceId; sequence: number}
@@ -364,7 +445,9 @@ export type WorkspaceAuthorityCommandResult =
 export type WorkspaceAuthorityQuery =
   | {type: "status"}
   | {type: "cutoverCandidate"}
+  | {type: "artifactProposal"; id: ArtifactProposalId}
   | {type: "artifactApproval"; id: ArtifactApprovalId}
+  | {type: "artifactApprovalByProposal"; proposalId: ArtifactProposalId}
   | {type: "installationDecision"; id: InstallationDecisionId}
   | {type: "taskDispatchDecision"; id: TaskDispatchDecisionId}
   | {type: "contractInstance"; id: ContractInstanceId}
@@ -394,7 +477,9 @@ export type WorkspaceAuthorityStatus = {
 export type WorkspaceAuthorityQueryResult =
   | {type: "status"; value: WorkspaceAuthorityStatus}
   | {type: "cutoverCandidate"; value: {digest: string; contractCount: number; bindingCount: number}}
+  | {type: "artifactProposal"; value?: ArtifactProposalRecord}
   | {type: "artifactApproval"; value?: ArtifactApprovalRecord}
+  | {type: "artifactApprovalByProposal"; value?: ArtifactApprovalRecord}
   | {type: "installationDecision"; value?: InstallationDecisionRecord}
   | {type: "taskDispatchDecision"; value?: TaskDispatchDecisionRecord}
   | {type: "contractInstance"; value?: ContractInstanceRecord}
@@ -1026,12 +1111,32 @@ export function createWorkspaceAuthorityModule<
               revision: next.revision,
             };
           });
+        case "recordArtifactProposal":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            validateArtifactProposal(command.record);
+            const id = issueAuthorityId<"artifactProposal">();
+            const sequence = appendAuthorityEvent(storage, {
+              type: "artifactProposalRecorded",
+              subjectId: id,
+              operationId: command.operationId,
+            });
+            storage.artifactProposals.put({
+              ...structuredClone(command.record),
+              id,
+              state: "pending",
+              revision: 1,
+            });
+            return {type: "artifactProposalRecorded", id, sequence};
+          });
         case "recordArtifactApproval":
           return storage.transaction(() => {
             requireActiveAuthority(storage);
-            if (command.record.evidence !== "complete") {
-              throw new Error("New Artifact Approvals require complete review evidence.");
-            }
+            const proposal = validateArtifactApprovalEvidence(storage, command.record);
+            let approvalEpoch = 1;
+            while (storage.artifactApprovals.byArtifactEpoch.get(
+              compositeKey(command.record.artifactHash, approvalEpoch),
+            )) approvalEpoch++;
             const id = issueAuthorityId<"artifactApproval">();
             const sequence = appendAuthorityEvent(storage, {
               type: "artifactApprovalRecorded",
@@ -1041,10 +1146,16 @@ export function createWorkspaceAuthorityModule<
             storage.artifactApprovals.put({
               ...structuredClone(command.record),
               id,
+              approvalEpoch,
               decisionSequence: sequence,
               revision: 1,
             });
-            return {type: "artifactApprovalRecorded", id, sequence};
+            storage.artifactProposals.put({
+              ...proposal,
+              state: command.record.decision === "approved" ? "accepted" : "rejected",
+              revision: proposal.revision + 1,
+            });
+            return {type: "artifactApprovalRecorded", id, approvalEpoch, sequence};
           });
         case "recordInstallationDecision":
           return storage.transaction(() => {
@@ -1393,6 +1504,20 @@ export function createWorkspaceAuthorityModule<
             type: "artifactApproval",
             value: requireAuthorityState(storage).state === "active"
               ? storage.artifactApprovals.get(query.id)
+              : undefined,
+          };
+        case "artifactApprovalByProposal":
+          return {
+            type: "artifactApprovalByProposal",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.artifactApprovals.byProposal.get(query.proposalId)
+              : undefined,
+          };
+        case "artifactProposal":
+          return {
+            type: "artifactProposal",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.artifactProposals.get(query.id)
               : undefined,
           };
         case "installationDecision":

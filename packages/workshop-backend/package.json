@@ -21,6 +21,7 @@
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@gadgets/backend-utils": "workspace:*",
+    "@gadgets/contract-review-builder": "workspace:*",
     "@gadgets/contractors": "workspace:*",
     "@gadgets/error-reporting": "workspace:*",
     "@gadgets/typed-storage": "workspace:*",

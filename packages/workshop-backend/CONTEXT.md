@@ -100,6 +100,10 @@ _Avoid_: Login session, Authority Operation, permission record
 A requested change that would expand or redirect a Consumer's authority and therefore requires an Authority Manager's explicit decision before it takes effect.
 _Avoid_: Approved change, automatic grant
 
+**Artifact Proposal**:
+One Workspace record pinning an exact Contract Artifact, Review Bundle, Review Comparison, policy snapshot, generator identity, and declared baseline for an Artifact Approval decision. It grants no installation or runtime authority, and Chat retains only a reference plus non-authoritative presentation snapshots.
+_Avoid_: Artifact Approval, Installation Decision, chat code, build candidate
+
 **Personal Account**:
 A user-owned connection to an external provider whose credentials and lifecycle remain under that user's control.
 _Avoid_: Workspace Account, shared account

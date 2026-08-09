@@ -7,6 +7,7 @@ export type AuthorityId<Kind extends string> = string & {readonly [authorityIdKi
 
 /** Opaque identities used by canonical Workspace Authority records. */
 export type ArtifactApprovalId = AuthorityId<"artifactApproval">;
+export type ArtifactProposalId = AuthorityId<"artifactProposal">;
 export type InstallationDecisionId = AuthorityId<"installationDecision">;
 export type TaskDispatchDecisionId = AuthorityId<"taskDispatchDecision">;
 export type BindingResolutionId = AuthorityId<"bindingResolution">;
@@ -89,16 +90,32 @@ export type AuthorityScope = Readonly<{
   egress: readonly string[];
 }>;
 
-/** An Artifact decision, distinct from installation or possession. */
-export type ArtifactApprovalRecord = Readonly<{
+/** Immutable evidence references proposed for a later Artifact decision. */
+export type ArtifactProposalRecord = Readonly<{
+  id: ArtifactProposalId;
+  artifactHash: string;
+  runtimeProfileHash: string;
+  reviewBundleHash: string;
+  reviewComparisonHash: string;
+  policyHash: string;
+  baseline:
+    | {readonly type: "none"}
+    | {
+        readonly type: "bundle";
+        readonly bundleHash: string;
+        readonly artifactApprovalId: ArtifactApprovalId;
+      };
+  generatorIdentityHash: string;
+  proposedBy: string;
+  proposedAt: number;
+  state: "pending" | "accepted" | "rejected";
+  revision: number;
+}>;
+
+type ArtifactApprovalRecordBase = Readonly<{
   id: ArtifactApprovalId;
   artifactHash: string;
   approvalEpoch: number;
-  proposalId?: string;
-  reviewBundleHash?: string;
-  reviewComparisonHash?: string;
-  policyHash?: string;
-  evidence: "complete" | "legacyUnknown";
   decision: "approved" | "rejected";
   decidedBy: string;
   permissionGeneration?: number;
@@ -106,6 +123,28 @@ export type ArtifactApprovalRecord = Readonly<{
   lifecycle: "active" | "deprecated" | "revoked";
   revision: number;
 }>;
+
+/** An Artifact decision, distinct from installation or possession. */
+export type ArtifactApprovalRecord = ArtifactApprovalRecordBase & Readonly<
+  | {
+      evidence: "complete";
+      proposalId: ArtifactProposalId;
+      reviewBundleHash: string;
+      reviewComparisonHash: string;
+      policyHash: string;
+      baseline: ArtifactProposalRecord["baseline"];
+      generatorIdentityHash: string;
+    }
+  | {
+      evidence: "legacyUnknown";
+      proposalId?: never;
+      reviewBundleHash?: never;
+      reviewComparisonHash?: never;
+      policyHash?: never;
+      baseline?: never;
+      generatorIdentityHash?: never;
+    }
+>;
 
 /** A standing placement decision; it never represents Artifact review or task dispatch. */
 export type InstallationDecisionRecord = Readonly<{

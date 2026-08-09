@@ -93,6 +93,137 @@ function makeModule({
 }
 
 describe("Workspace Authority module", () => {
+  it("rejects incomplete or malformed evidence for a new Artifact Approval", () => {
+    const {module} = makeModule();
+    module.authority.execute({type: "initialize"});
+    module.authority.execute({type: "beginBackfill", migrationId: "evidence-migration"});
+    const candidate = module.authority.query({type: "cutoverCandidate"});
+    if (candidate.type !== "cutoverCandidate") throw new Error("candidate unavailable");
+    module.authority.execute({type: "markReadyToCutover", expectedDigest: candidate.value.digest});
+    module.authority.execute({type: "cutover", expectedDigest: candidate.value.digest});
+    const proposal = module.authority.execute({
+      type: "recordArtifactProposal",
+      operationId: "record-proposal-1",
+      record: {
+        artifactHash: `sha256:${"1".repeat(64)}`,
+        runtimeProfileHash: `sha256:${"6".repeat(64)}`,
+        reviewBundleHash: `sha256:${"2".repeat(64)}`,
+        reviewComparisonHash: `sha256:${"3".repeat(64)}`,
+        policyHash: `sha256:${"4".repeat(64)}`,
+        baseline: {type: "none"},
+        generatorIdentityHash: `sha256:${"5".repeat(64)}`,
+        proposedBy: "author",
+        proposedAt: 1,
+      },
+    });
+    if (proposal.type !== "artifactProposalRecorded") throw new Error("proposal unavailable");
+    const valid = {
+      artifactHash: `sha256:${"1".repeat(64)}`,
+      proposalId: proposal.id,
+      reviewBundleHash: `sha256:${"2".repeat(64)}`,
+      reviewComparisonHash: `sha256:${"3".repeat(64)}`,
+      policyHash: `sha256:${"4".repeat(64)}`,
+      baseline: {type: "none" as const},
+      generatorIdentityHash: `sha256:${"5".repeat(64)}`,
+      evidence: "complete" as const,
+      decision: "approved" as const,
+      decidedBy: "reviewer",
+      lifecycle: "active" as const,
+    };
+
+    expect(() => module.authority.execute({
+      type: "recordArtifactApproval",
+      operationId: "malformed-evidence",
+      record: {...valid, reviewBundleHash: "not-content-addressed"},
+    })).toThrow("Review Bundle hash must be a sha256 content hash");
+    expect(() => module.authority.execute({
+      type: "recordArtifactApproval",
+      operationId: "empty-proposal",
+      record: {...valid, proposalId: ""},
+    })).toThrow("Artifact Proposal ID is required");
+    expect(() => module.authority.execute({
+      type: "recordArtifactApproval",
+      operationId: "mismatched-evidence",
+      record: {...valid, policyHash: `sha256:${"f".repeat(64)}`},
+    })).toThrow("Artifact Approval evidence does not match its Proposal");
+
+    const approval = module.authority.execute({
+      type: "recordArtifactApproval",
+      operationId: "complete-evidence",
+      record: valid,
+    });
+    expect(approval).toMatchObject({type: "artifactApprovalRecorded"});
+    expect(module.authority.query({type: "artifactProposal", id: proposal.id})).toMatchObject({
+      type: "artifactProposal",
+      value: {state: "accepted", revision: 2},
+    });
+    expect(() => module.authority.execute({
+      type: "recordArtifactApproval",
+      operationId: "duplicate-epoch",
+      record: valid,
+    })).toThrow();
+
+    const reapprovalProposal = module.authority.execute({
+      type: "recordArtifactProposal",
+      operationId: "record-proposal-2",
+      record: {
+        artifactHash: valid.artifactHash,
+        runtimeProfileHash: `sha256:${"6".repeat(64)}`,
+        reviewBundleHash: valid.reviewBundleHash,
+        reviewComparisonHash: valid.reviewComparisonHash,
+        policyHash: valid.policyHash,
+        baseline: {type: "none"},
+        generatorIdentityHash: valid.generatorIdentityHash,
+        proposedBy: "author",
+        proposedAt: 2,
+      },
+    });
+    if (reapprovalProposal.type !== "artifactProposalRecorded") {
+      throw new Error("reapproval proposal unavailable");
+    }
+    const reapproval = module.authority.execute({
+      type: "recordArtifactApproval",
+      operationId: "reapproval",
+      record: {...valid, proposalId: reapprovalProposal.id},
+    });
+    expect(reapproval).toMatchObject({type: "artifactApprovalRecorded", approvalEpoch: 2});
+    expect(module.authority.query({
+      type: "artifactApprovalByProposal",
+      proposalId: reapprovalProposal.id,
+    })).toMatchObject({type: "artifactApprovalByProposal", value: {approvalEpoch: 2}});
+
+    const rejectedProposal = module.authority.execute({
+      type: "recordArtifactProposal",
+      operationId: "record-proposal-rejected",
+      record: {
+        artifactHash: valid.artifactHash,
+        runtimeProfileHash: `sha256:${"6".repeat(64)}`,
+        reviewBundleHash: valid.reviewBundleHash,
+        reviewComparisonHash: valid.reviewComparisonHash,
+        policyHash: valid.policyHash,
+        baseline: {type: "none"},
+        generatorIdentityHash: valid.generatorIdentityHash,
+        proposedBy: "author",
+        proposedAt: 3,
+      },
+    });
+    if (rejectedProposal.type !== "artifactProposalRecorded") {
+      throw new Error("rejected proposal unavailable");
+    }
+    expect(module.authority.execute({
+      type: "recordArtifactApproval",
+      operationId: "rejection",
+      record: {
+        ...valid,
+        proposalId: rejectedProposal.id,
+        decision: "rejected",
+        lifecycle: "revoked",
+      },
+    })).toMatchObject({type: "artifactApprovalRecorded", approvalEpoch: 3});
+    expect(module.authority.query({type: "artifactProposal", id: rejectedProposal.id}))
+      .toMatchObject({type: "artifactProposal", value: {state: "rejected"}});
+  });
+
   it("initializes and reports authority state through its production command/query interface", () => {
     const {module} = makeModule();
 
@@ -230,12 +361,35 @@ describe("Workspace Authority module", () => {
     });
     module.authority.execute({type: "cutover", expectedDigest: candidate.value.digest});
 
+    const standingProposal = module.authority.execute({
+      type: "recordArtifactProposal",
+      operationId: "proposal-standing",
+      record: {
+        artifactHash: `sha256:${"1".repeat(64)}`,
+        runtimeProfileHash: `sha256:${"3".repeat(64)}`,
+        reviewBundleHash: `sha256:${"2".repeat(64)}`,
+        reviewComparisonHash: `sha256:${"3".repeat(64)}`,
+        policyHash: `sha256:${"4".repeat(64)}`,
+        baseline: {type: "none"},
+        generatorIdentityHash: `sha256:${"5".repeat(64)}`,
+        proposedBy: "legacy-attribution",
+        proposedAt: 1,
+      },
+    });
+    if (standingProposal.type !== "artifactProposalRecorded") {
+      throw new Error("standing proposal unavailable");
+    }
     const approval = module.authority.execute({
       type: "recordArtifactApproval",
       operationId: "operation-approval",
       record: {
         artifactHash: `sha256:${"1".repeat(64)}`,
-        approvalEpoch: 1,
+        proposalId: standingProposal.id,
+        reviewBundleHash: `sha256:${"2".repeat(64)}`,
+        reviewComparisonHash: `sha256:${"3".repeat(64)}`,
+        policyHash: `sha256:${"4".repeat(64)}`,
+        baseline: {type: "none"},
+        generatorIdentityHash: `sha256:${"5".repeat(64)}`,
         evidence: "complete",
         decision: "approved",
         decidedBy: "legacy-attribution",
@@ -550,12 +704,35 @@ describe("Workspace Authority module", () => {
     module.authority.execute({type: "markReadyToCutover", expectedDigest: candidate.value.digest});
     module.authority.execute({type: "cutover", expectedDigest: candidate.value.digest});
 
+    const taskProposal = module.authority.execute({
+      type: "recordArtifactProposal",
+      operationId: "proposal-task",
+      record: {
+        artifactHash: `sha256:${"6".repeat(64)}`,
+        runtimeProfileHash: `sha256:${"b".repeat(64)}`,
+        reviewBundleHash: `sha256:${"7".repeat(64)}`,
+        reviewComparisonHash: `sha256:${"8".repeat(64)}`,
+        policyHash: `sha256:${"9".repeat(64)}`,
+        baseline: {type: "none"},
+        generatorIdentityHash: `sha256:${"a".repeat(64)}`,
+        proposedBy: "reviewer",
+        proposedAt: 1,
+      },
+    });
+    if (taskProposal.type !== "artifactProposalRecorded") {
+      throw new Error("task proposal unavailable");
+    }
     const approval = module.authority.execute({
       type: "recordArtifactApproval",
       operationId: "task-artifact-approval",
       record: {
         artifactHash: `sha256:${"6".repeat(64)}`,
-        approvalEpoch: 1,
+        proposalId: taskProposal.id,
+        reviewBundleHash: `sha256:${"7".repeat(64)}`,
+        reviewComparisonHash: `sha256:${"8".repeat(64)}`,
+        policyHash: `sha256:${"9".repeat(64)}`,
+        baseline: {type: "none"},
+        generatorIdentityHash: `sha256:${"a".repeat(64)}`,
         evidence: "complete",
         decision: "approved",
         decidedBy: "reviewer",
