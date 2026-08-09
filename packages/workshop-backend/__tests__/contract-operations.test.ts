@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { env, RpcTarget } from "cloudflare:workers";
+import { env, RpcStub, RpcTarget } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 
 import type { OverseerDurableObject } from "../src/overseer.js";
@@ -24,7 +24,76 @@ function contractCall() {
   };
 }
 
+function acknowledgeContractInvalidation(impl: any): number[] {
+  const invalidated: number[] = [];
+  impl.invalidateContractEndpoint = async (contract: {id: number}) => {
+    expect(impl.storage.contracts.get(contract.id)).toBeDefined();
+    invalidated.push(contract.id);
+  };
+  return invalidated;
+}
+
 describe("Contract Source actions and operations", () => {
+  it("installs exact reachability before the production adapter opens a current session", async () => {
+    await runInDurableObject(
+      env.TEST_OVERSEER.getByName("contract-current-lifecycle-adapter"),
+      async (instance: OverseerDurableObject) => {
+        const impl = (instance as any).impl;
+        impl.storage.contracts.put({
+          id: 70,
+          artifactHash: "sha256:artifact",
+          runtimeProfileHash: "sha256:runtime-profile",
+          sourceGatekeeperId: 17,
+          title: "Contract",
+          publicTypes: "export interface ContractBinding {}",
+          createdAt: new Date(0),
+          approvedBy: "admin",
+        });
+        impl.openContractSourceSession = async () => new RpcStub(new class extends RpcTarget {
+          read(): string { return "source"; }
+        }());
+        const order: string[] = [];
+        let installed: any;
+        let opened: any;
+        impl.getContractFacet = () => ({
+          install: async (snapshot: unknown) => {
+            order.push("install");
+            installed = snapshot;
+            return {endpointId: "contract:70", reachabilityGeneration: 0};
+          },
+          startSession: async (session: unknown) => {
+            order.push("start");
+            opened = session;
+            return "root";
+          },
+        });
+
+        await expect(impl.startContractSession(
+          70, {from: "gadget", gadgetId: 9}, "read",
+        )).resolves.toBe("root");
+
+        expect(order).toEqual(["install", "start"]);
+        expect(installed).toMatchObject({
+          endpointId: "contract:70",
+          instanceId: "contract:70",
+          reachabilityGeneration: 0,
+        });
+        expect(opened).toMatchObject({
+          reachability: installed,
+          invocation: {
+            consumerId: "gadget:9",
+            bindingId: "gadget:9:contract:70",
+            contractInstanceId: "contract:70",
+            methodName: "read",
+          },
+          contract: {id: "70", artifactHash: "sha256:artifact"},
+        });
+        expect(opened).not.toHaveProperty("policy");
+        expect(opened).not.toHaveProperty("caller");
+      },
+    );
+  });
+
   it("auto-applies Contract actions with attribution while direct Source actions stay pending", async () => {
     const applied: number[] = [];
     await runInDurableObject(
@@ -101,6 +170,7 @@ describe("Contract Source actions and operations", () => {
       env.TEST_OVERSEER.getByName("contract-shared-state"),
       async (instance: OverseerDurableObject) => {
         const impl = (instance as any).impl;
+        const invalidated = acknowledgeContractInvalidation(impl);
         await impl.putContractSharedState("team", "release", {version: 3});
         await expect(impl.getContractSharedState("team", "release"))
           .resolves.toEqual({version: 3});
@@ -113,7 +183,7 @@ describe("Contract Source actions and operations", () => {
         impl.storage.contracts.put({
           id: 70,
           artifactHash: "sha256:artifact",
-          runtimeHarnessVersion: "5",
+          runtimeProfileHash: `sha256:${"5".repeat(64)}`,
           sourceGatekeeperId: 17,
           title: "Contract",
           publicTypes: "export interface ContractBinding {}",
@@ -122,6 +192,7 @@ describe("Contract Source actions and operations", () => {
           sharedStateKey: "team",
         });
         await impl.deleteContract(70);
+        expect(invalidated).toEqual([70]);
         await expect(impl.getContractSharedState("team", "release"))
           .resolves.toEqual({version: 3});
       },
@@ -251,13 +322,14 @@ describe("Contract Source actions and operations", () => {
       env.TEST_OVERSEER.getByName("contract-hook-deletion"),
       async (instance: OverseerDurableObject) => {
         const impl = (instance as any).impl;
+        acknowledgeContractInvalidation(impl);
         const hookId = "contract-hook-controller";
         const controller = impl.ctx.exports.HookLifecycleTestTarget({props: {id: hookId}});
         const callback = impl.ctx.exports.HookLifecycleTestTarget({props: {id: "callback"}});
         impl.storage.contracts.put({
           id: 70,
           artifactHash: "sha256:artifact",
-          runtimeHarnessVersion: "5",
+          runtimeProfileHash: `sha256:${"5".repeat(64)}`,
           sourceGatekeeperId: 17,
           title: "Contract",
           publicTypes: "export interface ContractBinding {}",
@@ -305,12 +377,13 @@ describe("Contract Source actions and operations", () => {
       env.TEST_OVERSEER.getByName("contract-hook-enable-deletion-race"),
       async (instance: OverseerDurableObject) => {
         const impl = (instance as any).impl;
+        acknowledgeContractInvalidation(impl);
         const controller = impl.ctx.exports.HookLifecycleTestTarget({props: {id: "enable-race"}});
         const callback = impl.ctx.exports.HookLifecycleTestTarget({props: {id: "enable-race-callback"}});
         impl.storage.contracts.put({
           id: 70,
           artifactHash: "sha256:artifact",
-          runtimeHarnessVersion: "7",
+          runtimeProfileHash: `sha256:${"7".repeat(64)}`,
           sourceGatekeeperId: 17,
           title: "Contract",
           publicTypes: "export interface ContractBinding {}",
@@ -367,7 +440,7 @@ describe("Contract Source actions and operations", () => {
         impl.storage.contracts.put({
           id: call.contractId,
           artifactHash: call.artifactHash,
-          runtimeHarnessVersion: "7",
+          runtimeProfileHash: `sha256:${"7".repeat(64)}`,
           sourceGatekeeperId: call.sourceGatekeeperId,
           title: "Contract",
           publicTypes: "export interface ContractBinding {}",
@@ -466,13 +539,14 @@ describe("Contract Source actions and operations", () => {
       env.TEST_OVERSEER.getByName("contract-staged-hook-deletion"),
       async (instance: OverseerDurableObject) => {
         const impl = (instance as any).impl;
+        acknowledgeContractInvalidation(impl);
         const call = contractCall();
         const controller = impl.ctx.exports.HookLifecycleTestTarget({props: {id: "deleted-staged-hook"}});
         const callback = impl.ctx.exports.HookLifecycleTestTarget({props: {id: "deleted-staged-callback"}});
         impl.storage.contracts.put({
           id: call.contractId,
           artifactHash: call.artifactHash,
-          runtimeHarnessVersion: "5",
+          runtimeProfileHash: `sha256:${"5".repeat(64)}`,
           sourceGatekeeperId: call.sourceGatekeeperId,
           title: "Contract",
           publicTypes: "export interface ContractBinding {}",

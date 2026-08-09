@@ -6182,7 +6182,7 @@ function ChatInterface({
                     <dt>Proposer</dt><dd className="text-foreground">{msg.author.name}</dd>
                     <dt>Source</dt><dd className="break-all text-foreground">{msg.sourceUrl ?? msg.sourceTitle}</dd>
                     <dt>Artifact</dt><dd className="break-all font-mono text-foreground">{msg.artifactHash}</dd>
-                    <dt>Harness</dt><dd className="font-mono text-foreground">v{msg.runtimeHarnessVersion}</dd>
+                    <dt>Runtime profile</dt><dd className="font-mono text-foreground">{msg.runtimeProfileHash.slice(0, 18)}…</dd>
                     <dt>Compatibility</dt><dd className="font-mono text-foreground">{msg.compatibilityDate}</dd>
                     <dt>Source type</dt><dd className="text-foreground">
                       <span className="font-mono">{msg.sourceRootType}</span>

@@ -19,7 +19,7 @@ function seedWorkpieces(impl: any): void {
   impl.storage.contracts.put({
     id: 70,
     artifactHash: "sha256:artifact",
-    runtimeHarnessVersion: "6",
+    runtimeProfileHash: `sha256:${"1".repeat(64)}`,
     sourceGatekeeperId: 17,
     title: "Reviewed Contract",
     publicTypes: "export interface ContractBinding {}",
@@ -70,9 +70,15 @@ describe("Contract binding boundary", () => {
         const impl = (instance as any).impl;
         seedWorkpieces(impl);
         impl.bindWorkpiece(9, "REVIEWED", 70);
+        const invalidated: number[] = [];
+        impl.invalidateContractEndpoint = async (contract: {id: number}) => {
+          expect(impl.storage.gatekeepers.get(17)).toBeDefined();
+          invalidated.push(contract.id);
+        };
 
         await impl.removeGatekeeper(17);
 
+        expect(invalidated).toEqual([70]);
         expect(impl.storage.gatekeepers.get(17)).toBeUndefined();
         expect(impl.storage.contracts.get(70)).toBeUndefined();
         expect(impl.storage.contractTombstones.get(70)).toBeDefined();

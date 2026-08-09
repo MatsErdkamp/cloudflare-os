@@ -14,7 +14,7 @@ import { ADMIN_CONFIG_KEY, BlueprintKvEnv, readBlueprintKvRecord, sanitizeBluepr
 import {
   isContractPackageName,
   isExactContractDependencyVersion,
-} from "@gadgets/contractors/runtime";
+} from "@gadgets/contractors/artifact";
 
 export type AdminConfig = {
   // Whether new account signups are allowed (default true). Note: this is an access toggle, not

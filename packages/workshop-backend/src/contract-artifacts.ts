@@ -1,8 +1,9 @@
 import {
   canonicalContractJson,
-  hashArtifact,
+  assertCurrentContractArtifact,
+  parseContractArtifact,
   type ContractArtifact,
-} from "@gadgets/contractors/runtime";
+} from "@gadgets/contractors/artifact";
 
 /** Minimal R2 surface used by the immutable Contract artifact store. */
 export interface ContractArtifactBucket {
@@ -21,55 +22,18 @@ function artifactKey(hash: string): string {
   return `contracts/artifacts/${hash}.json`;
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) &&
-    Object.values(value).every((item) => typeof item === "string");
-}
-
 function parseArtifact(text: string, expectedHash: string): ContractArtifact {
-  const value: unknown = JSON.parse(text);
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new TypeError("Invalid Contract artifact.");
-  }
-  const record = value as Record<string, unknown>;
-  if (record.hash !== expectedHash || typeof record.mainModule !== "string" ||
-      !isStringRecord(record.modules) || typeof record.publicTypes !== "string" ||
-      record.publicRootType !== "ContractBinding" || typeof record.sourceTypeHash !== "string" ||
-      typeof record.sourceRootType !== "string" || !Array.isArray(record.dependencies) ||
-      !record.dependencies.every((item) => typeof item === "object" && item !== null &&
-        typeof (item as Record<string, unknown>).name === "string" &&
-        typeof (item as Record<string, unknown>).version === "string" &&
-        ((item as Record<string, unknown>).integrity === undefined ||
-          typeof (item as Record<string, unknown>).integrity === "string")) ||
-      typeof record.compatibilityDate !== "string" ||
-      typeof record.runtimeHarnessVersion !== "string" ||
-      typeof record.createdAt !== "string") {
-    throw new TypeError("Invalid Contract artifact.");
-  }
-  return {
-    hash: record.hash as string,
-    mainModule: record.mainModule,
-    modules: record.modules,
-    publicTypes: record.publicTypes,
-    publicRootType: record.publicRootType,
-    sourceTypeHash: record.sourceTypeHash,
-    sourceRootType: record.sourceRootType,
-    dependencies: record.dependencies as ContractArtifact["dependencies"],
-    compatibilityDate: record.compatibilityDate,
-    runtimeHarnessVersion: record.runtimeHarnessVersion as string,
-    createdAt: record.createdAt,
-  };
+  const artifact = parseContractArtifact(JSON.parse(text));
+  if (artifact.hash !== expectedHash) throw new TypeError("Invalid Contract artifact hash.");
+  return artifact;
 }
 
 async function assertArtifactHash(artifact: ContractArtifact): Promise<void> {
-  const {hash, createdAt: _createdAt, ...authority} = artifact;
-  if (await hashArtifact(authority) !== hash) {
-    throw new Error(`Contract artifact content does not match ${hash}.`);
-  }
+  await assertCurrentContractArtifact(artifact);
 }
 
-function artifactAuthority(artifact: ContractArtifact): Omit<ContractArtifact, "hash" | "createdAt"> {
-  const {hash: _hash, createdAt: _createdAt, ...authority} = artifact;
+function artifactAuthority(artifact: ContractArtifact): Omit<ContractArtifact, "hash"> {
+  const {hash: _hash, ...authority} = artifact;
   return authority;
 }
 

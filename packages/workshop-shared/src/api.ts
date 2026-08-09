@@ -2068,8 +2068,10 @@ export type AiChatMessageBody = {
   sourceUrl?: string;
   /** Exact content hash of the reviewed immutable artifact. */
   artifactHash: string;
-  /** Exact retained Contract harness included in the artifact authority hash. */
-  runtimeHarnessVersion: string;
+  /** Exact hash of the sole current runtime profile. */
+  runtimeProfileHash: string;
+  /** Closed, compiler-produced Artifact retained verbatim for acceptance. */
+  artifactJson: string;
   /** Display title of the installed Contract. */
   title: string;
   /** Complete public TypeScript declarations exposed to the target Gadget. */
@@ -2302,22 +2304,8 @@ export type AiToolCall = {
     title: string;
     /** Binding name exposed to the target Gadget. */
     bindingName: string;
-    /** Executable ESM reviewed by the approver. */
-    sourceCode: string;
-    /** Complete public declarations reviewed by the approver. */
-    publicTypes: string;
-    /** Exact bundled dependency versions. */
-    dependencies?: ContractDependency[];
-    /** Compiler-produced content-addressed artifact hash. */
-    artifactHash: string;
-    /** Compiler-recorded hash of the selected Source declarations. */
-    sourceTypeHash: string;
-    /** Compiler-recorded Source root type name. */
-    sourceRootType: string;
-    /** Worker compatibility date used for the compiled artifact. */
-    compatibilityDate: string;
-    /** Exact Contract runtime harness version included in the artifact hash. */
-    runtimeHarnessVersion: string;
+    /** Complete compiler-produced current Artifact JSON. */
+    artifactJson: string;
     /** Explicit shared-state namespace. */
     sharedStateKey?: string;
   };
@@ -2599,8 +2587,8 @@ export type WorkpieceSummary = {
   type: "contract";
   /** Exact immutable artifact currently installed. */
   artifactHash: string;
-  /** Exact retained harness used by the installed artifact. */
-  runtimeHarnessVersion: string;
+  /** Exact current runtime profile used by the installed artifact. */
+  runtimeProfileHash: string;
   /** Private Source used by this Contract, visible only as management metadata. */
   sourceGatekeeperId: WorkpieceId;
   /** Complete public declarations exposed to Consumers. */

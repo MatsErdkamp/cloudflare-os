@@ -1,25 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import {hashArtifact, type ContractArtifact} from "@gadgets/contractors/runtime";
+import type {ContractArtifact} from "@gadgets/contractors/artifact";
 import { R2ContractArtifactStore, type ContractArtifactBucket } from "../src/contract-artifacts";
+import {currentContractArtifact} from "./contract-artifact-fixture";
 
 async function artifact(): Promise<ContractArtifact> {
-  const authority = {
-    mainModule: "contract.js",
-    modules: { "contract.js": "export default class {}" },
-    publicTypes: "export interface ContractBinding {}",
-    publicRootType: "ContractBinding",
-    sourceTypeHash: "source",
-    sourceRootType: "Source",
-    dependencies: [],
-    compatibilityDate: "2026-08-05",
-    runtimeHarnessVersion: "1",
-  };
-  return {
-    hash: await hashArtifact(authority),
-    ...authority,
-    createdAt: "2026-08-05T00:00:00.000Z",
-  };
+  return currentContractArtifact();
 }
 
 class MemoryBucket implements ContractArtifactBucket {
@@ -52,11 +38,11 @@ describe("R2ContractArtifactStore", () => {
     await expect(store.get(value.hash)).resolves.toEqual(value);
   });
 
-  it("treats a repeated build timestamp as the same content-addressed authority", async () => {
+  it("treats an identical current Artifact as the same content-addressed authority", async () => {
     const bucket = new MemoryBucket();
     const store = new R2ContractArtifactStore(bucket);
     const first = await artifact();
-    const rebuilt = {...first, createdAt: "2026-08-06T00:00:00.000Z"};
+    const rebuilt = await artifact();
 
     await store.put(first);
     await expect(store.put(rebuilt)).resolves.toBeUndefined();

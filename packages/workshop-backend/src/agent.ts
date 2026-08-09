@@ -1,4 +1,4 @@
-import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AiModelConfig, type ContractDependency, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
+import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
 import { PDF_MIME_TYPE, modelApiSupportsPdfAttachments } from './chat-attachment-pdf';
 import { AgentCatalog, ObservationDescription } from '@gadgets/workshop-shared/gatekeeper';
 import { createWorkshopLogger } from "./observability";
@@ -355,14 +355,7 @@ export interface AgentHooks {
     targetGadgetId: WorkpieceId;
     title: string;
     bindingName: string;
-    sourceCode: string;
-    publicTypes: string;
-    dependencies: ContractDependency[];
-    artifactHash: string;
-    sourceTypeHash: string;
-    sourceRootType: string;
-    compatibilityDate: string;
-    runtimeHarnessVersion: string;
+    artifactJson: string;
     sharedStateKey?: string;
   }): Promise<{requestId: string; artifactHash: string}>;
 
@@ -643,7 +636,7 @@ Ask the user to connect a private Source (for example a ClickHouse cluster or Gi
 let PROPOSE_CONTRACT_TOOL_DESCRIPTION = `
 Propose a reviewed Contract that turns one private Source in your env into a deliberately designed public capability for a target Gadget. Raw Sources cannot be wired into Gadget code.
 
-Provide the compiler-produced executable ESM with a default Contract factory export, complete public TypeScript declarations defining ContractBinding, the compiler's artifact and Source-type hashes, Source root type, compatibility date, runtime harness version, the exact target and binding name, and every bundled dependency's exact version and integrity. The proposal boundary verifies those claims against the current Source before showing the content-addressed artifact to a human. Your turn ends after a successful proposal; you cannot approve your own proposal. Possession of an approved Contract preapproves every public method and any Source action it performs unless its code explicitly uses a manual approval policy.
+Provide the complete compiler-produced current Artifact JSON plus the exact target and binding name. The proposal boundary parses the closed Artifact, verifies its executable hashes and current Source types, and only then shows it to a human. Your turn ends after a successful proposal; you cannot approve your own proposal. Possession of an approved Contract preapproves every public method and any Source action it performs unless its code explicitly uses context.approval.
 `.trim();
 
 let GIVE_UP_TOOL_DESCRIPTION = `
@@ -2812,22 +2805,9 @@ export async function runAgent(
         bindingName: Type.String({
           description: "Name exposed in the target Gadget env. Style: ALL_CAPS_WITH_UNDERSCORES.",
         }),
-        sourceCode: Type.String({
-          description: "Complete executable ESM with a default Contract factory export.",
+        artifactJson: Type.String({
+          description: "Complete compiler-produced current Contract Artifact JSON.",
         }),
-        publicTypes: Type.String({
-          description: "Complete public TypeScript declarations defining ContractBinding.",
-        }),
-        dependencies: Type.Optional(Type.Array(Type.Object({
-          name: Type.String(),
-          version: Type.String(),
-          integrity: Type.String({description: "Compiler-recorded package content integrity."}),
-        }))),
-        artifactHash: Type.String({description: "Compiler-produced content-addressed artifact hash."}),
-        sourceTypeHash: Type.String({description: "Compiler-recorded hash of the selected Source declarations."}),
-        sourceRootType: Type.String({description: "Compiler-recorded Source root type name."}),
-        compatibilityDate: Type.String({description: "Worker compatibility date used during compilation."}),
-        runtimeHarnessVersion: Type.String({description: "Contract runtime harness version included in the hash."}),
         sharedStateKey: Type.Optional(Type.String({
           description: "Explicit namespace shared with other configured Contract instances.",
         })),
@@ -2843,29 +2823,12 @@ export async function runAgent(
           if (!target || target.type !== "workpiece") {
             throw new Error(`There is no Gadget named "${input.targetGadget}" in your env.`);
           }
-          let dependencies: ContractDependency[] = [];
-          let dependencyNames = new Set<string>();
-          for (let dependency of input.dependencies ?? []) {
-            if (dependencyNames.has(dependency.name)) {
-              throw new Error(`Dependency ${dependency.name} was listed more than once.`);
-            }
-            dependencyNames.add(dependency.name);
-            dependencies.push(dependency);
-          }
-          dependencies.sort((left, right) => left.name.localeCompare(right.name));
           let result = await hooks.proposeContract(chatId, {
             sourceGatekeeperId: source.id,
             targetGadgetId: target.id,
             title: input.title,
             bindingName: input.bindingName,
-            sourceCode: input.sourceCode,
-            publicTypes: input.publicTypes,
-            dependencies,
-            artifactHash: input.artifactHash,
-            sourceTypeHash: input.sourceTypeHash,
-            sourceRootType: input.sourceRootType,
-            compatibilityDate: input.compatibilityDate,
-            runtimeHarnessVersion: input.runtimeHarnessVersion,
+            artifactJson: input.artifactJson,
             sharedStateKey: input.sharedStateKey,
           });
           authorityRequested = true;

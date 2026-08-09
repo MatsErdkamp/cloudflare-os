@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, ContractOperationSummary, ContractDependency } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, ContractOperationSummary } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -46,28 +46,44 @@ import {
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
 import {
-  contractHarnessForVersion,
+  CONTRACT_HARNESS,
   ContractApprovalRejected,
   ContractApprovalRequired,
   assertContractStructuredData,
-  contractActionAttribution,
-  hashArtifact,
+} from "@gadgets/contractors/runtime";
+import type {
+  ContractCallContext as ContractorsContractCallContext,
+  ContractActionAttribution as ContractorsContractActionAttribution,
+  ContractLifecycleEndpoint,
+  ContractLifecycleSession,
+  ContractOperationRecord as ContractorsContractOperationRecord,
+  ContractRecord as ContractorsContractRecord,
+  ContractReachabilitySnapshot,
+  ContractRestorationReference,
+} from "@gadgets/contractors/runtime";
+import {
+  assertCurrentContractArtifact,
+  hashContractValue,
   hashSourceTypes,
   isContractPackageName,
   isExactContractDependencyVersion,
   isWorkerCompatibilityDate,
+  parseContractArtifact,
   validateDependencyPolicy,
-} from "@gadgets/contractors/runtime";
+  type ContractArtifact,
+} from "@gadgets/contractors/artifact";
+import {
+  createContractInvocationEvidence,
+  validateContractReachabilitySnapshot,
+} from "@gadgets/contractors/host";
 import type {
-  ContractActionAttribution as ContractorsContractActionAttribution,
   ContractApprovalDescription,
   ContractApprovalRequirement,
-  ContractArtifact,
-  ContractCallContext as ContractorsContractCallContext,
-  ContractOperationRecord as ContractorsContractOperationRecord,
-  ContractRecord as ContractorsContractRecord,
-  ContractSourceApprovalMode,
-} from "@gadgets/contractors/runtime";
+} from "@gadgets/contractors/authoring";
+import {
+  contractActionAttribution,
+  type ContractSourceApprovalMode,
+} from "@gadgets/contractors/cloudflare-os";
 import { R2ContractArtifactStore } from "./contract-artifacts";
 
 const logger = createWorkshopLogger("workshop.overseer");
@@ -238,15 +254,6 @@ type ContractActionAttribution = ContractorsContractActionAttribution<WorkpieceI
 
 type ContractCallContext = ContractorsContractCallContext<WorkpieceId, GatekeeperCaller>;
 
-type ContractSessionInput = {
-  source: unknown;
-  policy: unknown;
-  restorer: NativeRpcTarget;
-  sharedState?: NativeRpcTarget;
-  caller: GatekeeperCaller;
-  contract: {id: string, artifactHash: string};
-};
-
 // A provider-owned Source stub cannot be forwarded through the Overseer as an RPC argument and
 // still be assumed to retain the native stub methods (notably dup()) in the Contract worker.
 // Re-export it from an Overseer-owned target so the Contract always receives a direct native stub.
@@ -288,10 +295,7 @@ export function bridgeContractSource(
   return new NativeRpcStub(new ContractSourceBridge(source));
 }
 
-interface ContractFacetRpc extends DurableObject {
-  startSession(session: ContractSessionInput): Promise<unknown>;
-  restoreSession(session: ContractSessionInput, restorationId: string): Promise<unknown>;
-}
+type ContractFacetRpc = DurableObject & ContractLifecycleEndpoint;
 
 interface ContractValidatorRpc extends DurableObject {
   validate(): Promise<string | null>;
@@ -2055,7 +2059,7 @@ class OverseerImpl implements AgentHooks {
       type: "contract",
       title: record.title,
       artifactHash: record.artifactHash,
-      runtimeHarnessVersion: record.runtimeHarnessVersion,
+      runtimeProfileHash: record.runtimeProfileHash,
       sourceGatekeeperId: record.sourceGatekeeperId,
       publicTypes: record.publicTypes,
       createdAt: record.createdAt,
@@ -2237,9 +2241,10 @@ class OverseerImpl implements AgentHooks {
   }
 
   makeContractCapabilityLoopback(
-      contractId: WorkpieceId, restorationId: string, caller: GatekeeperCaller) {
+      contractId: WorkpieceId, restoration: ContractRestorationReference,
+      caller: GatekeeperCaller) {
     let props: ContractCapabilityLoopbackProps = {
-      overseerId: this.ctx.id.toString(), contractId, restorationId, caller,
+      overseerId: this.ctx.id.toString(), contractId, restoration, caller,
     };
     return this.ctx.exports.ContractCapabilityLoopback({props});
   }
@@ -2689,12 +2694,12 @@ class OverseerImpl implements AgentHooks {
       let artifact = await new R2ContractArtifactStore(this.env.BLUEPRINT_CONTENT).get(artifactHash);
       if (!artifact) throw new Error(`Contract artifact ${artifactHash} is missing.`);
       return {
-        compatibilityDate: artifact.compatibilityDate,
-        compatibilityFlags: ["allow_irrevocable_stub_storage"],
+        compatibilityDate: artifact.runtimeProfile.compatibilityDate,
+        compatibilityFlags: [...artifact.runtimeProfile.compatibilityFlags],
         mainModule: "contract-harness.js",
         modules: {
           ...artifact.modules,
-          "contract-harness.js": contractHarnessForVersion(artifact.runtimeHarnessVersion),
+          "contract-harness.js": CONTRACT_HARNESS,
         },
         env: {},
         globalOutbound: null,
@@ -2705,7 +2710,8 @@ class OverseerImpl implements AgentHooks {
   async validateContractArtifact(artifact: ContractArtifact): Promise<void> {
     let worker = this.env.LOADER.get(
         `${this.ctx.id}.contract-validation.${artifact.hash}`, () => ({
-          compatibilityDate: artifact.compatibilityDate,
+          compatibilityDate: artifact.runtimeProfile.compatibilityDate,
+          compatibilityFlags: [...artifact.runtimeProfile.compatibilityFlags],
           mainModule: "contract-validator.js",
           modules: {
             ...artifact.modules,
@@ -2768,6 +2774,86 @@ class OverseerImpl implements AgentHooks {
     });
   }
 
+  async getContractReachability(
+      contract: ContractRecord): Promise<ContractReachabilitySnapshot> {
+    let endpointId = `contract:${contract.id}`;
+    return validateContractReachabilitySnapshot({
+      endpointId,
+      instanceId: endpointId,
+      instanceGeneration: 0,
+      artifactHash: contract.artifactHash,
+      runtimeProfileHash: contract.runtimeProfileHash,
+      reachabilityId: `${endpointId}:standing`,
+      reachabilityGeneration: 0,
+      authoritySnapshotDigest: await hashContractValue({
+        contractId: contract.id,
+        artifactHash: contract.artifactHash,
+        runtimeProfileHash: contract.runtimeProfileHash,
+        sourceGatekeeperId: contract.sourceGatekeeperId,
+      }),
+      compositionLineage: [endpointId],
+      chainDepth: 0,
+      maxChainDepth: 8,
+    });
+  }
+
+  contractConsumerId(caller: GatekeeperCaller): string {
+    switch (caller.from) {
+      case "agent": return `agent-chat:${caller.chatId}`;
+      case "gadget": return `gadget:${this.resolveGadgetId(caller.gadgetId)}`;
+      case "user": return caller.chatId === undefined ? "workspace-user" : `user-chat:${caller.chatId}`;
+      case "hook": return "workspace-hook";
+    }
+  }
+
+  async makeContractLifecycleSession(
+      contract: ContractRecord,
+      call: ContractCallContext,
+      source: NativeRpcStub<NativeRpcTarget>,
+      reachability: ContractReachabilitySnapshot): Promise<ContractLifecycleSession> {
+    let consumerId = this.contractConsumerId(call.caller);
+    return {
+      source,
+      approval: new ContractApprovalTarget(this, call),
+      restorer: new ContractRestorerTarget(this, call),
+      ...(contract.sharedStateKey
+        ? {sharedState: new ContractSharedStateTarget(this, contract.sharedStateKey)}
+        : {}),
+      reachability,
+      invocation: createContractInvocationEvidence({
+        invocationId: call.callId,
+        consumerId,
+        bindingId: `${consumerId}:contract:${contract.id}`,
+        contractInstanceId: reachability.instanceId,
+        artifactHash: contract.artifactHash,
+        runtimeProfileHash: contract.runtimeProfileHash,
+        methodName: call.methodName ?? "open",
+        startedAt: call.startedAt.getTime(),
+        authoritySnapshotDigest: reachability.authoritySnapshotDigest,
+        generations: {
+          consumer: 0,
+          binding: 0,
+          contractInstance: reachability.instanceGeneration,
+          environment: 0,
+          authority: reachability.reachabilityGeneration,
+        },
+      }),
+      contract: {id: String(contract.id), artifactHash: contract.artifactHash},
+    };
+  }
+
+  async invalidateContractEndpoint(contract: ContractRecord): Promise<void> {
+    let reachability = await this.getContractReachability(contract);
+    let facet = this.getContractFacet(contract);
+    await facet.install(reachability);
+    let acknowledgement = await facet.invalidate(reachability.reachabilityGeneration);
+    if (acknowledgement.endpointId !== reachability.endpointId ||
+        acknowledgement.reachabilityGeneration !== reachability.reachabilityGeneration ||
+        acknowledgement.invalidated !== true) {
+      throw new Error("Contract lifecycle endpoint returned an invalid acknowledgement.");
+    }
+  }
+
   async createContract(
       artifact: ContractArtifact,
       sourceGatekeeperId: WorkpieceId,
@@ -2781,12 +2867,7 @@ class OverseerImpl implements AgentHooks {
         typeof artifact.modules["contract.js"] !== "string") {
       throw new Error("Contract artifact must provide its reviewed contract.js main module.");
     }
-    let {hash, createdAt: _createdAt, ...authority} = artifact;
-    contractHarnessForVersion(artifact.runtimeHarnessVersion);
-    let expectedHash = await hashArtifact(authority);
-    if (hash !== expectedHash) {
-      throw new Error("Contract artifact content does not match its reviewed hash.");
-    }
+    await assertCurrentContractArtifact(artifact);
     await this.validateContractArtifactPolicy(artifact);
 
     let source = this.getGatekeeperFacet(sourceGatekeeperId);
@@ -2805,7 +2886,7 @@ class OverseerImpl implements AgentHooks {
     let record: ContractRecord = {
       id,
       artifactHash: artifact.hash,
-      runtimeHarnessVersion: artifact.runtimeHarnessVersion,
+      runtimeProfileHash: artifact.runtimeProfileHash,
       sourceGatekeeperId,
       title: title.trim() || "Contract",
       publicTypes: artifact.publicTypes,
@@ -2826,6 +2907,9 @@ class OverseerImpl implements AgentHooks {
 
   async deleteContract(contractId: WorkpieceId): Promise<void> {
     let contract = this.requireContract(contractId);
+
+    // Enforcement closes and acknowledges before any canonical edge or instance is retracted.
+    await this.invalidateContractEndpoint(contract);
 
     for (let hook of Array.from(this.storage.boundHooks.list())) {
       if (hook.contractId !== contractId) continue;
@@ -2880,9 +2964,9 @@ class OverseerImpl implements AgentHooks {
       }
     }
 
-    this.ctx.facets.delete(`contract${contractId}`);
     this.storage.contracts.delete(contractId);
     this.storage.contractTombstones.put({...contract, deletedAt: new Date()});
+    this.ctx.facets.delete(`contract${contractId}`);
   }
 
   // Apply a single pending action: invoke the gatekeeper, mark it approved, and persist (the put
@@ -3036,21 +3120,12 @@ class OverseerImpl implements AgentHooks {
     };
     let source = bridgeContractSource(
         await this.openContractSourceSession(call, {type: "preapproved"}));
-    let policy = {
-      approval: new ContractApprovalTarget(this, call),
-    };
-    let sharedState = contract.sharedStateKey
-        ? new ContractSharedStateTarget(this, contract.sharedStateKey)
-        : undefined;
     try {
-      return await this.getContractFacet(contract).startSession({
-        source,
-        policy,
-        restorer: new ContractRestorerTarget(this, call),
-        sharedState,
-        caller,
-        contract: {id: String(contract.id), artifactHash: contract.artifactHash},
-      });
+      let reachability = await this.getContractReachability(contract);
+      let facet = this.getContractFacet(contract);
+      await facet.install(reachability);
+      return await facet.startSession(
+          await this.makeContractLifecycleSession(contract, call, source, reachability));
     } finally {
       source[Symbol.dispose]?.();
     }
@@ -3072,7 +3147,8 @@ class OverseerImpl implements AgentHooks {
   }
 
   async invokeRestoredContractMethod(
-      contractId: WorkpieceId, restorationId: string, caller: GatekeeperCaller,
+      contractId: WorkpieceId, restoration: ContractRestorationReference,
+      caller: GatekeeperCaller,
       methodName: string, args: unknown[]): Promise<unknown> {
     let contract = this.requireContract(contractId);
     let call: ContractCallContext = {
@@ -3086,20 +3162,14 @@ class OverseerImpl implements AgentHooks {
     };
     let source = bridgeContractSource(
         await this.openContractSourceSession(call, {type: "preapproved"}));
-    let policy = {approval: new ContractApprovalTarget(this, call)};
-    let sharedState = contract.sharedStateKey
-        ? new ContractSharedStateTarget(this, contract.sharedStateKey)
-        : undefined;
     let capability: unknown;
     try {
-      capability = await this.getContractFacet(contract).restoreSession({
-        source,
-        policy,
-        restorer: new ContractRestorerTarget(this, call),
-        sharedState,
-        caller,
-        contract: {id: String(contract.id), artifactHash: contract.artifactHash},
-      }, restorationId);
+      let reachability = await this.getContractReachability(contract);
+      let facet = this.getContractFacet(contract);
+      await facet.install(reachability);
+      capability = await facet.restoreSession(
+          await this.makeContractLifecycleSession(contract, call, source, reachability),
+          restoration);
       let method = Reflect.get(capability as object, methodName);
       if (typeof method !== "function") {
         throw new TypeError(`Restored Contract capability has no callable method ${methodName}.`);
@@ -6547,14 +6617,7 @@ class OverseerImpl implements AgentHooks {
     targetGadgetId: WorkpieceId;
     title: string;
     bindingName: string;
-    sourceCode: string;
-    publicTypes: string;
-    dependencies: ContractDependency[];
-    artifactHash: string;
-    sourceTypeHash: string;
-    sourceRootType: string;
-    compatibilityDate: string;
-    runtimeHarnessVersion: string;
+    artifactJson: string;
     sharedStateKey?: string;
   }): Promise<{requestId: string; artifactHash: string}> {
     validateBindingName(input.bindingName);
@@ -6564,23 +6627,31 @@ class OverseerImpl implements AgentHooks {
     if (gadget.bindings[input.bindingName]) {
       throw new Error(`The target Gadget already has a binding named ${input.bindingName}.`);
     }
-    if (!/\b(?:interface|type|class)\s+ContractBinding\b/.test(input.publicTypes) &&
-        !/\bexport\s+(?:type\s+)?\{[^}]*\bContractBinding\b[^}]*\}/s.test(input.publicTypes)) {
+    let artifact = parseContractArtifact(JSON.parse(input.artifactJson));
+    await assertCurrentContractArtifact(artifact);
+    let sourceCode = artifact.modules[artifact.mainModule];
+    if (typeof sourceCode !== "string") {
+      throw new Error("Contract artifact does not contain its declared main module.");
+    }
+    if (!/\b(?:interface|type|class)\s+ContractBinding\b/.test(artifact.publicTypes) &&
+        !/\bexport\s+(?:type\s+)?\{[^}]*\bContractBinding\b[^}]*\}/s.test(artifact.publicTypes)) {
       throw new Error("Contract public declarations must define ContractBinding.");
     }
     let importSpecifiers = [
-      ...input.sourceCode.matchAll(/\bfrom\s+["']([^"']+)["']/g),
-      ...input.sourceCode.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g),
+      ...sourceCode.matchAll(/\bfrom\s+["']([^"']+)["']/g),
+      ...sourceCode.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g),
     ].map(match => match[1]!);
     let unbundled = importSpecifiers.find(specifier => specifier !== "cloudflare:workers");
     if (unbundled) {
       throw new Error(
           `Contract executable still imports ${unbundled}; submit the compiler's bundled module.`);
     }
-    let dependencies = input.dependencies
+    let dependencies = [...artifact.dependencies]
         .toSorted((left, right) => left.name.localeCompare(right.name));
-    if (!isWorkerCompatibilityDate(input.compatibilityDate)) {
-      throw new Error(`Invalid Workers compatibility date: ${input.compatibilityDate}`);
+    if (!isWorkerCompatibilityDate(artifact.runtimeProfile.compatibilityDate)) {
+      throw new Error(
+        `Invalid Workers compatibility date: ${artifact.runtimeProfile.compatibilityDate}`,
+      );
     }
 
     let sourceFacet = this.getGatekeeperFacet(input.sourceGatekeeperId);
@@ -6589,31 +6660,10 @@ class OverseerImpl implements AgentHooks {
       sourceFacet.getTypeScriptTypes(),
     ]);
     let currentSourceTypeHash = await hashSourceTypes(sourceTypes);
-    if (input.sourceRootType !== description.tsType ||
-        input.sourceTypeHash !== currentSourceTypeHash) {
+    if (artifact.sourceRootType !== description.tsType ||
+        artifact.sourceTypeHash !== currentSourceTypeHash) {
       throw new Error("Contract artifact was compiled against different Source types.");
     }
-    contractHarnessForVersion(input.runtimeHarnessVersion);
-    let authority = {
-      mainModule: "contract.js",
-      modules: {"contract.js": input.sourceCode},
-      publicTypes: input.publicTypes,
-      publicRootType: "ContractBinding" as const,
-      sourceTypeHash: input.sourceTypeHash,
-      sourceRootType: input.sourceRootType,
-      dependencies,
-      compatibilityDate: input.compatibilityDate,
-      runtimeHarnessVersion: input.runtimeHarnessVersion,
-    };
-    let computedHash = await hashArtifact(authority);
-    if (input.artifactHash !== computedHash) {
-      throw new Error("Submitted Contract artifact hash does not match its reviewed contents.");
-    }
-    let artifact: ContractArtifact = {
-      hash: input.artifactHash,
-      ...authority,
-      createdAt: new Date().toISOString(),
-    };
     await this.validateContractArtifactPolicy(artifact);
     await this.validateContractArtifact(artifact);
 
@@ -6625,17 +6675,18 @@ class OverseerImpl implements AgentHooks {
       sourceTitle: source.resourceTitle || description.title,
       sourceUrl: source.resourceUrl || description.url,
       artifactHash: artifact.hash,
-      runtimeHarnessVersion: artifact.runtimeHarnessVersion,
+      runtimeProfileHash: artifact.runtimeProfileHash,
+      artifactJson: JSON.stringify(artifact),
       title: input.title.trim() || "Contract",
       publicTypes: artifact.publicTypes,
-      sourceCode: input.sourceCode,
+      sourceCode,
       bindingName: input.bindingName,
       targetGadgetId: input.targetGadgetId,
       targetGadgetTitle: gadget.title,
       dependencySummary: dependencies,
       sourceTypeHash: artifact.sourceTypeHash,
       sourceRootType: artifact.sourceRootType,
-      compatibilityDate: artifact.compatibilityDate,
+      compatibilityDate: artifact.runtimeProfile.compatibilityDate,
       ...(input.sharedStateKey ? {sharedStateKey: input.sharedStateKey} : {}),
       state: "pending",
     };
@@ -7658,10 +7709,11 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async invokeRestoredContractMethod(
-      contractId: WorkpieceId, restorationId: string, caller: GatekeeperCaller,
+      contractId: WorkpieceId, restoration: ContractRestorationReference,
+      caller: GatekeeperCaller,
       methodName: string, args: unknown[]): Promise<unknown> {
     return this.impl.invokeRestoredContractMethod(
-        contractId, restorationId, caller, methodName, args);
+        contractId, restoration, caller, methodName, args);
   }
 
   startGatekeeperHook(id: number): NativeRpcStub<RpcTarget> {
@@ -7856,7 +7908,7 @@ type BindingLoopbackTarget = {
 type ContractCapabilityLoopbackProps = {
   overseerId: string;
   contractId: WorkpieceId;
-  restorationId: string;
+  restoration: ContractRestorationReference;
   caller: GatekeeperCaller;
 };
 
@@ -7875,7 +7927,7 @@ export class ContractCapabilityLoopback extends
         if (prop === "then") return undefined;
         if (typeof prop !== "string") return Reflect.get(target, prop, target);
         return (...args: unknown[]) => stub.invokeRestoredContractMethod(
-            ctx.props.contractId, ctx.props.restorationId, ctx.props.caller, prop, args);
+            ctx.props.contractId, ctx.props.restoration, ctx.props.caller, prop, args);
       },
       getPrototypeOf() { return WorkerEntrypoint.prototype; },
     });
@@ -9021,23 +9073,16 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     if (msg.state !== "pending") {
       throw new Error(`Contract request is not pending: ${requestId}`);
     }
+    let artifact = parseContractArtifact(JSON.parse(msg.artifactJson));
+    await assertCurrentContractArtifact(artifact);
+    if (artifact.hash !== msg.artifactHash ||
+        artifact.runtimeProfileHash !== msg.runtimeProfileHash) {
+      throw new Error("Reviewed Contract request does not match its retained Artifact.");
+    }
     if (!msg.accepting) {
       msg.accepting = true;
       this.impl.storage.chats.put(msg);
     }
-    let artifact: ContractArtifact = {
-      hash: msg.artifactHash,
-      mainModule: "contract.js",
-      modules: {"contract.js": msg.sourceCode},
-      publicTypes: msg.publicTypes,
-      publicRootType: "ContractBinding",
-      sourceTypeHash: msg.sourceTypeHash,
-      sourceRootType: msg.sourceRootType,
-      dependencies: msg.dependencySummary,
-      compatibilityDate: msg.compatibilityDate,
-      runtimeHarnessVersion: msg.runtimeHarnessVersion,
-      createdAt: new Date(msg.timestamp).toISOString(),
-    };
     let runs = contractAcceptanceRuns.get(this.impl);
     if (!runs) {
       runs = new Map();
@@ -9051,7 +9096,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
         if (installed) {
           let expectedTitle = msg.title.trim() || "Contract";
           if (installed.artifactHash !== msg.artifactHash ||
-              installed.runtimeHarnessVersion !== msg.runtimeHarnessVersion ||
+              installed.runtimeProfileHash !== msg.runtimeProfileHash ||
               installed.sourceGatekeeperId !== msg.sourceGatekeeperId ||
               installed.title !== expectedTitle || installed.publicTypes !== msg.publicTypes ||
               installed.sharedStateKey !== msg.sharedStateKey) {
@@ -10677,9 +10722,9 @@ class ContractRestorerTarget extends NativeRpcTarget {
     super();
   }
 
-  restore(restorationId: string) {
+  restore(restoration: ContractRestorationReference) {
     return this.impl.makeContractCapabilityLoopback(
-        this.call.contractId, restorationId, this.call.caller);
+        this.call.contractId, restoration, this.call.caller);
   }
 }
 

@@ -16,7 +16,7 @@ export default defineConfig({
         compatibilityFlags: ['experimental', 'nodejs_compat', 'allow_irrevocable_stub_storage'],
         durableObjects: {
           TEST_OVERSEER: { className: 'OverseerDurableObject', useSQLite: true },
-          TEST_CONTRACT_HOST: { className: 'ContractRetractionTestHost', useSQLite: true },
+          TEST_CONTRACT_LIFECYCLE: { className: 'ContractLifecycleConformanceHost', useSQLite: true },
         },
         kvNamespaces: ['BLUEPRINTS'],
         r2Buckets: ['BLUEPRINT_CONTENT'],

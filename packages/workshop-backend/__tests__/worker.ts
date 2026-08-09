@@ -1,7 +1,7 @@
 export * from "../src/server.js";
 export {default} from "../src/server.js";
 export {GatekeeperHookLoopback} from "../src/server.js";
-export {ContractRetractionTestHost} from "./contract-retraction-test-host.js";
+export {ContractLifecycleConformanceHost} from "./contract-lifecycle-conformance-host.js";
 
 import {WorkerEntrypoint} from "cloudflare:workers";
 
