@@ -164,6 +164,10 @@ _Avoid_: Permission grant, verifier capability
 The generation-tagged, uniquely named association through which one Consumer possesses the capability produced by one Contract Instance.
 _Avoid_: Grant, permission
 
+**Binding Enforcement Endpoint**:
+The materialized, generation-acknowledged Contract Instance Facet through which one Binding's capability graph is invoked and synchronously invalidated.
+_Avoid_: Raw Facet Fetcher, separate Binding authority store, Overseer dispatcher
+
 **Authority Debt**:
 The reviewed difference between provider-native authority and narrower effective standing or task authority, preserving enforcement layer, revocation granularity, risk, exception owner, production eligibility, and remediation.
 _Avoid_: Enforcement Gap, accepted risk, task scope, hidden provider scope
