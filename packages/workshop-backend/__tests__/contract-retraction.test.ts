@@ -44,6 +44,37 @@ async function expectGraphRetracted(graph: CapabilityGraph): Promise<void> {
 }
 
 describe("Contract facet retraction conformance", () => {
+  it("executes every retained v1-v7 harness fixture", async () => {
+    const host = env.TEST_CONTRACT_HOST.getByName("contract-historical-fixtures");
+    for (const version of ["1", "2", "3", "4", "5", "6", "7"]) {
+      await expect(host.invokeHistorical(version)).resolves.toBe("historical-live");
+    }
+  }, 15_000);
+
+  it("materializes closed immutable v8 invocation evidence inside the Contract", async () => {
+    const host = env.TEST_CONTRACT_HOST.getByName("contract-v8-evidence");
+    await expect(host.inspectV8Invocation()).resolves.toEqual({
+      fields: [
+        "artifactHash",
+        "authoritySnapshotDigest",
+        "bindingId",
+        "consumerId",
+        "contractInstanceId",
+        "generations",
+        "invocationId",
+        "methodName",
+        "runtimeProfileHash",
+        "schemaVersion",
+        "startedAt",
+      ],
+      generationFields: ["authority", "binding", "consumer", "contractInstance", "environment"],
+      bindingGeneration: 2,
+      frozen: true,
+      generationsFrozen: true,
+      mutationRejected: true,
+    });
+  });
+
   it("retracts root, derived, forwarded, function, cursor, and restored capabilities", async () => {
     const host = env.TEST_CONTRACT_HOST.getByName("contract-retraction-same-request");
     const graph = await host.openGraph();

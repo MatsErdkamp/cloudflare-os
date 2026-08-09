@@ -1,5 +1,9 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
-import { CONTRACT_HARNESS } from "@gadgets/contractors/runtime";
+import {
+  CONTRACT_HARNESS,
+  CONTRACT_HARNESS_V8,
+  contractHarnessForVersion,
+} from "@gadgets/contractors/runtime";
 import { bridgeContractSource } from "../src/overseer.js";
 
 const CONTRACT_MODULE = `
@@ -58,6 +62,32 @@ const TEST_MAIN = `
   export {ContractFacet} from "contract-harness.js";
 `;
 
+const HISTORICAL_CONTRACT_MODULE = `
+  import {RpcTarget} from "cloudflare:workers";
+  export default () => new class extends RpcTarget {
+    read() { return "historical-live"; }
+  }();
+`;
+
+const V8_EVIDENCE_CONTRACT_MODULE = `
+  import {RpcTarget} from "cloudflare:workers";
+  export default (context) => new class extends RpcTarget {
+    inspect() {
+      let mutationRejected = false;
+      try { context.invocation.generations.binding = 999; }
+      catch { mutationRejected = true; }
+      return {
+        fields: Object.keys(context.invocation).sort(),
+        generationFields: Object.keys(context.invocation.generations).sort(),
+        bindingGeneration: context.invocation.generations.binding,
+        frozen: Object.isFrozen(context.invocation),
+        generationsFrozen: Object.isFrozen(context.invocation.generations),
+        mutationRejected,
+      };
+    }
+  }();
+`;
+
 type FixtureEnv = Cloudflare.Env & {
   TEST_LOADER: WorkerLoader;
   TEST_CONTRACT_SOURCE: {startSession(): Promise<any>};
@@ -98,7 +128,7 @@ export class ContractRetractionTestHost extends DurableObject<FixtureEnv> {
 
   #worker() {
     return this.env.TEST_LOADER.get(`contract-retraction:${this.ctx.id}`, () => ({
-      compatibilityDate: "2026-08-05",
+      compatibilityDate: "2026-07-29",
       compatibilityFlags: ["allow_irrevocable_stub_storage"],
       mainModule: "test-main.js",
       modules: {
@@ -157,6 +187,76 @@ export class ContractRetractionTestHost extends DurableObject<FixtureEnv> {
   async increment(): Promise<number> {
     this.#active = true;
     return (await this.#rootFor()).increment();
+  }
+
+  async invokeHistorical(version: string): Promise<string> {
+    const worker = this.env.TEST_LOADER.get(
+      `contract-historical:${version}:${this.ctx.id}`,
+      () => ({
+        compatibilityDate: "2026-07-29",
+        compatibilityFlags: ["allow_irrevocable_stub_storage"],
+        mainModule: "test-main.js",
+        modules: {
+          "test-main.js": TEST_MAIN,
+          "contract-harness.js": contractHarnessForVersion(version),
+          "contract.js": HISTORICAL_CONTRACT_MODULE,
+        },
+        env: {},
+        globalOutbound: null,
+      }),
+    );
+    const facet = this.ctx.facets.get(`historical-${version}`, () => ({
+      class: worker.getDurableObjectClass("ContractFacet"),
+      id: `historical-${version}`,
+    }));
+    return facet.startSession(await this.#session()).then((root: any) => root.read());
+  }
+
+  async inspectV8Invocation(): Promise<unknown> {
+    const worker = this.env.TEST_LOADER.get(`contract-v8-evidence:${this.ctx.id}`, () => ({
+      compatibilityDate: "2026-07-29",
+      compatibilityFlags: ["allow_irrevocable_stub_storage"],
+      mainModule: "test-main.js",
+      modules: {
+        "test-main.js": TEST_MAIN,
+        "contract-harness.js": CONTRACT_HARNESS_V8,
+        "contract.js": V8_EVIDENCE_CONTRACT_MODULE,
+      },
+      env: {},
+      globalOutbound: null,
+    }));
+    const facet = this.ctx.facets.get("v8-evidence", () => ({
+      class: worker.getDurableObjectClass("ContractFacet"),
+      id: "v8-evidence",
+    }));
+    const legacySession = await this.#session();
+    const generations = {
+      consumer: 1,
+      binding: 2,
+      contractInstance: 3,
+      environment: 4,
+      authority: 5,
+    };
+    const root = await facet.startSession({
+      source: legacySession.source,
+      approval: legacySession.policy.approval,
+      restorer: legacySession.restorer,
+      invocation: {
+        schemaVersion: 1,
+        invocationId: "invocation-v8",
+        consumerId: "consumer-v8",
+        bindingId: "binding-v8",
+        contractInstanceId: "instance-v8",
+        artifactHash: "sha256:artifact",
+        runtimeProfileHash: "sha256:profile",
+        methodName: "inspect",
+        startedAt: 1,
+        authoritySnapshotDigest: "sha256:snapshot",
+        generations,
+      },
+      contract: legacySession.contract,
+    });
+    return root.inspect();
   }
 
   async invokeRestored(restorationId: string, methodName: string, args: unknown[]): Promise<unknown> {
