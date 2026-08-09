@@ -1,4 +1,4 @@
-import type { RpcTarget } from "cloudflare:workers";
+import type {RpcTarget} from "cloudflare:workers";
 
 /** HTTP metadata retained with an object. */
 export interface R2HttpMetadata {
@@ -30,10 +30,10 @@ export interface R2StoredObject {
   customMetadata?: Record<string, string>;
 }
 
-/** Object metadata plus a streaming body. */
+/** Object metadata plus a bounded body copied by value. */
 export interface R2StoredObjectBody extends R2StoredObject {
-  /** Streaming object contents. Consume or cancel this stream. */
-  body: ReadableStream<Uint8Array>;
+  /** Object contents, limited to the Source's documented maximum object size. */
+  body: Uint8Array;
 }
 
 /** Options accepted when writing an object. */
@@ -72,12 +72,12 @@ export interface R2ObjectPage {
 export interface R2BucketSession extends RpcTarget {
   /** Returns object metadata, or null when the key does not exist. */
   head(key: string): Promise<R2StoredObject | null>;
-  /** Returns object metadata and a streaming body, or null when the key does not exist. */
+  /** Returns object metadata and a bounded body, or null when the key does not exist. */
   get(key: string): Promise<R2StoredObjectBody | null>;
   /** Stages an object write and returns its resulting metadata. */
   put(
     key: string,
-    body: ReadableStream<Uint8Array> | Uint8Array | string,
+    body: Uint8Array | string,
     options?: R2PutOptions,
   ): Promise<R2StoredObject>;
   /** Lists one bounded page of objects. */

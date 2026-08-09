@@ -15,7 +15,8 @@
     { "binding": "STORAGE", "bucket_name": "gadgets-r2-storage" }
   ],
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["R2AccountState", "R2Gatekeeper"] }
+    { "tag": "v1", "new_sqlite_classes": ["R2AccountState", "R2Gatekeeper"] },
+    { "tag": "v2", "new_sqlite_classes": ["R2Authority"] }
   ],
   "observability": {
     "enabled": true,

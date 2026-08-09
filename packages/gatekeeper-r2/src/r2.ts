@@ -36,6 +36,8 @@ const RESOURCE_URL = "r2://storage/root";
 const INTERNAL_SEGMENT = ".gatekeeper/";
 const VENDOR_ID = "r2";
 const MAX_KEY_BYTES = 1024;
+const MAX_OBJECT_BYTES = 1024 * 1024;
+const MAX_OPERATION_ID_BYTES = 256;
 
 const R2_ICON = {
   url: "data:image/svg+xml," + encodeURIComponent(
@@ -48,7 +50,7 @@ const R2_ICON = {
 const ROOT_RESOURCE: SupportedResource = {
   urlPattern: RESOURCE_URL,
   title: "R2 Private Storage",
-  description: "Private streaming object storage for this connected account.",
+  description: "Private bounded object storage for this connected account.",
 };
 
 type Env = Cloudflare.Env;
@@ -64,7 +66,7 @@ interface R2SessionDriver {
   ): Promise<R2ObjectPage>;
   stagePut(
     key: string,
-    body: ReadableStream<Uint8Array> | Uint8Array | string,
+    body: Uint8Array | string,
     options?: PublicR2PutOptions,
   ): Promise<{ actionId: number; object: R2StoredObject }>;
   stageDelete(key: string): Promise<number>;
@@ -104,6 +106,13 @@ function assertLogicalKey(key: string): void {
   }
   if (new TextEncoder().encode(key).byteLength > MAX_KEY_BYTES) {
     throw new RangeError(`R2 object keys cannot exceed ${MAX_KEY_BYTES} UTF-8 bytes.`);
+  }
+}
+
+function assertBoundedId(value: string, label: string): void {
+  const bytes = new TextEncoder().encode(value).byteLength;
+  if (bytes === 0 || bytes > MAX_OPERATION_ID_BYTES) {
+    throw new TypeError(`${label} must contain 1 through ${MAX_OPERATION_ID_BYTES} bytes.`);
   }
 }
 
@@ -165,8 +174,12 @@ function publicObject(object: R2Object, key: string): R2StoredObject {
   };
 }
 
-function publicObjectBody(object: R2ObjectBody, key: string): R2StoredObjectBody {
-  return { ...publicObject(object, key), body: object.body };
+async function publicObjectBody(object: R2ObjectBody, key: string): Promise<R2StoredObjectBody> {
+  if (object.size > MAX_OBJECT_BYTES) {
+    await object.body.cancel("R2 object exceeds the bounded Source result limit.");
+    throw new RangeError(`R2 objects cannot exceed ${MAX_OBJECT_BYTES} bytes.`);
+  }
+  return {...publicObject(object, key), body: new Uint8Array(await object.arrayBuffer())};
 }
 
 function toNativePutOptions(options?: PublicR2PutOptions): R2PutOptions | undefined {
@@ -180,6 +193,11 @@ function toNativePutOptions(options?: PublicR2PutOptions): R2PutOptions | undefi
 /** Durable revocation marker for one auto-provisioned R2 account. */
 @validateRpc()
 export class R2AccountState extends DurableObject<Env> {
+  /** Returns current task-neutral provider account health. */
+  authorityHealth(): "healthy" | "revoked" {
+    return this.ctx.storage.kv.get<boolean>("revoked") ? "revoked" : "healthy";
+  }
+
   /** Throws after the owning connected account has been revoked. */
   assertActive(): void {
     if (this.ctx.storage.kv.get<boolean>("revoked")) {
@@ -187,9 +205,69 @@ export class R2AccountState extends DurableObject<Env> {
     }
   }
 
-  /** Permanently revokes the connected account capability without deleting its objects. */
-  revoke(): void {
-    this.ctx.storage.kv.put("revoked", true);
+  /** Applies one bounded authority mutation before any concurrent account revocation can commit. */
+  async applyAuthorityObjectMutation(request: {
+    operationId: string;
+    fingerprint: string;
+    type: "put" | "delete";
+    key: string;
+    body?: Uint8Array;
+    options?: PublicR2PutOptions;
+  }): Promise<"applied" | "rejected-revoked"> {
+    assertLogicalKey(request.key);
+    assertBoundedId(request.operationId, "Authority Operation ID");
+    let failure: unknown;
+    let outcome: "applied" | "rejected-revoked" = "applied";
+    await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        const receiptKey = `authorityMutation:${request.operationId}`;
+        const receipt = this.ctx.storage.kv.get<{fingerprint: string; state: "applying" | "applied"}>(
+          receiptKey,
+        );
+        if (receipt?.fingerprint !== undefined && receipt.fingerprint !== request.fingerprint) {
+          throw new Error("Authority Operation key was reused for a different provider mutation.");
+        }
+        if (receipt?.state === "applied") return;
+        if (!receipt && this.ctx.storage.kv.get<boolean>("revoked")) {
+          outcome = "rejected-revoked";
+          return;
+        }
+        this.assertActive();
+        this.ctx.storage.kv.put(receiptKey, {fingerprint: request.fingerprint, state: "applying"});
+        const objectKey = `accounts/${this.ctx.id.toString()}/objects/${request.key}`;
+        if (request.type === "delete") {
+          await this.env.STORAGE.delete(objectKey);
+          this.ctx.storage.kv.put(receiptKey, {fingerprint: request.fingerprint, state: "applied"});
+          return;
+        }
+        if (!request.body || request.body.byteLength > MAX_OBJECT_BYTES) {
+          throw new RangeError(`R2 objects cannot exceed ${MAX_OBJECT_BYTES} bytes.`);
+        }
+        await this.env.STORAGE.put(objectKey, request.body, toNativePutOptions(request.options));
+        this.ctx.storage.kv.put(receiptKey, {fingerprint: request.fingerprint, state: "applied"});
+      } catch (error) {
+        failure = error;
+      }
+    });
+    if (failure !== undefined) throw failure;
+    return outcome;
+  }
+
+  /** Permanently revokes the connected account after any accepted provider mutation finishes. */
+  async revoke(): Promise<void> {
+    let failure: unknown;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        const applying = Array.from(this.ctx.storage.kv.list<{
+          state: "applying" | "applied";
+        }>({prefix: "authorityMutation:"})).some(([, receipt]) => receipt.state === "applying");
+        if (applying) throw new Error("Provider mutation reconciliation is still pending.");
+        this.ctx.storage.kv.put("revoked", true);
+      } catch (error) {
+        failure = error;
+      }
+    });
+    if (failure !== undefined) throw failure;
   }
 }
 
@@ -221,26 +299,21 @@ export class R2SessionImpl extends RpcTarget implements R2BucketSession {
     return object;
   }
 
-  /** Reads an object's streaming body after recording an observation. */
+  /** Reads an object's bounded body after recording an observation. */
   async get(key: string): Promise<R2StoredObjectBody | null> {
     assertLogicalKey(key);
     const object = await this.driver.readObject(key);
-    try {
-      await this.approvalQueue.authorizeObservation({
-        title: "Read R2 object",
-        description: `Read object ${key}.`,
-      });
-    } catch (error) {
-      await object?.body.cancel(error).catch(() => {});
-      throw error;
-    }
+    await this.approvalQueue.authorizeObservation({
+      title: "Read R2 object",
+      description: `Read object ${key}.`,
+    });
     return object;
   }
 
   /** Stages an object write and submits it through the action queue. */
   async put(
     key: string,
-    body: ReadableStream<Uint8Array> | Uint8Array | string,
+    body: Uint8Array | string,
     options?: PublicR2PutOptions,
   ): Promise<R2StoredObject> {
     assertLogicalKey(key);
@@ -349,7 +422,7 @@ export class R2Gatekeeper extends DurableObject<Env, GatekeeperProps>
     if (pending?.type === "delete") return null;
     const physicalKey = pending?.type === "put" ? pending.stagingKey : this.#objectKey(key);
     const object = await this.env.STORAGE.get(physicalKey);
-    return object ? publicObjectBody(object, key) : null;
+    return object ? await publicObjectBody(object, key) : null;
   }
 
   async #readList(
@@ -387,7 +460,7 @@ export class R2Gatekeeper extends DurableObject<Env, GatekeeperProps>
 
   async #stagePut(
     key: string,
-    body: ReadableStream<Uint8Array> | Uint8Array | string,
+    body: Uint8Array | string,
     options?: PublicR2PutOptions,
   ): Promise<{ actionId: number; object: R2StoredObject }> {
     await this.#assertActive();
@@ -557,6 +630,17 @@ export class R2Account extends WorkerEntrypoint<Env, AccountProps> implements Ga
     return {};
   }
 
+  /** Returns the account-imbued current provider-authority class for canonical placements. */
+  @skipRpcValidation()
+  async getAuthorityProviderClass(): Promise<
+    DurableObjectClass<import("@gadgets/workshop-shared/gatekeeper-authority").GatekeeperAuthorityProvider<
+      R2BucketSession
+    >>
+  > {
+    await this.#state().assertActive();
+    return this.ctx.exports.R2Authority({props: this.ctx.props});
+  }
+
   /** Revokes this account while retaining its stored objects for deployment-level recovery. */
   async revoke(): Promise<void> {
     await this.#state().revoke();
@@ -600,7 +684,7 @@ export class GatekeeperVendor extends WorkerEntrypoint<Env> {
       url: "https://developers.cloudflare.com/r2/",
       logo: R2_ICON,
       color: "#fff3e8",
-      tagline: "Private streaming storage for Gadgets",
+      tagline: "Private bounded storage for Gadgets",
       description:
         "Connect an isolated R2 object namespace as a private Source, then use Contracts to " +
         "publish narrowly scoped folder capabilities.",

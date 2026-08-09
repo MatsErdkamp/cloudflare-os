@@ -1,10 +1,10 @@
 # Gatekeeper authority is identity- and generation-bound
 
-Workspace Authority integrates with Gatekeepers through a versioned, opt-in authority protocol that exposes stable provider identity, revocable generation-bound capabilities, bounded health evidence, and typed verification results without exposing credentials. Display metadata, URLs, callback possession, and a successfully restored RPC stub are never identity proof. Gatekeepers that do not implement the protocol remain available to existing Gadget flows but cannot provide new Project, shared, or verified authority.
+Workspace Authority integrates with Gatekeepers through a current, opt-in authority protocol that exposes stable provider identity, revocable generation-bound capabilities, bounded health evidence, and typed verification results without exposing credentials. Display metadata, URLs, callback possession, and a successfully restored RPC stub are never identity proof. Gatekeepers that do not implement the protocol remain available to existing Gadget flows but cannot provide new Project, shared, or verified authority.
 
 ## Authority support declaration
 
-A Gatekeeper vendor advertises an `authorityProtocol` declaration alongside its existing description. Version 1 declares:
+A Gatekeeper vendor advertises its current `authorityProtocol` declaration alongside its existing description. It declares:
 
 - whether it can back Personal Accounts, Workspace Accounts, or both;
 - whether a Workspace Account connection is interactive or deployment-provisioned;
@@ -20,7 +20,7 @@ Workspace Account creation uses a distinct vendor entrypoint and callback from p
 
 An authority-capable Account returns an immutable protocol snapshot containing:
 
-- `identity`: protocol version, bounded provider issuer, stable provider-issued subject, and an audit-safe fingerprint;
+- `identity`: bounded provider issuer, stable provider-issued subject, and an audit-safe fingerprint;
 - `capabilityGeneration`: a Gatekeeper-monotonic generation for the credential/capability set;
 - `health`: status, reason code, observation time, optional credential expiry, and optional evidence validity deadline;
 - supported resource declarations and verifier principal kind.

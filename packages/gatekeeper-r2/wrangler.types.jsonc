@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "gatekeeper-r2-types",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-08-06",
+  "compatibility_flags": ["allow_irrevocable_stub_storage", "nodejs_als"],
+  "rules": [
+    {"type": "Text", "globs": ["**/*.txt"], "fallthrough": false}
+  ],
+  "r2_buckets": [
+    {"binding": "STORAGE", "bucket_name": "gadgets-r2-storage"}
+  ],
+  "migrations": [
+    {"tag": "v1", "new_sqlite_classes": ["R2AccountState", "R2Gatekeeper"]},
+    {"tag": "v2", "new_sqlite_classes": ["R2Authority"]}
+  ]
+}

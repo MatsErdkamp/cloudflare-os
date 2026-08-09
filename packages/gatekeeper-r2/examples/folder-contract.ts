@@ -26,9 +26,9 @@ export interface FolderObject {
   customMetadata?: Record<string, string>;
 }
 
-/** A folder object with a streaming body. */
+/** A folder object with a bounded byte body. */
 export interface FolderObjectBody extends FolderObject {
-  body: ReadableStream<Uint8Array>;
+  body: Uint8Array;
 }
 
 /** Options accepted when writing through a Folder capability. */
@@ -49,12 +49,12 @@ export interface FolderObjectPage {
 export interface ContractBinding extends RpcTarget {
   /** Returns object metadata, or null when the relative path does not exist. */
   head(path: string): Promise<FolderObject | null>;
-  /** Returns a streaming object body, or null when the relative path does not exist. */
+  /** Returns a bounded object body, or null when the relative path does not exist. */
   get(path: string): Promise<FolderObjectBody | null>;
   /** Writes an object inside this folder. */
   put(
     path: string,
-    body: ReadableStream<Uint8Array> | Uint8Array | string,
+    body: Uint8Array | string,
     options?: FolderPutOptions,
   ): Promise<FolderObject>;
   /** Lists one bounded page without revealing the private backing prefix. */
@@ -139,7 +139,7 @@ class FolderImpl extends RpcTarget implements ContractBinding {
 
   async put(
     path: string,
-    body: ReadableStream<Uint8Array> | Uint8Array | string,
+    body: Uint8Array | string,
     options?: FolderPutOptions,
   ): Promise<FolderObject> {
     const relative = relativePath(path);

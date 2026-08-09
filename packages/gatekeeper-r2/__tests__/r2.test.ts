@@ -48,7 +48,7 @@ async function bodyText(object: Awaited<ReturnType<R2BucketSession["get"]>>): Pr
 }
 
 describe("R2Gatekeeper", () => {
-  it("simulates staged writes and applies their streaming bodies", async () => {
+  it("simulates staged writes and applies their bounded bodies", async () => {
     const { gatekeeper, queue, session } = await openSession("staged-write");
     try {
       const written = await session.put("shared/report.txt", "draft", {

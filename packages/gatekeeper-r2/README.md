@@ -1,6 +1,6 @@
 # R2 Storage gatekeeper
 
-This auto-provisioned gatekeeper gives each connected account a private, streaming object-storage
+This auto-provisioned gatekeeper gives each connected account private, bounded object storage
 Source backed by one deployment-owned Cloudflare R2 bucket. It deliberately does not expose an
 ambient singleton: an owner must bind `r2://storage/root` to a workspace before an agent or Gadget
 can use it.
@@ -17,7 +17,8 @@ namespace. A rejected write removes its staging object, and a rejected delete le
 object untouched. Collaborator observers are refused because the root is private to one account.
 
 The Source API in [`src/types.d.ts`](./src/types.d.ts) provides `head`, `get`, `put`, `list`, and
-`delete`. Bodies are streamed instead of buffered.
+`delete`. Bodies are bounded to 1 MiB so authority invalidation can fail closed without transferring
+an independently live stream.
 
 ## Prefix-scoped Contract example
 

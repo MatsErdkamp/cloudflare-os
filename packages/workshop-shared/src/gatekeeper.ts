@@ -17,6 +17,7 @@
 // `Adapter` type is the root interface implemented by the service binding.
 
 import type { WorkerEntrypoint, DurableObject, RpcTarget, RpcStub } from "cloudflare:workers";
+import type {GatekeeperAuthorityProvider} from "./gatekeeper-authority.js";
 
 /**
  * A pagination cursor.
@@ -548,6 +549,17 @@ export interface GatekeeperUser extends WorkerEntrypoint {
   //
   // SECURITY: As with connectAccount(), any returned URL must include a cryptographic nonce.
   ensureResources(resourceUrlPatterns: string[]): Promise<{url?: string}>;
+
+  /**
+   * Returns an account-imbued provider-authority class for canonical Contract Instance backing.
+   *
+   * Present only for Gatekeepers that implement the current task-neutral provider protocol. The
+   * returned capability manages provider backing and generation-bound Source sessions; it never
+   * carries Workspace, Consumer, Agent Task, Template, Dispatch, or Ratchet policy.
+   */
+  getAuthorityProviderClass?<Session extends RpcTarget>(): Promise<
+    DurableObjectClass<GatekeeperAuthorityProvider<Session>>
+  >;
 
   // ---------------------------------------------------------------------------
   // Singleton / management-UI capabilities. Present only on accounts created by

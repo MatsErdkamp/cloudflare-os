@@ -8,7 +8,7 @@ const CONTRACT_PATH = fileURLToPath(
   new URL("../../gatekeeper-r2/examples/folder-contract.ts", import.meta.url),
 );
 const SOURCE_TYPES_PATH = fileURLToPath(
-  new URL("../../gatekeeper-r2/src/types.d.ts", import.meta.url),
+  new URL("../../gatekeeper-r2/src/types.ts", import.meta.url),
 );
 
 describe("R2 folder Contract example", () => {
@@ -29,7 +29,8 @@ describe("R2 folder Contract example", () => {
 
     expect(candidate.artifact.publicTypes).toContain("interface ContractBinding");
     expect(candidate.artifact.publicTypes).toContain("subfolder(path: string)");
-    expect(candidate.artifact.publicTypes).toContain("ReadableStream<Uint8Array>");
+    expect(candidate.artifact.publicTypes).toContain("body: Uint8Array");
+    expect(candidate.artifact.publicTypes).not.toContain("ReadableStream");
     expect(candidate.artifact.publicTypes).not.toContain("R2BucketSession");
     expect(candidate.artifact.modules["contract.js"]).toContain('ROOT_PREFIX = "shared/"');
   });
