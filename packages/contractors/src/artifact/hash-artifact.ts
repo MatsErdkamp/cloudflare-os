@@ -1,4 +1,5 @@
 import type { ContractArtifactHashInput } from "./contract-artifact.js";
+import type { ContractArtifactV2HashInput } from "./contract-artifact-v2.js";
 
 /** Canonical JSON encoding used at Contract artifact authority boundaries. */
 export function canonicalContractJson(value: unknown): string {
@@ -12,7 +13,9 @@ export function canonicalContractJson(value: unknown): string {
 }
 
 /** Computes a deterministic SHA-256 identity for all authority-affecting artifact fields. */
-export async function hashArtifact(input: ContractArtifactHashInput): Promise<string> {
+export async function hashArtifact(
+  input: ContractArtifactHashInput | ContractArtifactV2HashInput,
+): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalContractJson(input));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");

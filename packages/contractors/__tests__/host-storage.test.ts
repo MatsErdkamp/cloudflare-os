@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   ContractSharedState,
   InMemoryArtifactStore,
-  type ContractArtifact,
   type SharedStateBackend,
-} from "../src/index";
+} from "../src/host/index";
+import type { ContractArtifact } from "../src/artifact/index";
 
 function artifact(hash: string): ContractArtifact {
   return {

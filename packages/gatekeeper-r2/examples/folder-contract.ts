@@ -1,4 +1,7 @@
-import { defineContract, type ContractPolicy } from "@gadgets/contractors";
+import {
+  defineContract,
+  type ContractApproval,
+} from "@gadgets/contractors/authoring";
 import { RpcTarget } from "cloudflare:workers";
 import type { Source } from "contract:source";
 
@@ -117,7 +120,7 @@ class FolderImpl extends RpcTarget implements ContractBinding {
   constructor(
     private readonly source: Source,
     private readonly prefix: string,
-    private readonly policy: ContractPolicy<Source>,
+    private readonly approval: ContractApproval<Source>,
   ) {
     super();
   }
@@ -171,7 +174,7 @@ class FolderImpl extends RpcTarget implements ContractBinding {
   async delete(path: string): Promise<void> {
     const relative = relativePath(path);
     const key = this.prefix + relative;
-    await this.policy.approval.manual({
+    await this.approval.manual({
       title: "Delete folder object",
       description: `Delete ${relative} from this scoped R2 folder.`,
     }, async ({ source }) => {
@@ -180,9 +183,9 @@ class FolderImpl extends RpcTarget implements ContractBinding {
   }
 
   async subfolder(path: string): Promise<ContractBinding> {
-    return new FolderImpl(this.source, this.prefix + folderPrefix(path), this.policy);
+    return new FolderImpl(this.source, this.prefix + folderPrefix(path), this.approval);
   }
 }
 
 export default defineContract<Source, ContractBinding>(context =>
-  new FolderImpl(context.source, ROOT_PREFIX, context.policy));
+  new FolderImpl(context.source, ROOT_PREFIX, context.approval));

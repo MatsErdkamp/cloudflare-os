@@ -9,6 +9,22 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./artifact": {
+      "types": "./dist/artifact/index.d.ts",
+      "import": "./dist/artifact/index.js"
+    },
+    "./authoring": {
+      "types": "./dist/authoring/index.d.ts",
+      "import": "./dist/authoring/index.js"
+    },
+    "./cloudflare-os": {
+      "types": "./dist/cloudflare-os/index.d.ts",
+      "import": "./dist/cloudflare-os/index.js"
+    },
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "import": "./dist/host/index.js"
+    },
     "./runtime": {
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js"

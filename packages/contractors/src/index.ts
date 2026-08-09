@@ -1,3 +1,4 @@
+/** @deprecated Use the additive `@gadgets/contractors/authoring` v8 seam for new Contracts. */
 export { defineContract } from "./authoring/define-contract.js";
 export type { ContractContext, ContractCaller, SharedContractState } from "./authoring/contract-context.js";
 export type {

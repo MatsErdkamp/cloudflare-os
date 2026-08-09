@@ -3,9 +3,9 @@ import {describe, expect, it, vi} from "vitest";
 import {
   ContractSourceApprovalQueue,
   contractActionAttribution,
-  contractRestorationStorageKey,
-  type ContractOperationHost,
-} from "../src/index";
+} from "../src/cloudflare-os/index";
+import { contractRestorationStorageKey } from "../src/runtime/index";
+import type { ContractOperationHost } from "../src/host/index";
 import {
   TestContractHost,
   assertContractCapabilitiesRetracted,

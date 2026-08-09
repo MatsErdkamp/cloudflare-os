@@ -5,8 +5,8 @@ import {
   ContractApprovalRequired,
   createContractPolicy,
   type ContractOperationDecision,
-  type ContractOperationHost,
-} from "../src/index";
+} from "../src/runtime/index";
+import type { ContractOperationHost } from "../src/host/index";
 
 type Source = {
   write(value: string): Promise<string>;

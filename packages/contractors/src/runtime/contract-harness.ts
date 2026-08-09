@@ -1,6 +1,9 @@
 /** Version included in the content hash whenever harness behavior changes. */
 export const CONTRACT_RUNTIME_HARNESS_VERSION = "7";
 
+/** Additive direct-approval harness version used only by Artifact v2. */
+export const CONTRACT_RUNTIME_HARNESS_V8_VERSION = "8";
+
 const CONTRACT_HARNESS_V1 = `
 import { DurableObject, RpcTarget, restore } from "cloudflare:workers";
 import createContract, * as contractModule from "contract.js";
@@ -304,6 +307,64 @@ export const CONTRACT_HARNESS = CONTRACT_HARNESS_V6
     'policy: createPolicy(session.policy.approval.dup()),',
   );
 
+const DIRECT_APPROVAL_MEMBRANE_V8 = `
+const INVOCATION_FIELDS = [
+  "artifactHash", "authoritySnapshotDigest", "bindingId", "consumerId",
+  "contractInstanceId", "generations", "invocationId", "methodName",
+  "runtimeProfileHash", "schemaVersion", "startedAt",
+];
+const INVOCATION_GENERATION_FIELDS = [
+  "authority", "binding", "consumer", "contractInstance", "environment",
+];
+
+function closedInvocationEvidence(invocation) {
+  if (!invocation || typeof invocation !== "object" ||
+      Object.keys(invocation).sort().join("\\0") !== INVOCATION_FIELDS.join("\\0")) {
+    throw new TypeError("Contract invocation evidence has unknown or missing fields.");
+  }
+  const generationKeys = Object.keys(invocation.generations ?? {}).sort();
+  if (generationKeys.join("\\0") !== INVOCATION_GENERATION_FIELDS.join("\\0")) {
+    throw new TypeError("Contract invocation evidence has unknown or missing generations.");
+  }
+  const generations = Object.freeze(Object.fromEntries(
+    INVOCATION_GENERATION_FIELDS.map((name) => [name, invocation.generations[name]])));
+  return Object.freeze({
+    schemaVersion: invocation.schemaVersion,
+    invocationId: invocation.invocationId,
+    consumerId: invocation.consumerId,
+    bindingId: invocation.bindingId,
+    contractInstanceId: invocation.contractInstanceId,
+    artifactHash: invocation.artifactHash,
+    runtimeProfileHash: invocation.runtimeProfileHash,
+    methodName: invocation.methodName,
+    startedAt: invocation.startedAt,
+    authoritySnapshotDigest: invocation.authoritySnapshotDigest,
+    generations,
+  });
+}
+
+function createApproval(approval) {
+  return {
+    manual(description, operation) {
+      return approval.manual(description, async ({source}) =>
+        wrapCapability(await operation({source: wrapCapability(source.dup())})));
+    },
+    require(description) {
+      return approval.require(description);
+    },
+  };
+}
+`;
+
+/** Additive v8 harness with direct approval and closed invocation evidence. */
+export const CONTRACT_HARNESS_V8 = CONTRACT_HARNESS
+  .replace(MANUAL_APPROVAL_MEMBRANE_V7, DIRECT_APPROVAL_MEMBRANE_V8)
+  .replace(
+    'policy: createPolicy(session.policy.approval.dup()),',
+    'approval: createApproval(session.approval.dup()),',
+  )
+  .replace('caller: session.caller,', 'invocation: closedInvocationEvidence(session.invocation),');
+
 const CONTRACT_HARNESSES: Readonly<Record<string, string>> = {
   "1": CONTRACT_HARNESS_V1,
   "2": CONTRACT_HARNESS_V2,
@@ -312,6 +373,7 @@ const CONTRACT_HARNESSES: Readonly<Record<string, string>> = {
   "5": CONTRACT_HARNESS_V5,
   "6": CONTRACT_HARNESS_V6,
   [CONTRACT_RUNTIME_HARNESS_VERSION]: CONTRACT_HARNESS,
+  [CONTRACT_RUNTIME_HARNESS_V8_VERSION]: CONTRACT_HARNESS_V8,
 };
 
 /** Resolves the exact retained harness reviewed as part of an artifact's content hash. */

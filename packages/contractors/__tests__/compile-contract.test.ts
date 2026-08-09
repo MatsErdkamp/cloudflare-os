@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { compileContract, ContractCompilationError, hashArtifact } from "../src/index";
+import { compileContract, hashArtifact } from "../src/artifact/index";
+import { ContractCompilationError } from "../src/runtime/index";
 
 const VALID_CONTRACT = `
   import { defineContract } from "@gadgets/contractors";
@@ -39,6 +40,32 @@ function input(source = VALID_CONTRACT) {
 }
 
 describe("compileContract", () => {
+  it("keeps historical v1-v7 artifact identities byte-stable", async () => {
+    const base = {
+      mainModule: "contract.js",
+      modules: { "contract.js": "export default function(){}" },
+      publicTypes: "export interface ContractBinding { ping(): string; }",
+      publicRootType: "ContractBinding" as const,
+      sourceTypeHash: "0123456789abcdef",
+      sourceRootType: "FixtureSource",
+      dependencies: [],
+      compatibilityDate: "2026-08-05",
+    };
+    const fixtures = {
+      "1": "sha256:131e6d95b5edd631378adbced1112900a13d9a23e71f0ad9443edfcdd719f425",
+      "2": "sha256:0c38b22bf94e02b5482f14da206a9e0d9c2f407132b8550ee60529f3768954a3",
+      "3": "sha256:93ef5255be6c5430bb6023e74ffed6d3d114faf343e99b655ddb3ad41fbc0569",
+      "4": "sha256:084b5e80c14e8b94ebf52f45d91455d72b89ca75f946f227d794963fcc1a5b79",
+      "5": "sha256:82c9eb4c452a6c4a915f5355eec5bb3b4d1a674aede29db2f5fa404ca6f4468c",
+      "6": "sha256:ba7aa9fba8abddcb8d6448dc001a7dc623b0a39d135716d0578f910b39776655",
+      "7": "sha256:31fd921a1149e416f1f211123f5007afe82e8d3d98d6b7ab0a072d253b1bd7b2",
+    } as const;
+
+    for (const [runtimeHarnessVersion, expected] of Object.entries(fixtures)) {
+      await expect(hashArtifact({ ...base, runtimeHarnessVersion })).resolves.toBe(expected);
+    }
+  });
+
   it("produces a deterministic immutable artifact with public ContractBinding types", async () => {
     const first = await compileContract(input());
     const second = await compileContract(input());
