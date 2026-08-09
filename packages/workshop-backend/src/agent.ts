@@ -355,7 +355,14 @@ export interface AgentHooks {
     targetGadgetId: WorkpieceId;
     title: string;
     bindingName: string;
-    artifactJson: string;
+    artifactHash: string;
+    reviewBundleHash: string;
+    reviewComparisonHash: string;
+    policyHash: string;
+    generatorIdentityHash: string;
+    baseline:
+      | {type: "none"}
+      | {type: "bundle"; bundleHash: string; artifactApprovalId: string};
     sharedStateKey?: string;
   }): Promise<{requestId: string; artifactHash: string}>;
 
@@ -636,7 +643,7 @@ Ask the user to connect a private Source (for example a ClickHouse cluster or Gi
 let PROPOSE_CONTRACT_TOOL_DESCRIPTION = `
 Propose a reviewed Contract that turns one private Source in your env into a deliberately designed public capability for a target Gadget. Raw Sources cannot be wired into Gadget code.
 
-Provide the complete compiler-produced current Artifact JSON plus the exact target and binding name. The proposal boundary parses the closed Artifact, verifies its executable hashes and current Source types, and only then shows it to a human. Your turn ends after a successful proposal; you cannot approve your own proposal. Possession of an approved Contract preapproves every public method and any Source action it performs unless its code explicitly uses context.approval.
+Provide the content hashes of an Artifact, Review Bundle, Review Comparison, policy snapshot, comparison generator, and optional baseline that were already published by the trusted review pipeline, plus the exact target and binding name. The proposal boundary reloads and fully validates that immutable evidence before it records a Workspace Artifact Proposal. Chat-emitted code is never approval evidence. Your turn ends after a successful proposal; you cannot approve your own proposal. Possession of an approved Contract preapproves every public method and any Source action it performs unless its code explicitly uses context.approval.
 `.trim();
 
 let GIVE_UP_TOOL_DESCRIPTION = `
@@ -1954,6 +1961,16 @@ export async function runAgent(
       case "contractRequest": {
         if (msg.state === "pending") {
           claimedNames.add(msg.bindingName);
+        } else if (msg.state === "approved") {
+          claimedNames.add(msg.bindingName);
+          modelMessages.push({
+            role: "user",
+            content:
+                `The user approved Contract Artifact \`${msg.artifactHash}\` for ` +
+                `"${msg.title}". Installation has not happened yet; do not claim that ` +
+                `\`env.${msg.bindingName}\` is available until a later placement decision completes.`,
+            timestamp: msgTimestamp,
+          });
         } else if (msg.state === "accepted" && msg.contractId !== undefined) {
           if (!chatBindings.has(msg.bindingName)) {
             chatBindings.set(msg.bindingName, {type: "workpiece", id: msg.contractId});
@@ -2805,9 +2822,23 @@ export async function runAgent(
         bindingName: Type.String({
           description: "Name exposed in the target Gadget env. Style: ALL_CAPS_WITH_UNDERSCORES.",
         }),
-        artifactJson: Type.String({
-          description: "Complete compiler-produced current Contract Artifact JSON.",
+        artifactHash: Type.String({description: "Published immutable Contract Artifact hash."}),
+        reviewBundleHash: Type.String({description: "Published immutable Review Bundle hash."}),
+        reviewComparisonHash: Type.String({
+          description: "Published immutable Review Comparison hash.",
         }),
+        policyHash: Type.String({description: "Policy snapshot hash cited by the Review Bundle."}),
+        generatorIdentityHash: Type.String({
+          description: "Comparison-generator identity cited by the Review Comparison.",
+        }),
+        baseline: Type.Union([
+          Type.Object({type: Type.Literal("none")}),
+          Type.Object({
+            type: Type.Literal("bundle"),
+            bundleHash: Type.String(),
+            artifactApprovalId: Type.String(),
+          }),
+        ], {description: "Exact prior approved Review Bundle, or no baseline."}),
         sharedStateKey: Type.Optional(Type.String({
           description: "Explicit namespace shared with other configured Contract instances.",
         })),
@@ -2828,7 +2859,12 @@ export async function runAgent(
             targetGadgetId: target.id,
             title: input.title,
             bindingName: input.bindingName,
-            artifactJson: input.artifactJson,
+            artifactHash: input.artifactHash,
+            reviewBundleHash: input.reviewBundleHash,
+            reviewComparisonHash: input.reviewComparisonHash,
+            policyHash: input.policyHash,
+            generatorIdentityHash: input.generatorIdentityHash,
+            baseline: input.baseline,
             sharedStateKey: input.sharedStateKey,
           });
           authorityRequested = true;

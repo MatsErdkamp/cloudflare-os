@@ -6151,8 +6151,9 @@ function ChatInterface({
     const isPending = msg.state === "pending";
     const isProc = processingConnections.has(msg.requestId);
     const status = msg.state === "accepted" ? "Installed" :
+      msg.state === "approved" ? "Artifact approved" :
       msg.state === "denied" ? "Denied" : "Approval required";
-    const statusClass = msg.state === "accepted" ? "text-status-success" :
+    const statusClass = msg.state === "accepted" || msg.state === "approved" ? "text-status-success" :
       msg.state === "denied" ? "text-destructive" : "text-primary";
     return (
       <div className="group/work max-w-[860px] text-[14px] leading-5 tracking-[-0.25px] text-muted-foreground">
@@ -6182,6 +6183,11 @@ function ChatInterface({
                     <dt>Proposer</dt><dd className="text-foreground">{msg.author.name}</dd>
                     <dt>Source</dt><dd className="break-all text-foreground">{msg.sourceUrl ?? msg.sourceTitle}</dd>
                     <dt>Artifact</dt><dd className="break-all font-mono text-foreground">{msg.artifactHash}</dd>
+                    <dt>Proposal</dt><dd className="break-all font-mono text-foreground">{msg.proposalId}</dd>
+                    <dt>Review bundle</dt><dd className="break-all font-mono text-foreground">{msg.reviewBundleHash}</dd>
+                    <dt>Comparison</dt><dd className="break-all font-mono text-foreground">{msg.reviewComparisonHash}</dd>
+                    <dt>Policy snapshot</dt><dd className="break-all font-mono text-foreground">{msg.policyHash}</dd>
+                    <dt>Comparison generator</dt><dd className="break-all font-mono text-foreground">{msg.generatorIdentityHash}</dd>
                     <dt>Runtime profile</dt><dd className="font-mono text-foreground">{msg.runtimeProfileHash.slice(0, 18)}…</dd>
                     <dt>Compatibility</dt><dd className="font-mono text-foreground">{msg.compatibilityDate}</dd>
                     <dt>Source type</dt><dd className="text-foreground">
@@ -6205,11 +6211,11 @@ function ChatInterface({
                     </dd>
                   </dl>
                   <div>
-                    <div className="mb-1 font-medium text-foreground">Public TypeScript interface</div>
+                    <div className="mb-1 font-medium text-foreground">Public TypeScript interface (display snapshot)</div>
                     <pre className="max-h-64 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px] leading-4 text-foreground">{msg.publicTypes}</pre>
                   </div>
                   <div>
-                    <div className="mb-1 font-medium text-foreground">Reviewed Contract code (compiled ESM)</div>
+                    <div className="mb-1 font-medium text-foreground">Contract code (non-authoritative display snapshot)</div>
                     <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px] leading-4 text-foreground">{msg.sourceCode}</pre>
                   </div>
                 </div>

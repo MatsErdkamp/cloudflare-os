@@ -2,8 +2,13 @@ import {describe, expect, it} from "vitest";
 import {env, RpcStub, RpcTarget} from "cloudflare:workers";
 import {runInDurableObject} from "cloudflare:test";
 import {currentContractArtifact} from "./contract-artifact-fixture";
-import {hashArtifact, type ContractArtifact} from "@gadgets/contractors/artifact";
 import {keyString} from "@gadgets/typed-storage";
+import {
+  buildContractReviewEvidence,
+  type ReviewBuildRunnerFactory,
+} from "@gadgets/contract-review-builder";
+import {R2ContractArtifactStore} from "../src/contract-artifacts";
+import {R2ContractReviewEvidenceStore} from "../src/contract-review-evidence";
 
 import type {OverseerDurableObject} from "../src/overseer.js";
 
@@ -54,12 +59,81 @@ async function proposalInput(sourceCode: string, publicTypes = `
     sourceTypes: SOURCE_TYPES,
     compatibilityDate: "2026-02-02",
   });
+  const inputs = {
+    modules: {"contract.ts": "export const originalSource = true;"},
+    mainModule: "contract.ts",
+    sourceTypes: SOURCE_TYPES,
+    sourceRootType: "Source",
+    dependencies: {},
+    compatibilityDate: "2026-02-02",
+    compatibilityFlags: ["allow_irrevocable_stub_storage"],
+  };
+  const candidate = {
+    artifact,
+    inputs,
+    trace: {entries: [], artifactHash: artifact.hash},
+    creation: {createdAt: "2026-02-02T00:00:00.000Z"},
+  };
+  const identity = (digit: string) => `sha256:${digit.repeat(64)}`;
+  const runnerFactory: ReviewBuildRunnerFactory = {
+    create({role}) {
+      return {
+        async build() {
+          return {
+            candidate,
+            isolation: {
+              role,
+              producerIdentity: `test-${role}`,
+              environmentIdentity: `fresh-${role}`,
+              network: "disabled" as const,
+              mutableState: "fresh" as const,
+              networkAttempts: 0,
+            },
+            dependencyLock: {entries: []},
+            toolchain: {components: [
+              {name: "@gadgets/contractors", identity: identity("1")},
+              {name: "esbuild", identity: identity("2")},
+              {name: "typescript", identity: identity("3")},
+            ]},
+            recipe: {
+              name: "test-contract-review",
+              target: "es2022",
+              platform: "neutral",
+              moduleFormat: "esm",
+              externals: ["cloudflare:workers"],
+            },
+          };
+        },
+        [Symbol.dispose]() {},
+      };
+    },
+  };
+  const evidence = await buildContractReviewEvidence({
+    inputs,
+    submittedProvenance: {
+      submittedBy: {identity: "test-builder", generation: 1},
+      authorship: "test fixture",
+      origin: {kind: "workspaceChat", reference: "chat:3"},
+    },
+    policySnapshot: {name: "test-policy"},
+    baseline: {kind: "none"},
+    comparisonGenerator: {name: "test-comparison", identity: identity("4")},
+  }, runnerFactory);
+  await Promise.all([
+    new R2ContractArtifactStore(env.BLUEPRINT_CONTENT).put(artifact),
+    new R2ContractReviewEvidenceStore(env.BLUEPRINT_CONTENT).put(evidence),
+  ]);
   return {
     sourceGatekeeperId: 17,
     targetGadgetId: 9,
     title: "Reviewed Contract",
     bindingName: "REVIEWED",
-    artifactJson: JSON.stringify(artifact),
+    artifactHash: artifact.hash,
+    reviewBundleHash: evidence.bundleHash,
+    reviewComparisonHash: evidence.comparisonHash,
+    policyHash: evidence.bundle.build.policySnapshot.hash,
+    generatorIdentityHash: evidence.comparison.generator.identity,
+    baseline: {type: "none" as const},
   };
 }
 
@@ -110,11 +184,12 @@ describe("Contract proposal compilation boundary", () => {
         expect(proposal.artifactHash).toMatch(/^sha256:[0-9a-f]{64}$/);
         await expect(env.BLUEPRINT_CONTENT.get(
           `contracts/artifacts/${proposal.artifactHash}.json`,
-        )).resolves.toBeNull();
+        )).resolves.not.toBeNull();
         expect(impl.consumeCapturedConnectionRequests(3)).toEqual([
           expect.objectContaining({
             type: "contractRequest",
             requestId: proposal.requestId,
+            proposalId: proposal.proposalId,
             sourceCode: COMPILER_STYLE_MODULE,
             sourceRootType: "Source",
             compatibilityDate: "2026-02-02",
@@ -164,26 +239,79 @@ describe("Contract proposal compilation boundary", () => {
         prepareProposalFixture(impl);
         const input = await proposalInput(COMPILER_STYLE_MODULE);
 
-        const artifact = JSON.parse(input.artifactJson) as ContractArtifact;
         await expect(impl.proposeContract(3, {
           ...input,
-          artifactJson: JSON.stringify({...artifact, hash: `sha256:${"0".repeat(64)}`}),
-        })).rejects.toThrow("content does not match");
-        const {hash: _hash, ...authority} = artifact;
-        const staleAuthority = {...authority, sourceTypeHash: "0".repeat(64)};
+          artifactHash: `sha256:${"0".repeat(64)}`,
+        })).rejects.toThrow("Artifact is unavailable");
         await expect(impl.proposeContract(3, {
           ...input,
-          artifactJson: JSON.stringify({
-            hash: await hashArtifact(staleAuthority),
-            ...staleAuthority,
-          }),
-        })).rejects.toThrow("Source types");
+          policyHash: `sha256:${"0".repeat(64)}`,
+        })).rejects.toThrow("references do not match");
         expect(impl.consumeCapturedConnectionRequests(3)).toEqual([]);
       },
     );
   });
 
-  it("leaves a corrupt retained Artifact proposal denyable", async () => {
+  it("re-approves one reproduced R2 Artifact at a new epoch without trusting chat snapshots", async () => {
+    await runInDurableObject(
+      env.TEST_OVERSEER.getByName("contract-proposal-r2-reapproval"),
+      async (instance: OverseerDurableObject) => {
+        const impl = (instance as any).impl;
+        prepareProposalFixture(impl);
+        impl.ownerId = "user-id";
+        impl.ensureAmbientCapsules = async () => {};
+        impl.markOutputsDirty = () => {};
+        impl.joinPresence = () => () => {};
+        impl.joinOutputsFanout = () => () => {};
+        impl.users = {
+          idFromString: (id: string) => id,
+          get: () => ({whoami: async () => ({type: "user", id: "profile-id", name: "User"})}),
+        };
+        const notifyClosed = new RpcStub<() => void>(() => {});
+        const client = await instance.open("user-id", "profile-id", notifyClosed);
+        const input = await proposalInput(COMPILER_STYLE_MODULE);
+
+        const acceptProposal = async (bindingName: string) => {
+          const proposal = await impl.proposeContract(3, {...input, bindingName});
+          const [body] = impl.consumeCapturedConnectionRequests(3);
+          const message = {
+            chatId: 3,
+            sequence: impl.nextChatSequence(3),
+            timestamp: impl.getChatTimestamp(),
+            author: {type: "agent", id: "model", name: "Agent"},
+            ...body,
+          };
+          message.sourceCode = "throw new Error('display snapshot must not execute')";
+          message.publicTypes = "export interface ContractBinding { displayOnly: never }";
+          impl.storage.chats.put(message);
+          await client.acceptContractRequest(proposal.requestId);
+          const approval = impl.workspaceAuthority.query({
+            type: "artifactApprovalByProposal",
+            proposalId: proposal.proposalId,
+          });
+          expect(approval).toMatchObject({
+            type: "artifactApprovalByProposal",
+            value: {artifactHash: proposal.artifactHash, decision: "approved"},
+          });
+          return approval.value.approvalEpoch;
+        };
+
+        await expect(acceptProposal("REVIEWED")).resolves.toBe(1);
+        await expect(acceptProposal("REVIEWED_AGAIN")).resolves.toBe(2);
+        expect([...impl.storage.contracts.list()]).toHaveLength(0);
+        const decisions = [...impl.storage.chats.list()].filter(
+          (message: any) => message.type === "contractRequest",
+        );
+        expect(decisions).toEqual([
+          expect.objectContaining({state: "approved", sourceCode: expect.stringContaining("display snapshot")}),
+          expect.objectContaining({state: "approved", sourceCode: expect.stringContaining("display snapshot")}),
+        ]);
+        client[Symbol.dispose]?.();
+      },
+    );
+  });
+
+  it("fails closed on corrupt immutable Artifact evidence without blocking rejection", async () => {
     await runInDurableObject(
       env.TEST_OVERSEER.getByName("contract-proposal-corrupt-retained-artifact"),
       async (instance: OverseerDurableObject) => {
@@ -198,8 +326,11 @@ describe("Contract proposal compilation boundary", () => {
           author: {type: "agent", id: "model", name: "Agent"},
           ...body,
         };
-        message.artifactJson = "{";
         impl.storage.chats.put(message);
+        await env.BLUEPRINT_CONTENT.put(
+          `contracts/artifacts/${proposal.artifactHash}.json`,
+          "{",
+        );
 
         impl.ownerId = "user-id";
         impl.ensureAmbientCapsules = async () => {};

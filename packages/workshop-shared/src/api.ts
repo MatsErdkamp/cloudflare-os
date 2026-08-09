@@ -2060,6 +2060,8 @@ export type AiChatMessageBody = {
   type: "contractRequest";
   /** Stable identifier used by the accept/deny RPCs. */
   requestId: string;
+  /** Workspace-issued canonical Artifact Proposal identity. */
+  proposalId: string;
   /** Private Source selected by the Manager authoring flow. */
   sourceGatekeeperId: WorkpieceId;
   /** Denormalized Source title retained for proposal review. */
@@ -2070,13 +2072,23 @@ export type AiChatMessageBody = {
   artifactHash: string;
   /** Exact hash of the sole current runtime profile. */
   runtimeProfileHash: string;
-  /** Closed, compiler-produced Artifact retained verbatim for acceptance. */
-  artifactJson: string;
+  /** Exact immutable Review Bundle accepted for review. */
+  reviewBundleHash: string;
+  /** Exact immutable Review Comparison shown for this proposal. */
+  reviewComparisonHash: string;
+  /** Exact policy snapshot evaluated by the trusted review builder. */
+  policyHash: string;
+  /** Exact comparison-generator identity used for this proposal. */
+  generatorIdentityHash: string;
+  /** Exact prior approved Review Bundle, or no baseline for a first approval. */
+  baseline:
+    | {type: "none"}
+    | {type: "bundle"; bundleHash: string; artifactApprovalId: string};
   /** Display title of the installed Contract. */
   title: string;
-  /** Complete public TypeScript declarations exposed to the target Gadget. */
+  /** Display-only public declarations snapshot; immutable evidence remains authoritative. */
   publicTypes: string;
-  /** Reviewed executable Contract module stored in the immutable artifact. */
+  /** Display-only executable snapshot; immutable evidence remains authoritative. */
   sourceCode: string;
   /** Name under which the installed Contract appears in the Gadget environment. */
   bindingName: string;
@@ -2095,9 +2107,13 @@ export type AiChatMessageBody = {
   /** Explicit cross-instance shared-state namespace, when requested. */
   sharedStateKey?: string;
   /** Proposal lifecycle. */
-  state: "pending" | "accepted" | "denied";
+  state: "pending" | "approved" | "accepted" | "denied";
   /** Durable acceptance claim used to reconcile an interrupted installation. */
   accepting?: true;
+  /** Canonical Artifact Approval referenced by this history item after a decision. */
+  artifactApprovalId?: string;
+  /** Canonical Artifact Approval epoch referenced after a decision. */
+  artifactApprovalEpoch?: number;
   /** Installed Contract instance after acceptance. */
   contractId?: WorkpieceId;
 };
@@ -2304,8 +2320,20 @@ export type AiToolCall = {
     title: string;
     /** Binding name exposed to the target Gadget. */
     bindingName: string;
-    /** Complete compiler-produced current Artifact JSON. */
-    artifactJson: string;
+    /** Exact immutable Artifact already published by a trusted review pipeline. */
+    artifactHash: string;
+    /** Exact immutable Review Bundle already published by a trusted review pipeline. */
+    reviewBundleHash: string;
+    /** Exact immutable Review Comparison already published by a trusted review pipeline. */
+    reviewComparisonHash: string;
+    /** Exact policy snapshot hash cited by the Review Bundle. */
+    policyHash: string;
+    /** Exact comparison-generator identity cited by the Review Comparison. */
+    generatorIdentityHash: string;
+    /** Exact prior approved Review Bundle, or no baseline for a first approval. */
+    baseline:
+      | {type: "none"}
+      | {type: "bundle"; bundleHash: string; artifactApprovalId: string};
     /** Explicit shared-state namespace. */
     sharedStateKey?: string;
   };

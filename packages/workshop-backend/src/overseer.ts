@@ -68,7 +68,6 @@ import {
   isContractPackageName,
   isExactContractDependencyVersion,
   isWorkerCompatibilityDate,
-  parseContractArtifact,
   validateDependencyPolicy,
   type ContractArtifact,
 } from "@gadgets/contractors/artifact";
@@ -85,6 +84,7 @@ import {
   type ContractSourceApprovalMode,
 } from "@gadgets/contractors/cloudflare-os";
 import { R2ContractArtifactStore } from "./contract-artifacts";
+import { R2ContractReviewEvidenceStore } from "./contract-review-evidence";
 import {
   createWorkspaceAuthorityModule,
   type LegacyGadgetBindingRecord,
@@ -92,9 +92,33 @@ import {
   type LegacyWorkspaceAuthorityCompatibility,
   type WorkspaceAuthority,
 } from "./authority/workspace-authority";
+import type {ArtifactApprovalId, ArtifactProposalId} from "./authority/records";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
+
+type ContractProposalEvidenceReference = Readonly<{
+  artifactHash: string;
+  reviewBundleHash: string;
+  reviewComparisonHash: string;
+  policyHash: string;
+  generatorIdentityHash: string;
+  baseline:
+    | {type: "none"}
+    | {type: "bundle"; bundleHash: string; artifactApprovalId: string};
+}>;
+
+function authorityProposalBaseline(
+  baseline: ContractProposalEvidenceReference["baseline"],
+) {
+  return baseline.type === "none"
+    ? {type: "none" as const}
+    : {
+        type: "bundle" as const,
+        bundleHash: baseline.bundleHash,
+        artifactApprovalId: baseline.artifactApprovalId as ArtifactApprovalId,
+      };
+}
 
 let CODE_MODE_HARNESS =
 `import { WorkerEntrypoint, restore, RpcStub, RpcTarget } from "cloudflare:workers";
@@ -6581,14 +6605,112 @@ class OverseerImpl implements AgentHooks {
     return result;
   }
 
+  private ensureCanonicalAuthorityActive(): void {
+    let status = this.workspaceAuthority.query({type: "status"});
+    if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
+    if (status.value.state === "active") return;
+    if (status.value.state === "uninitialized") {
+      this.workspaceAuthority.execute({type: "initialize"});
+      status = this.workspaceAuthority.query({type: "status"});
+      if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
+    }
+    if (status.value.state === "legacy") {
+      this.workspaceAuthority.execute({
+        type: "beginBackfill",
+        migrationId: "canonical-workspace-authority",
+      });
+      status = this.workspaceAuthority.query({type: "status"});
+      if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
+    }
+    if (status.value.state === "backfilling") {
+      const contractIds = new Set<WorkpieceId>([
+        ...Array.from(this.storage.contracts.list(), contract => contract.id),
+        ...Array.from(this.storage.contractTombstones.list(), contract => contract.id),
+      ]);
+      for (const legacyContractId of contractIds) {
+        this.workspaceAuthority.execute({type: "backfillLegacyContract", legacyContractId});
+      }
+      const candidate = this.workspaceAuthority.query({type: "cutoverCandidate"});
+      if (candidate.type !== "cutoverCandidate") {
+        throw new Error("Workspace Authority cutover candidate is unavailable.");
+      }
+      this.workspaceAuthority.execute({
+        type: "markReadyToCutover",
+        expectedDigest: candidate.value.digest,
+      });
+      status = this.workspaceAuthority.query({type: "status"});
+      if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
+    }
+    if (status.value.state !== "readyToCutover") {
+      throw new Error(`Workspace Authority cannot activate from ${status.value.state}.`);
+    }
+    const candidate = this.workspaceAuthority.query({type: "cutoverCandidate"});
+    if (candidate.type !== "cutoverCandidate") {
+      throw new Error("Workspace Authority cutover candidate is unavailable.");
+    }
+    this.workspaceAuthority.execute({type: "cutover", expectedDigest: candidate.value.digest});
+  }
+
+  async loadContractProposalEvidence(reference: ContractProposalEvidenceReference) {
+    const artifactStore = new R2ContractArtifactStore(this.env.BLUEPRINT_CONTENT);
+    const evidenceStore = new R2ContractReviewEvidenceStore(this.env.BLUEPRINT_CONTENT);
+    const [artifact, bundle, comparison] = await Promise.all([
+      artifactStore.get(reference.artifactHash),
+      evidenceStore.getBundle(reference.reviewBundleHash),
+      evidenceStore.getComparison(reference.reviewComparisonHash),
+    ]);
+    if (!artifact) throw new Error("The proposed immutable Contract Artifact is unavailable.");
+    if (!bundle) throw new Error("The proposed immutable Review Bundle is unavailable.");
+    if (!comparison) throw new Error("The proposed immutable Review Comparison is unavailable.");
+    if (bundle.artifact.hash !== artifact.hash ||
+        comparison.candidateBundleHash !== reference.reviewBundleHash ||
+        bundle.build.policySnapshot.hash !== reference.policyHash ||
+        comparison.generator.identity !== reference.generatorIdentityHash) {
+      throw new Error("Contract proposal evidence references do not match.");
+    }
+    if (reference.baseline.type === "none") {
+      if (bundle.baseline.kind !== "none" || comparison.baseline.kind !== "none") {
+        throw new Error("Contract proposal baseline does not match its immutable evidence.");
+      }
+    } else {
+      if (bundle.baseline.kind !== "bundle" || comparison.baseline.kind !== "bundle" ||
+          bundle.baseline.bundleHash !== reference.baseline.bundleHash ||
+          comparison.baseline.bundleHash !== reference.baseline.bundleHash ||
+          bundle.baseline.artifactApprovalReference !== reference.baseline.artifactApprovalId ||
+          comparison.baseline.artifactApprovalReference !== reference.baseline.artifactApprovalId) {
+        throw new Error("Contract proposal baseline does not match its immutable evidence.");
+      }
+      const [baselineBundle, baselineApproval] = await Promise.all([
+        evidenceStore.getBundle(reference.baseline.bundleHash),
+        Promise.resolve(this.workspaceAuthority.query({
+          type: "artifactApproval",
+          id: reference.baseline.artifactApprovalId as ArtifactApprovalId,
+        })),
+      ]);
+      if (!baselineBundle || baselineApproval.type !== "artifactApproval" ||
+          baselineApproval.value?.evidence !== "complete" ||
+          baselineApproval.value.reviewBundleHash !== reference.baseline.bundleHash) {
+        throw new Error("Contract proposal baseline Approval is unavailable or mismatched.");
+      }
+    }
+    return {artifact, bundle, comparison};
+  }
+
   async proposeContract(chatId: number, input: {
     sourceGatekeeperId: WorkpieceId;
     targetGadgetId: WorkpieceId;
     title: string;
     bindingName: string;
-    artifactJson: string;
+    artifactHash: string;
+    reviewBundleHash: string;
+    reviewComparisonHash: string;
+    policyHash: string;
+    generatorIdentityHash: string;
+    baseline:
+      | {type: "none"}
+      | {type: "bundle"; bundleHash: string; artifactApprovalId: string};
     sharedStateKey?: string;
-  }): Promise<{requestId: string; artifactHash: string}> {
+  }): Promise<{requestId: string; proposalId: string; artifactHash: string}> {
     validateBindingName(input.bindingName);
     let source = this.storage.gatekeepers.get(input.sourceGatekeeperId);
     if (!source) throw new Error("The selected Source is no longer available.");
@@ -6596,8 +6718,8 @@ class OverseerImpl implements AgentHooks {
     if (gadget.bindings[input.bindingName]) {
       throw new Error(`The target Gadget already has a binding named ${input.bindingName}.`);
     }
-    let artifact = parseContractArtifact(JSON.parse(input.artifactJson));
-    await assertCurrentContractArtifact(artifact);
+    this.ensureCanonicalAuthorityActive();
+    const {artifact, bundle} = await this.loadContractProposalEvidence(input);
     let sourceCode = artifact.modules[artifact.mainModule];
     if (typeof sourceCode !== "string") {
       throw new Error("Contract artifact does not contain its declared main module.");
@@ -6637,15 +6759,39 @@ class OverseerImpl implements AgentHooks {
     await this.validateContractArtifact(artifact);
 
     let requestId = `${chatId}:${crypto.randomUUID()}`;
+    const proposal = this.workspaceAuthority.execute({
+      type: "recordArtifactProposal",
+      operationId: `contract-proposal:${requestId}`,
+      record: {
+        artifactHash: artifact.hash,
+        runtimeProfileHash: artifact.runtimeProfileHash,
+        reviewBundleHash: input.reviewBundleHash,
+        reviewComparisonHash: input.reviewComparisonHash,
+        policyHash: input.policyHash,
+        baseline: authorityProposalBaseline(input.baseline),
+        generatorIdentityHash: input.generatorIdentityHash,
+        proposedBy: `${bundle.provenance.submittedBy.identity}:` +
+          `${bundle.provenance.submittedBy.generation}`,
+        proposedAt: Date.now(),
+      },
+    });
+    if (proposal.type !== "artifactProposalRecorded") {
+      throw new Error("Workspace Authority did not record the Artifact Proposal.");
+    }
     let body: AiChatMessageBody = {
       type: "contractRequest",
       requestId,
+      proposalId: proposal.id,
       sourceGatekeeperId: input.sourceGatekeeperId,
       sourceTitle: source.resourceTitle || description.title,
       sourceUrl: source.resourceUrl || description.url,
       artifactHash: artifact.hash,
       runtimeProfileHash: artifact.runtimeProfileHash,
-      artifactJson: JSON.stringify(artifact),
+      reviewBundleHash: input.reviewBundleHash,
+      reviewComparisonHash: input.reviewComparisonHash,
+      policyHash: input.policyHash,
+      generatorIdentityHash: input.generatorIdentityHash,
+      baseline: structuredClone(input.baseline),
       title: input.title.trim() || "Contract",
       publicTypes: artifact.publicTypes,
       sourceCode,
@@ -6665,7 +6811,7 @@ class OverseerImpl implements AgentHooks {
       this.#capturedConnectionRequests.set(chatId, list);
     }
     list.push(body);
-    return {requestId, artifactHash: artifact.hash};
+    return {requestId, proposalId: proposal.id, artifactHash: artifact.hash};
   }
 
   // --- Blueprint hooks for the agent ---
@@ -8222,9 +8368,9 @@ function joinSessionPresence(
   };
 }
 
-const contractAcceptanceRuns = new WeakMap<
+const contractApprovalRuns = new WeakMap<
   OverseerImpl,
-  Map<string, Promise<ContractRecord>>
+  Map<string, Promise<void>>
 >();
 
 @validateRpc()
@@ -9038,69 +9184,104 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async acceptContractRequest(requestId: string): Promise<void> {
     let msg = this.#findContractRequest(requestId);
-    if (msg.state === "accepted") return;
+    if (msg.state === "approved" || msg.state === "accepted") return;
     if (msg.state !== "pending") {
       throw new Error(`Contract request is not pending: ${requestId}`);
     }
-    let artifact = parseContractArtifact(JSON.parse(msg.artifactJson));
-    await assertCurrentContractArtifact(artifact);
-    if (artifact.hash !== msg.artifactHash ||
-        artifact.runtimeProfileHash !== msg.runtimeProfileHash) {
-      throw new Error("Reviewed Contract request does not match its retained Artifact.");
+    const reference: ContractProposalEvidenceReference = {
+      artifactHash: msg.artifactHash,
+      reviewBundleHash: msg.reviewBundleHash,
+      reviewComparisonHash: msg.reviewComparisonHash,
+      policyHash: msg.policyHash,
+      generatorIdentityHash: msg.generatorIdentityHash,
+      baseline: structuredClone(msg.baseline),
+    };
+    const {artifact} = await this.impl.loadContractProposalEvidence(reference);
+    if (artifact.runtimeProfileHash !== msg.runtimeProfileHash) {
+      throw new Error("Reviewed Contract request does not match its immutable Artifact.");
+    }
+    const proposal = this.impl.workspaceAuthority.query({
+      type: "artifactProposal",
+      id: msg.proposalId as ArtifactProposalId,
+    });
+    if (proposal.type !== "artifactProposal" || !proposal.value ||
+        proposal.value.artifactHash !== msg.artifactHash ||
+        proposal.value.reviewBundleHash !== msg.reviewBundleHash ||
+        proposal.value.reviewComparisonHash !== msg.reviewComparisonHash ||
+        proposal.value.policyHash !== msg.policyHash ||
+        proposal.value.generatorIdentityHash !== msg.generatorIdentityHash ||
+        JSON.stringify(proposal.value.baseline) !== JSON.stringify(msg.baseline)) {
+      throw new Error("Contract request does not match its canonical Artifact Proposal.");
     }
     if (!msg.accepting) {
       msg.accepting = true;
       this.impl.storage.chats.put(msg);
     }
-    let runs = contractAcceptanceRuns.get(this.impl);
+    let runs = contractApprovalRuns.get(this.impl);
     if (!runs) {
       runs = new Map();
-      contractAcceptanceRuns.set(this.impl, runs);
+      contractApprovalRuns.set(this.impl, runs);
     }
     let run = runs.get(requestId);
     if (!run) {
       run = (async () => {
-        let installed = [...this.impl.storage.contracts.list()].find(
-          contract => contract.installationRequestId === requestId);
-        if (installed) {
-          let expectedTitle = msg.title.trim() || "Contract";
-          if (installed.artifactHash !== msg.artifactHash ||
-              installed.runtimeProfileHash !== msg.runtimeProfileHash ||
-              installed.sourceGatekeeperId !== msg.sourceGatekeeperId ||
-              installed.title !== expectedTitle || installed.publicTypes !== msg.publicTypes ||
-              installed.sharedStateKey !== msg.sharedStateKey) {
-            throw new Error("Interrupted Contract installation does not match the reviewed request.");
-          }
-          let gadget = this.impl.getGadgetRecord(msg.targetGadgetId);
-          let edge = gadget.bindings[msg.bindingName];
-          if (!edge) {
-            this.impl.bindWorkpiece(msg.targetGadgetId, msg.bindingName, installed.id);
-          } else if (edge.target !== installed.id) {
-            throw new Error("Reviewed Contract binding name is occupied by another workpiece.");
-          }
-          return installed;
+        let approval = this.impl.workspaceAuthority.query({
+          type: "artifactApprovalByProposal",
+          proposalId: msg.proposalId as ArtifactProposalId,
+        });
+        if (approval.type !== "artifactApprovalByProposal") {
+          throw new Error("Workspace Authority Artifact Approval query is unavailable.");
         }
-
-        let profile = await this.#getClientProfile();
-        return await this.impl.createContract(
-            artifact, msg.sourceGatekeeperId, msg.title,
-            `${profile.type}:${profile.id}`, msg.targetGadgetId, msg.bindingName,
-            msg.sharedStateKey, requestId);
+        if (!approval.value) {
+          const profile = await this.#getClientProfile();
+          const decided = this.impl.workspaceAuthority.execute({
+            type: "recordArtifactApproval",
+            operationId: `contract-approval:${requestId}`,
+            record: {
+              artifactHash: msg.artifactHash,
+              proposalId: msg.proposalId as ArtifactProposalId,
+              reviewBundleHash: msg.reviewBundleHash,
+              reviewComparisonHash: msg.reviewComparisonHash,
+              policyHash: msg.policyHash,
+              baseline: authorityProposalBaseline(msg.baseline),
+              generatorIdentityHash: msg.generatorIdentityHash,
+              evidence: "complete",
+              decision: "approved",
+              decidedBy: `${profile.type}:${profile.id}`,
+              lifecycle: "active",
+            },
+          });
+          if (decided.type !== "artifactApprovalRecorded") {
+            throw new Error("Workspace Authority did not record the Artifact Approval.");
+          }
+          approval = this.impl.workspaceAuthority.query({
+            type: "artifactApprovalByProposal",
+            proposalId: msg.proposalId as ArtifactProposalId,
+          });
+          if (approval.type !== "artifactApprovalByProposal" || !approval.value) {
+            throw new Error("Recorded Artifact Approval is unavailable.");
+          }
+        }
+        if (approval.value.decision !== "approved" || approval.value.lifecycle !== "active") {
+          throw new Error("Artifact Proposal does not have an active approval.");
+        }
+        const approvalMessage = this.#findContractRequest(requestId);
+        approvalMessage.artifactApprovalId = approval.value.id;
+        approvalMessage.artifactApprovalEpoch = approval.value.approvalEpoch;
+        this.impl.storage.chats.put(approvalMessage);
       })();
       runs.set(requestId, run);
     }
     try {
-      let contract = await run;
+      await run;
       let fresh = this.#findContractRequest(requestId);
       if (fresh.state === "denied") {
         throw new Error("Contract request was denied while acceptance was in progress.");
       }
-      fresh.state = "accepted";
-      fresh.contractId = contract.id;
+      fresh.state = "approved";
       delete fresh.accepting;
       fresh.timestamp = this.impl.getChatTimestamp();
       this.impl.storage.chats.put(fresh);
-      await this.#resumeSuspendedAgent(fresh.chatId);
     } catch (error) {
       let fresh = this.#findContractRequest(requestId);
       if (fresh.state === "pending") {
@@ -9121,7 +9302,60 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     if (msg.accepting) {
       throw new Error(`Contract request acceptance is already in progress: ${requestId}`);
     }
+    const proposal = this.impl.workspaceAuthority.query({
+      type: "artifactProposal",
+      id: msg.proposalId as ArtifactProposalId,
+    });
+    if (proposal.type !== "artifactProposal" || !proposal.value ||
+        proposal.value.artifactHash !== msg.artifactHash ||
+        proposal.value.reviewBundleHash !== msg.reviewBundleHash ||
+        proposal.value.reviewComparisonHash !== msg.reviewComparisonHash ||
+        proposal.value.policyHash !== msg.policyHash ||
+        proposal.value.generatorIdentityHash !== msg.generatorIdentityHash ||
+        JSON.stringify(proposal.value.baseline) !== JSON.stringify(msg.baseline)) {
+      throw new Error("Contract request does not match its canonical Artifact Proposal.");
+    }
+    let approval = this.impl.workspaceAuthority.query({
+      type: "artifactApprovalByProposal",
+      proposalId: msg.proposalId as ArtifactProposalId,
+    });
+    if (approval.type !== "artifactApprovalByProposal") {
+      throw new Error("Workspace Authority Artifact Approval query is unavailable.");
+    }
+    if (!approval.value) {
+      const profile = await this.#getClientProfile();
+      const decided = this.impl.workspaceAuthority.execute({
+        type: "recordArtifactApproval",
+        operationId: `contract-rejection:${requestId}`,
+        record: {
+          artifactHash: msg.artifactHash,
+          proposalId: msg.proposalId as ArtifactProposalId,
+          reviewBundleHash: msg.reviewBundleHash,
+          reviewComparisonHash: msg.reviewComparisonHash,
+          policyHash: msg.policyHash,
+          baseline: authorityProposalBaseline(msg.baseline),
+          generatorIdentityHash: msg.generatorIdentityHash,
+          evidence: "complete",
+          decision: "rejected",
+          decidedBy: `${profile.type}:${profile.id}`,
+          lifecycle: "revoked",
+        },
+      });
+      if (decided.type !== "artifactApprovalRecorded") {
+        throw new Error("Workspace Authority did not record the Artifact rejection.");
+      }
+      approval = this.impl.workspaceAuthority.query({
+        type: "artifactApprovalByProposal",
+        proposalId: msg.proposalId as ArtifactProposalId,
+      });
+    }
+    if (approval.type !== "artifactApprovalByProposal" ||
+        !approval.value || approval.value.decision !== "rejected") {
+      throw new Error("Artifact Proposal already has a different decision.");
+    }
     msg.state = "denied";
+    msg.artifactApprovalId = approval.value.id;
+    msg.artifactApprovalEpoch = approval.value.approvalEpoch;
     msg.timestamp = this.impl.getChatTimestamp();
     this.impl.storage.chats.put(msg);
   }
