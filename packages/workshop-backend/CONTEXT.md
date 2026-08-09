@@ -20,6 +20,30 @@ _Avoid_: Task workspace, parallel authority aggregate
 One bounded execution with its own authority identity inside a Workspace, distinct from the Chat history that may reference it.
 _Avoid_: Chat turn, reusable session, standing Consumer
 
+**Effective Workspace Principal**:
+The one Workspace ownership or membership record on whose behalf an Agent Task is dispatched: exactly the owner profile and ownership generation or one member profile and membership generation. It cannot change during that task or through delegation.
+_Avoid_: Agent Service identity, provider identity, Chat participant
+
+**Pre-established Application Scope**:
+An optional Workspace Authority-owned, generation-bound restriction record established by an earlier authority decision before dispatch. It may narrow one Agent Task to a supported application boundary but never supplies application Principals, tenant membership, or authority.
+_Avoid_: Tenant authority, runtime-selected audience, Project, Environment, repository scope
+
+**Task Authority Correlation**:
+The immutable tuple of Agent Task identity/generation, Effective Workspace Principal reference/generation, and optional Pre-established Application Scope reference/generation carried across every Workspace-owned task authority and enforcement-correlation record. Provider Observation Evidence remains task-neutral and is referenced rather than rewritten.
+_Avoid_: Chat ID, request ID, tracing context
+
+**Agent Task Lease**:
+The short, generation-tagged execution interval during which one nonterminal Agent Task may hold a Task Environment, bounded by the task's immutable absolute expiry.
+_Avoid_: Agent Task lifetime, Chat session, Workload Attachment
+
+**Task Checkpoint**:
+A capability-free durable continuation record for one nonterminal Agent Task, bound to its task, lease, Task Environment, and Ratchet generations.
+_Avoid_: Chat authority, stored RPC stub, reusable environment
+
+**Task Delegation**:
+The explicit parent-to-child request that may dispatch one fresh child Agent Task with independently materialized authority no broader than the parent's current effective authority.
+_Avoid_: Ambient inheritance, subroutine call, shared Task Environment
+
 **Task Template**:
 An immutable maximum-authority description for a class of Agent Tasks; approval and dispatch cite one exact version.
 _Avoid_: Agent Task, runtime prompt, mutable policy
