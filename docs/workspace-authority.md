@@ -5,14 +5,14 @@ Status: Accepted architecture gate
 Target branch: `codex/workspace-authority`
 
 This is the normative integrated delivery contract for standing Workspace Authority and bounded Agent
-Task Authority. ADRs 0001–0022 remain the decision record. The explicit scope corrections in
+Task Authority. ADRs 0001–0024 remain the decision record. The explicit scope corrections in
 “Superseded standing-only statements” below control where an older ADR used an unqualified standing-
 only statement. A mechanism selected by the #22 or #23 prototype evidence controls over an earlier
 provisional sequence.
 
 `CONTEXT-MAP.md`, `packages/workshop-backend/CONTEXT.md`, and
 `packages/contractors/CONTEXT.md` are the normative ubiquitous-language glossaries. For extended
-delivery, ADR 0023 and this specification control mechanics and scope over ADRs 0018–0022, then the
+delivery, ADRs 0023–0024 and this specification control mechanics and scope over ADRs 0018–0022, then the
 amended standing ADRs 0001–0017; the glossaries control canonical term meaning. Any remaining
 glossary/specification conflict is a documentation defect that must be reconciled before
 implementation, not permission to choose the broader reading.
@@ -31,8 +31,8 @@ Approval, Binding Resolution, Contract Instance, Binding, enforcement, revocatio
 reconciliation vocabulary. They differ through closed requirement and placement discriminants, not
 parallel stores or resolvers.
 
-The programme is complete only when canonical standing and Agent Task conformance passes, historical
-Contract harnesses remain byte-stable, the one-way compatibility cutover is complete where
+The programme is complete only when canonical standing and Agent Task conformance passes, the one
+current Contract executable format is enforced, the one-way compatibility cutover is complete where
 authorized, unsupported task runtimes remain disabled, and root lint, test, and build pass.
 
 ## Scope and non-goals
@@ -63,7 +63,7 @@ V1 non-goals:
 - runtime adapters beyond the R2 MVP paths selected by #35/#40;
 - a Grant Review Loop that mutates a live task; future proposals always produce a new immutable
   Template Version and affect only fresh dispatch; or
-- rewriting old Contract artifacts, changing harness v1–v7 bytes, or inferring missing historical
+- reinterpreting unsupported pre-launch Contract data under the current harness or inferring missing
   identity/approval evidence.
 
 An optional Pre-established Application Scope is only a prior Workspace-owned restriction through a
@@ -295,15 +295,15 @@ Migration follows `legacy -> backfilling -> readyToCutover -> active`. Before cu
 and transactional deltas are disposable. One local transaction validates the complete digest and
 publishes canonical records. Afterwards, canonical collections are the only authority; legacy APIs and
 Gadget binding maps are projections/compatibility facades, and old writers fail closed. There is no
-permanent dual read/write model and no switch back to legacy semantics. Historical v1–v7 artifact and
-harness identities remain byte-stable and historical ambiguity cannot authorize Project, Workload, or
-Agent Task placement.
+permanent dual read/write model and no switch back to legacy semantics. Contracts use the sole
+current content-addressed executable format from ADR 0024; unsupported pre-launch formats fail closed
+and cannot authorize Project, Workload, or Agent Task placement.
 
 ## Package and interface plan
 
 | Package                            | Review-sized responsibility                                                                                                                                        |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/contractors`             | additive v8 authoring/runtime interface, generic lifecycle membrane and conformance; byte-stable v1–v7                                                             |
+| `packages/contractors`             | one current authoring/runtime interface, generic lifecycle membrane and conformance, exact executable hashes                                                          |
 | `packages/workshop-shared`         | fully doc-commented real RPC/domain types and validators; no hand-written mirrors or unsafe bridge casts                                                           |
 | `packages/workshop-backend`        | one deep authority module, canonical storage/commands/queries, publication/revocation, task adapter, protected-result service/mediator interface, migration facade |
 | `packages/gatekeeper-r2`           | task-neutral authority protocol identity/health/resource/evidence/lifecycle implementation                                                                         |
@@ -321,8 +321,8 @@ The issue DAG, not list order, controls execution. A ticket begins only after ev
 The integrated gate #39 closes before #31 or #34.
 
 1. **Decisions and prototypes:** #21 -> #22 -> #23; #21 -> #24 -> #25; then this #39 gate.
-2. **Independent foundations:** #21 -> #26 -> #27 and #21 -> #28 -> #29. Preserve harness v1–v7
-   identities and extract one in-process Workspace module before canonical cutover.
+2. **Independent foundations:** #21 -> #26 -> #27 and #21 -> #28 -> #29. Use the sole current
+   content-addressed Contract format and extract one in-process Workspace module before cutover.
 3. **Provider/review foundations:** #26 + #29 -> #30; #26 + #29 -> #32.
 4. **Standing proof:** #22 + #23 + #27 + #30 + #39 -> #31; then #31 + #32 -> #33.
 5. **Task records and runtime policy:** #25 + #31 + #33 + #39 -> #34; #25 + #34 -> #35; #35 -> #40.
@@ -342,7 +342,7 @@ failure. The final gate runs root `pnpm lint`, `pnpm test`, and `pnpm build`.
 
 | Proof                           | Required cases                                                                                                                                                                                                                                                        | Owning tickets          |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| artifact identity and v8 ABI    | exact artifact/hash and harness v1–v7 byte identities; v8 authoring ABI/runtime-profile hash; creation metadata excluded; compiler returns candidate+inputs+trace, never approval; host-produced closed immutable generation-aware invocation evidence                | #26                     |
+| artifact identity and authoring ABI | exact current Artifact, authoring declaration, harness, module-set, and runtime-profile hashes; creation metadata excluded; compiler returns candidate+inputs+trace, never approval; host-produced closed immutable generation-aware invocation evidence | #26 |
 | capability lifecycle            | arbitrary supported graph retraction; cancellation, callbacks, streams/iterators, restoration, composition, and cleanup                                                                                                                                               | #27, #31, #36, #37      |
 | reproducible review             | hermetic candidate/verifier double build; content addressing; exact inputs/recipe/toolchain/trace; mismatch, network, shared-state, and approval fabrication fail closed                                                                                              | #32                     |
 | canonical storage/cutover       | state/event atomicity; idempotent operations; stable IDs/indexes; separate Resolution/Instance/Binding; one atomic cutover; no dual authority                                                                                                                         | #28, #29, #31, #38      |
@@ -355,7 +355,7 @@ failure. The final gate runs root `pnpm lint`, `pnpm test`, and `pnpm build`.
 | protected results               | task-neutral provider evidence; exact Workspace wrapper; every participant acks new generation; pause/terminal/revocation block; declassification cannot bypass gates                                                                                                 | #25, #35, #36, #40, #41 |
 | audit/operations                | Authority/Source/Agent/log separation; bounded correlation/no bodies; cancellation records durable/local outcome and never infers it from transport; keyboard-operable review; missing-ack, stale-parallel-work, reconciliation, dead-letter, and cleanup diagnostics | #29, #37, #41           |
 | end-to-end R2                   | canonical standing slice, Development/Workload migration, exact task dispatch, protected release, Ratchet replacement, restart and cleanup recovery                                                                                                                   | #31, #33, #37, #40      |
-| compatibility                   | historical Gadget semantics and artifact identities; #28 rollout guard and bounded telemetry proving no new `ManagerSourceLoopback`/raw-source use; compatibility projection; raw legacy paths unreachable; retirement                                                | #26, #28, #29, #31, #38 |
+| compatibility                   | historical Gadget semantics; one current Contract executable format; #28 rollout guard and bounded telemetry proving no new `ManagerSourceLoopback`/raw-source use; compatibility projection; raw legacy paths unreachable; retirement                                  | #26, #28, #29, #31, #38 |
 | future Template proposals       | Agent Activity is evidence only; review creates a new immutable Template Version/Approval path and never mutates or widens an active task                                                                                                                             | #42                     |
 | external tenant authority       | external Principal/tenant/account/source ownership, cross-tenant isolation, and aggregate protocol are explicit and cannot reinterpret Repository Claims or application scope                                                                                         | #43                     |
 | additional runtime adapters     | one tracer bullet per adapter; complete no-ambient-egress, coverage, stale-generation, invalidation/ack, protected-result, restart, and cleanup proof before enablement                                                                                               | #44                     |
@@ -387,7 +387,7 @@ This table is an explicit normative qualification, not a silent rewrite.
 | ADR 0010 said existing Contract records are extended in place                                                      | Legacy records remain byte/behavior-compatible projections. New canonical Contract Instance and Binding records are separate and become sole authority at one atomic cutover.                                                                             |
 | ADR 0014 exposed standing administration and described Emergency Retraction local-transaction-first                | The same revocable Authority Session gains bounded task commands/queries and never returns raw authority; Emergency Retraction follows ADR 0020's acknowledged enforcement-first commit point.                                                            |
 | ADR 0016's original canonical-first/CAS-first retraction wording                                                   | ADR 0020's acknowledged enforcement-first protocol and Revocation Commit Point control; the later ADR 0016 amendment already records this supersession.                                                                                                   |
-| ADR 0017's ten-step standing rollout                                                                               | The dependency-ordered sequence and conformance matrix above replace that provisional ordering while preserving its one-way cutover and historical compatibility rules.                                                                                   |
+| ADR 0017's ten-step standing rollout                                                                               | The dependency-ordered sequence and conformance matrix above replace that provisional ordering while preserving its one-way cutover and current-only Contract rule.                                                                                       |
 
 ## Decision traceability
 

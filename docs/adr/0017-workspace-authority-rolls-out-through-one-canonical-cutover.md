@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-Existing workspaces store Gatekeeper and Contract records, Gadget bindings, chats, hooks, action logs, and state without the identity, provenance, decision, and Consumer records required by Workspace Authority. The migration must preserve installed capabilities and old Contract artifacts while preventing historical ambiguity from becoming new authority.
+Existing workspaces store Gatekeeper and current-format Contract records, Gadget bindings, chats, hooks, action logs, and state without the identity, provenance, decision, and Consumer records required by Workspace Authority. The migration preserves eligible installed capabilities while removed Contract formats fail closed under ADR 0024; historical ambiguity cannot become new authority.
 
 The workspace Durable Object already has a small synchronous storage migration. Authority backfill can be much larger, may require retries, and must coexist with live legacy mutations. A permanent dual-read or dual-write design would leave two security models indefinitely able to disagree.
 
@@ -23,11 +23,12 @@ Cutover is one local transaction. It verifies record counts, references, unique 
 The migration preserves existing Gadgets, installed capabilities, personal Accounts, action logs, chats, Approval Gates, hooks, state, and retraction behavior. It does not invent identities, actors, evidence, or approvals:
 
 - each existing Gatekeeper record becomes an identity-unverified legacy Source;
-- each live or tombstoned Contract becomes a distinct historical Artifact Approval and Installation Decision;
+- each current-format live or tombstoned Contract becomes a distinct imported Artifact Approval and Installation Decision;
 - each Contract-backed Gadget edge becomes a canonical Binding;
 - each raw Gatekeeper edge becomes a Legacy Compatibility Binding;
-- an unbound historical Contract is retained as `unboundLegacy`;
-- old Contract artifacts remain on their original harness version; harness v8 exposes `context.approval`, while v1–v7 remain readable and executable.
+- an unbound current-format Contract remains explicitly unbound;
+- pre-launch Contract data must already use the sole current executable format or fail closed under
+  ADR 0024; no historical Contract format is reinterpreted or migrated in place.
 
 Legacy personal Gadget flows remain available. Their records cannot seed Project, shared, verified, Development Session, Workload, or Graduation authority until a manager makes the corresponding new-model decisions. Existing build collaborators keep installed capability use, but cannot approve new authority unless the owner separately grants `manageAuthority`; migration never auto-grants that permission.
 
@@ -54,7 +55,7 @@ The Gatekeeper authority protocol is gated independently. R2 is the first provid
 
 ### Review-sized delivery order
 
-1. compatibility characterization, rollout controls, and harness v8;
+1. current Contract characterization and rollout controls;
 2. shared protocols and validators;
 3. authority storage, events, operations, effects, reconciliation, and alarm priority;
 4. shadow backfill, delta replay, validators, and canonical cutover façade;
@@ -67,7 +68,7 @@ The Gatekeeper authority protocol is gated independently. R2 is the first provid
 
 ## Consequences
 
-The rollout is recoverable before cutover and intentionally forward-only afterward. Historical access remains usable without being misrepresented as verified authority. Kernel changes can be reviewed by concern, and each provider or Consumer type must pass its own conformance gate before expansion.
+The rollout is recoverable before cutover and intentionally forward-only afterward. Eligible current-format access remains usable without being misrepresented as verified authority. Kernel changes can be reviewed by concern, and each provider or Consumer type must pass its own conformance gate before expansion.
 
 ## Alternatives considered
 
@@ -82,4 +83,5 @@ The rollout is recoverable before cutover and intentionally forward-only afterwa
 The ten-step standing delivery order above was provisional and is superseded by the exact issue DAG
 and conformance matrix in `docs/workspace-authority.md`. Its migration invariants remain controlling:
 bounded invisible staging, transactional deltas, one canonical cutover, no permanent dual authority,
-byte-stable historical artifacts, and forward-only repair after activation.
+content-addressed current artifacts, and forward-only repair after activation. ADR 0024 supersedes
+historical Contract-format preservation before launch.

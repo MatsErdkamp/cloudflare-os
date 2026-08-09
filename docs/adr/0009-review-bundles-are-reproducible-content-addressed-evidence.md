@@ -13,7 +13,9 @@ The version 1 manifest contains:
 - authenticated `submittedBy` identity/generation, bounded authorship attribution, and origin (`workspaceChat`, `gadget`, `repositoryClaim` plus commit/path, or `import` plus digest); repository claims remain untrusted provenance, and prompts are never retained;
 - exact main-module path and every original authoring module blob;
 - exact Source declaration blob, Source root type, and Source type hash, but no provider Account, resource, credential, or installation identity;
-- a registered build recipe ID/version and all normalized options, including compatibility date, target, platform, module format, externals, public root, and runtime harness version;
+- a registered build recipe identity and all normalized options, including compatibility date,
+  flags, target, platform, module format, externals, public root, and the exact authoring, harness,
+  runtime module-set, and runtime-profile hashes;
 - trusted compiler-environment digest and locked component identities for `@gadgets/contractors`, TypeScript, esbuild/native binary, Workers declarations, runtime, and relevant platform image or package closure;
 - direct dependency requests, a sorted resolved transitive lock graph with registry integrity and package-content hashes, and a deterministic build trace naming the exact package files consumed;
 - the deployment dependency-policy snapshot/digest evaluated during the build;

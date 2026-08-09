@@ -7,7 +7,7 @@
 
 Workspace Authority lives in the existing workspace Durable Object. That object already stores Gadgets, Gatekeeper records, Contract records, tombstones, and Gadget-local binding maps. The authority model adds stable domain identities, immutable policy versions, approval and installation history, generation-bound revocation, verification evidence, retryable external effects, and an append-only event projection.
 
-Typed storage supplies collections, singletons, transactions, and unique or non-unique indexes, but it does not supply foreign keys. Existing numeric workpiece IDs are runtime facet locators rather than durable domain identities. A migration must preserve every existing live Contract and binding without treating legacy display metadata as provider identity or inventing approval evidence that never existed.
+Typed storage supplies collections, singletons, transactions, and unique or non-unique indexes, but it does not supply foreign keys. Existing numeric workpiece IDs are runtime facet locators rather than durable domain identities. A migration may preserve only Contracts already using the sole current executable format and their bindings; removed Contract formats fail closed under ADR 0024. It must not treat legacy display metadata as provider identity or invent approval evidence that never existed.
 
 ## Decision
 
@@ -82,9 +82,13 @@ Consumer identity, Environment, and exact Binding Set assignment are never infer
 
 `bindingResolutions` is immutable. It stores Resolution ID; exact Consumer generation and Binding Set/Requirement versions; Authority Mode; selected Source and origin generations; Verification Receipt when required; Artifact Approval epoch; Installation Decision; Contract Instance ID; Binding ID and expected Binding generation; evaluator policy hash; and creation sequence.
 
-`artifactProposals` stores Proposal ID, Artifact hash, runtime-harness version, public-types hash, canonical Review Bundle manifest hash and R2 reference, Review Comparison hash/reference where present, baseline Artifact and policy hashes, proposal state, proposer, operation, and evidence publication state. Failed staging and corrupt/missing evidence are explicit states.
+`artifactProposals` stores Proposal ID, Artifact hash, runtime-profile hash, public-types hash,
+canonical Review Bundle manifest hash and R2 reference, Review Comparison hash/reference where
+present, baseline Artifact and policy hashes, proposal state, proposer, operation, and evidence
+publication state. Failed staging and corrupt/missing evidence are explicit states. ADR 0024 removes
+the numeric Contract harness selector.
 
-`artifactApprovals` is immutable and keyed by `(Artifact hash, approval epoch)`. It stores decision status, exact proposal and evidence hashes, policy hash, Authority Manager and grant generation, decision sequence, supersession/revocation, and legacy provenance flags. Approval never installs anything.
+`artifactApprovals` is immutable and keyed by `(Artifact hash, approval epoch)`. It stores decision status, exact proposal and evidence hashes, policy hash, Authority Manager and grant generation, decision sequence, and supersession/revocation. Approval never installs anything.
 
 `installationProposals` stores Proposal ID, exact placement preconditions, selected Source and generations, Approval epoch, target Consumer/Environment/Requirement versions, intended binding name and expected generation, Contract configuration hash, proposer, idempotency key, revision, and lifecycle. `installationDecisions` is immutable and stores Decision ID, proposal digest, decision, manager/grant generation, decision sequence, and denial or expiry reason. `installationAttempts` stores attempt ID, Decision ID, operation, state, expected placement revisions/generations, created Contract Instance or failure, retry lineage, and timestamps.
 
@@ -115,11 +119,11 @@ Before cutover, rollback discards only staged authority rows and deltas and retu
 
 Backfill maps every Gadget to a Gadget Consumer. Every Gatekeeper becomes an identity-unverified legacy Source; its vendor, creation specification, resource URL, and title remain attributed display/provenance only. It does not become a Personal Source Grant and no Provider Account or Resource Identity is fabricated. Existing raw Gadget-to-Gatekeeper edges become tagged legacy compatibility bindings.
 
-Every live or tombstoned Contract receives its own legacy Artifact Approval epoch and Installation Decision, even when artifacts match. Missing Review Bundle, Review Comparison, baseline, policy, proposal, or approver provenance is represented explicitly and can never satisfy a policy that requires it. A known legacy `approvedBy` value remains opaque attribution. An unbound Contract becomes `unboundLegacy`; migration never invents placement. Existing Action Log and chat history are not rewritten as Authority Events.
+Every current-format live or tombstoned Contract receives its own imported Artifact Approval epoch and Installation Decision, even when artifacts match. Missing Review Bundle, Review Comparison, baseline, policy, proposal, or approver provenance is represented explicitly and can never satisfy a policy that requires it. A known `approvedBy` value remains opaque attribution. An unbound current Contract remains explicitly unbound; migration never invents placement. Removed-format records are retired or reset before cutover and are never reinterpreted. Existing Action Log and chat history are not rewritten as Authority Events.
 
 ## Consequences
 
-Authority state has one transactional owner, exact revocation epochs, durable external recovery, and queryable dependent indexes. Audit facts cannot get ahead of state, and legacy records remain usable without being promoted into evidence or identity they never possessed.
+Authority state has one transactional owner, exact revocation epochs, durable external recovery, and queryable dependent indexes. Audit facts cannot get ahead of state, and preserved current-format records remain usable without being promoted into evidence or identity they never possessed.
 
 The schema is larger and all writes must use the storage module. Cutover requires shadow staging and delta capture, but that complexity is temporary and avoids permanent dual-write or dual-read behavior. Rollback after cutover is intentionally forward-only because restoring legacy nested bindings would lose authority history and generation semantics.
 

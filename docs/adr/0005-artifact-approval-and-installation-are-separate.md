@@ -16,7 +16,7 @@ Replacement and rollback create new Contract Instances and atomically redirect t
 - A Development Placement Template is the prior human decision authorizing a bounded family of exact per-Session placements. Each materialized Installation Decision cites that template, its Development Session Grant and manager generation, and the new Consumer; the system does not make a new selection.
 - Changing the Source or Consumer is a new installation even when the Artifact hash is unchanged.
 - Rollback installs a previously approved Artifact as a new instance and requires a fresh placement decision.
-- Runtime Approval Gates move from `context.policy.approval` to `context.approval` in a new harness version; old hashed Artifacts retain their historical interface.
+- The sole current authoring interface exposes Runtime Approval Gates at `context.approval`.
 
 ## Extended Authority amendment (ADR 0023)
 
@@ -26,3 +26,8 @@ Template Approval and per-task Task Dispatch Decision through the same Binding R
 resource-owner gates are separate conjunctive release conditions. All may release authority already
 present in the installed Contract/current task envelope, but none may create, broaden, extend, or
 restore it. Replacement publication and retraction follow ADRs 0019 and 0020.
+
+## Current-format amendment (ADR 0024)
+
+The historical-harness compatibility consequence is superseded. Before launch, Contracts have one
+current content-addressed executable format and no numeric harness selector.
