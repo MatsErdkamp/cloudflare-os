@@ -1,0 +1,28 @@
+{
+  "name": "@gadgets/contract-review-builder",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node-runner": {
+      "types": "./dist/node-runner.d.ts",
+      "import": "./dist/node-runner.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "types:check": "tsc --noEmit",
+    "test": "pnpm run build && tsc --noEmit -p tsconfig.test.json && vitest run"
+  },
+  "dependencies": {
+    "@gadgets/contractors": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

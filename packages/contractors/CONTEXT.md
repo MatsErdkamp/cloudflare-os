@@ -21,7 +21,7 @@ A bounded record from one trusted isolated build identifying its exact inputs, r
 _Avoid_: Artifact Approval, CI log
 
 **Review Comparison**:
-A content-addressed, versioned presentation of exact and derived differences between a Contract Review Bundle and its declared baseline. It is mandatory review evidence but never executable authority.
+A content-addressed presentation of exact and derived differences between a Contract Review Bundle and its declared baseline. The sole current representation has no numeric format selector. It is mandatory review evidence but never executable authority.
 _Avoid_: Permission summary, approval
 
 **Artifact Approval**:

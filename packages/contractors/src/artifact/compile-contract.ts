@@ -2,7 +2,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, readlinkSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 
 import { build, type Plugin } from "esbuild";
 import ts from "typescript";
@@ -386,6 +386,38 @@ interface CompiledContractExecutable {
     readonly version: string;
     readonly integrity?: string;
   }>;
+  readonly consumedPackageFiles: ReadonlyArray<{
+    readonly packageName: string;
+    readonly packageVersion: string;
+    readonly path: string;
+    readonly hash: string;
+  }>;
+}
+
+function packageFileIdentity(fileName: string):
+    CompiledContractExecutable["consumedPackageFiles"][number] | undefined {
+  let current = path.dirname(fileName);
+  while (current !== path.dirname(current)) {
+    const manifestPath = path.join(current, "package.json");
+    if (existsSync(manifestPath)) {
+      try {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as
+          {name?: unknown; version?: unknown};
+        if (typeof manifest.name === "string" && typeof manifest.version === "string") {
+          return {
+            packageName: manifest.name,
+            packageVersion: manifest.version,
+            path: path.relative(current, fileName).replaceAll("\\", "/"),
+            hash: `sha256:${createHash("sha256").update(readFileSync(fileName)).digest("hex")}`,
+          };
+        }
+      } catch {
+        return undefined;
+      }
+    }
+    current = path.dirname(current);
+  }
+  return undefined;
 }
 
 async function compileContractExecutable(
@@ -464,12 +496,15 @@ async function compileContractExecutable(
   }
 
   let bundled: string;
+  let consumedPackageFiles: CompiledContractExecutable["consumedPackageFiles"] = [];
   try {
     const result = await build({
       stdin: undefined,
+      absWorkingDir: PACKAGE_ROOT,
       entryPoints: [input.mainModule],
       bundle: true,
       write: false,
+      metafile: true,
       format: "esm",
       platform: "neutral",
       target: "es2022",
@@ -482,6 +517,19 @@ async function compileContractExecutable(
       )],
     });
     bundled = result.outputFiles[0]?.text ?? "";
+    consumedPackageFiles = Object.keys(result.metafile?.inputs ?? {})
+      .map(inputPath => {
+        try {
+          return packageFileIdentity(realpathSync(path.resolve(PACKAGE_ROOT, inputPath)));
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+      .toSorted((left, right) =>
+        `${left.packageName}@${left.packageVersion}/${left.path}`.localeCompare(
+          `${right.packageName}@${right.packageVersion}/${right.path}`,
+        ));
   } catch (error) {
     throw new ContractCompilationError("BUNDLE_FAILED", error instanceof Error ? error.message : String(error));
   }
@@ -511,6 +559,7 @@ async function compileContractExecutable(
     sourceTypeHash,
     sourceRootType: input.sourceRootType,
     dependencies,
+    consumedPackageFiles,
   };
 }
 
@@ -600,11 +649,17 @@ export async function compileContract(
     path: `${dependency.name}@${dependency.version}`,
     hash: dependency.integrity ?? "",
   }));
+  const consumedDependencyEntries = executable.consumedPackageFiles.map(file => ({
+    kind: "dependency" as const,
+    path: `${file.packageName}@${file.packageVersion}/${file.path}`,
+    hash: file.hash,
+  }));
   const entries = Object.freeze([
     { kind: "authoringAbi" as const, path: "@gadgets/contractors/authoring", hash: authoringAbi.declarationHash },
     { kind: "sourceTypes" as const, path: "contract:source", hash: await textIdentityHash(input.sourceTypes) },
     ...sourceEntries,
     ...dependencyEntries,
+    ...consumedDependencyEntries,
     { kind: "publicTypes" as const, path: "contract.d.ts", hash: await textIdentityHash(executable.publicTypes) },
     { kind: "bundle" as const, path: "contract.js", hash: await textIdentityHash(executable.modules["contract.js"] ?? "") },
     { kind: "runtimeHarness" as const, path: "contract-harness", hash: runtimeProfile.runtimeHarnessHash },

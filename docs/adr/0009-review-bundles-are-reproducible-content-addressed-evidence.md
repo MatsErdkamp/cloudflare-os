@@ -4,11 +4,11 @@ The Contract Artifact hash remains the normative executable authority. A Contrac
 
 ## Canonical bundle format
 
-`contract-review-bundle/v1` is canonical UTF-8 JSON encoded with the existing `canonicalContractJson` rules: object keys sort lexicographically, absent optional fields are omitted, arrays use schema-defined order, numbers are safe integers, timestamps are canonical UTC RFC 3339, and metadata strings are NFC. Authoring and generated text are stored as exact UTF-8 blobs and are never Unicode-, newline-, or whitespace-normalized. Module paths are NFC POSIX-relative paths with no empty, dot, parent, absolute, backslash, control-character, or post-normalization duplicate segments.
+The sole current Contract Review Bundle is canonical UTF-8 JSON encoded with the existing `canonicalContractJson` rules: object keys sort lexicographically, absent optional fields are omitted, arrays use schema-defined order, numbers are safe integers, timestamps are canonical UTC RFC 3339, and metadata strings are NFC. It carries no numeric format selector. Authoring and generated text are stored as exact UTF-8 blobs and are never Unicode-, newline-, or whitespace-normalized. Module paths are NFC POSIX-relative paths with no empty, dot, parent, absolute, backslash, control-character, or post-normalization duplicate segments.
 
 Every blob reference is `{ hash: "sha256:<lowercase-hex>", bytes, mediaType }`. The Review Bundle hash is SHA-256 of the canonical manifest bytes and is not stored inside the hashed manifest. Volatile transport metadata and R2 ETags never participate.
 
-The version 1 manifest contains:
+The current manifest contains:
 
 - authenticated `submittedBy` identity/generation, bounded authorship attribution, and origin (`workspaceChat`, `gadget`, `repositoryClaim` plus commit/path, or `import` plus digest); repository claims remain untrusted provenance, and prompts are never retained;
 - exact main-module path and every original authoring module blob;
@@ -29,13 +29,15 @@ Created time, proposal ID, reviewer, decision, and installation fields live in W
 
 The candidate compiler and verifier run the same registered recipe in separate fresh, network-disabled trusted sandboxes. Inputs come only from manifest blobs and the content-addressed dependency/toolchain store. Each Build Attestation records input-set digest, recipe/toolchain digests, Artifact hash, generated public-type hash, Source-type hash, dependency-lock digest, build-trace digest, and bounded producer identity; timestamps and diagnostic logs are not build inputs.
 
+The builder is an authority-neutral offline or isolated build service, not code running inside the Workspace aggregate. It may publish only immutable blobs, the reproduced Bundle, the Comparison, and their content identities. The Workshop proposal path accepts those identities rather than executable JSON in chat, reloads and validates the immutable records, and then records a distinct Artifact Proposal. Acceptance reloads the same evidence again before it records an Artifact Approval; installation is a subsequent authority operation. A chat message may retain bounded presentation snapshots, but they are never an Artifact or evidence store.
+
 The verifier reconstructs the candidate from the original modules rather than trusting submitted emitted code. `reproducible` requires exact equality of every Artifact authority field after canonical encoding, not merely equivalent JavaScript or the same public interface. It also requires identical dependency lock and build trace. The second build's non-authority creation time is ignored.
 
 Malformed manifests, missing/hash-mismatched blobs, undeclared inputs, network attempts, policy failures, and non-reproducible output never enter the authoritative Review Bundle prefix and cannot create an approvable Artifact Proposal. Workspace Authority may retain a requester-visible failed-attempt record containing at most 100 bounded diagnostic codes/locations and 64 KiB for seven days; it is not review evidence or an Authority Event. Staged objects expire after 24 hours.
 
 ## Review Comparison
 
-`contract-review-comparison/v1` is a separate canonical, content-addressed manifest generated deterministically from the exact baseline and candidate bundle hashes. For a first approval, the baseline is an empty bundle and every item is an addition. Its versioned sections cover:
+The sole current Review Comparison is a separate canonical, content-addressed manifest generated deterministically from the exact baseline and candidate bundle hashes. It carries no numeric format selector. For a first approval, the baseline is empty and every item is an addition. Its sections cover:
 
 - original modules: add/delete/modify plus exact text patches; rename detection is marked heuristic;
 - emitted executable modules and Artifact authority fields;
@@ -44,9 +46,9 @@ Malformed manifests, missing/hash-mismatched blobs, undeclared inputs, network a
 - compiler, toolchain, recipe, compatibility date, runtime harness, and governance-policy changes;
 - reproducibility attestations and origin/authorship changes.
 
-Every section retains old/new blob or field hashes, so truncating a rendered patch never hides that exact content changed. Semantic classifications and risk summaries are informational, explicitly generator-versioned, and cannot replace full source, emitted code, or declarations. A generator change produces a new comparison hash even for the same bundles.
+Every section retains old/new blob or field hashes, so truncating a rendered patch never hides that exact content changed. Semantic classifications and risk summaries are informational, explicitly pinned to a content-addressed generator identity, and cannot replace full source, emitted code, or declarations. A generator change produces a new comparison hash even for the same bundles.
 
-Artifact Approval records exact Artifact hash, Review Bundle hash, Review Comparison hash, baseline approval/bundle, and generator version. The comparison proves what review aid was shown; only the Artifact hash is runtime authority, and the bundle remains the underlying provenance evidence.
+Artifact Approval records the exact Artifact hash, Review Bundle hash, Review Comparison hash, baseline approval/bundle, and generator identity hash. The comparison proves what review aid was shown; only the Artifact hash is runtime authority, and the bundle remains the underlying provenance evidence.
 
 ## Limits and redaction
 
@@ -87,6 +89,6 @@ Workspace records hold explicit reference IDs for proposals, approvals, retained
 ## Consequences
 
 - `compileContract` evolves to return a candidate plus exact build inputs; only the trusted verifier finalizes a Review Bundle.
-- Artifact storage remains byte- and hash-compatible while proposal/approval paths gain bundle and comparison references.
+- The pre-launch historical Artifact and evidence formats are unsupported rather than reinterpreted; only the sole current content-addressed records may enter a new proposal or approval.
 - The review UI can present high-signal diffs while always linking back to exact immutable evidence.
 - Persistence and migration must distinguish verified new bundles from legacy approvals whose original source/build provenance is unknown.
