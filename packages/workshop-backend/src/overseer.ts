@@ -242,7 +242,7 @@ type GatekeeperRecord = {
   blueprintAnnotation?: BlueprintBindingAnnotation;
 };
 
-// One installed Contract instance. The instance is itself the Consumer binding.
+// Legacy combined Contract row retained as migration input and runtime locator until retirement.
 type ContractRecord = ContractorsContractRecord<WorkpieceId> & {
   installationRequestId?: string;
 };
@@ -1446,6 +1446,29 @@ class OverseerImpl implements AgentHooks {
       putGadget: gadget => this.storage.gadgets.put(gadget),
       hasContract: id => this.storage.contracts.get(id) !== undefined,
       hasGatekeeper: id => this.storage.gatekeepers.get(id) !== undefined,
+      getContract: id => this.storage.contracts.get(id),
+      listContracts: () => this.storage.contracts.list(),
+      getContractTombstone: id => this.storage.contractTombstones.get(id),
+      listContractTombstones: () => this.storage.contractTombstones.list(),
+      retractContract: id => {
+        const contract = this.storage.contracts.get(id);
+        if (!contract) return [];
+        const consumers: WorkpieceId[] = [];
+        for (const gadget of Array.from(this.storage.gadgets.list())) {
+          let changed = false;
+          for (const [name, edge] of Object.entries(gadget.bindings)) {
+            if (edge.target !== id) continue;
+            delete gadget.bindings[name];
+            changed = true;
+          }
+          if (!changed) continue;
+          this.storage.gadgets.put(gadget);
+          consumers.push(gadget.id);
+        }
+        this.storage.contracts.delete(id);
+        this.storage.contractTombstones.put({...contract, deletedAt: new Date()});
+        return consumers;
+      },
       bumpConsumers: ids => this.bumpVersion([...ids]),
     });
     this.workspaceAuthority = authorityModule.authority;
@@ -2869,7 +2892,6 @@ class OverseerImpl implements AgentHooks {
 
     // Enforcement closes and acknowledges before any canonical edge or instance is retracted.
     await this.invalidateContractEndpoint(contract);
-
     for (let hook of Array.from(this.storage.boundHooks.list())) {
       if (hook.contractId !== contractId) continue;
       if (hook.enabled) {
@@ -2909,22 +2931,10 @@ class OverseerImpl implements AgentHooks {
       }
     }
 
-    for (let gadget of Array.from(this.storage.gadgets.list())) {
-      let changed = false;
-      for (let [name, edge] of Object.entries(gadget.bindings)) {
-        if (edge.target === contractId) {
-          delete gadget.bindings[name];
-          changed = true;
-        }
-      }
-      if (changed) {
-        this.storage.gadgets.put(gadget);
-        this.bumpVersion([gadget.id]);
-      }
-    }
-
-    this.storage.contracts.delete(contractId);
-    this.storage.contractTombstones.put({...contract, deletedAt: new Date()});
+    // Canonical retraction, legacy edge removal, Contract deletion, and the terminal legacy row
+    // commit in one storage transaction. A crash before it leaves the durable endpoint invalidated;
+    // a crash after it leaves a complete replayable terminal state.
+    this.legacyWorkspaceAuthority.retractContract(contractId);
     this.ctx.facets.delete(`contract${contractId}`);
   }
 

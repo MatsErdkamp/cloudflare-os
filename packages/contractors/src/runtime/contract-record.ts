@@ -1,4 +1,4 @@
-/** Host-neutral record for one installed Contract instance and Consumer binding. */
+/** Legacy host record that predates canonical separation of Contract Instance and Binding. */
 export interface ContractRecord<WorkpieceId = number> {
   readonly id: WorkpieceId;
   readonly artifactHash: string;
