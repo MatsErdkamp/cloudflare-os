@@ -88,9 +88,9 @@ The decision transaction persists exact intent and Effect. The adapter prepares 
 
 ### Activate or replace
 
-Workspace Authority verifies current Source/receipt/Approval eligibility, then uses one transaction to compare-and-swap the expected `(Consumer, binding name, Binding generation)` to the prepared instance. The transaction increments the Binding and environment generations, records Resolution and lineage, changes readiness, creates predecessor cleanup Effects, and appends contiguous events. A stale CAS activates nothing; the prepared instance becomes obsolete and is cleaned under the same Operation.
+Workspace Authority verifies current Source/receipt/Approval eligibility and prepares the replacement endpoint off-binding. As refined by ADR 0020, it then persists an Invalidation Intent, invalidates and obtains acknowledgement from the predecessor Binding Enforcement Endpoint, and only afterward uses one transaction to compare-and-swap the expected `(Consumer, binding name, Binding generation)` to the prepared instance. The transaction increments the Binding and environment generations, records Resolution and lineage, changes readiness, creates predecessor cleanup Effects, and appends contiguous events. The exact replacement is freshly acknowledged and canonically revalidated before publication. A stale CAS activates nothing; the prepared instance becomes obsolete and is cleaned under the same Operation. The older canonical-CAS-first wording in this ADR is superseded by ADR 0020.
 
-For a multi-binding Development Session or graduation target, every required Binding publishes in one Consumer transaction. Optional ready Bindings may publish in that transaction; optional unavailable Bindings remain explicit diagnostics. A replacement being prepared does not disturb an eligible current Binding.
+For a multi-binding Development Session or graduation target, every required predecessor invalidation acknowledges before every required Binding publishes in one Consumer transaction. Optional ready Bindings may publish in that transaction; optional unavailable Bindings remain explicit diagnostics. A replacement being prepared does not disturb an eligible current Binding before its durable Invalidation Intent begins.
 
 ### Suspend and reactivate
 
@@ -98,7 +98,7 @@ A recoverable positive failure such as `attentionRequired` commits suspension an
 
 ### Retract or retire
 
-A terminal cause increments the invalidating generation, makes every dependent bridge fail closed, retracts canonical Bindings/instances, preserves tombstones and cleanup responsibility, and appends events in one local transaction. Hook disable, provider deletion, credential removal, and remote cleanup follow as Effects. Their failure cannot restore local authority.
+A terminal cause follows ADR 0020's enforcement-first, intent-rooted sequence. Workspace Authority persists the exact Invalidation Intent, makes every dependent Binding Enforcement Endpoint fail closed, and obtains complete invalidation acknowledgement before one local transaction increments the invalidating generation, retracts canonical Bindings/instances, preserves tombstones and cleanup responsibility, and appends events. The previous local-transaction-first ordering in this ADR is superseded. Hook disable, provider deletion, credential removal, and remote cleanup follow as Effects. Their failure cannot restore local authority.
 
 ### Rollback and graduation
 
@@ -133,14 +133,14 @@ Local expiry, invalidation, suspension, and Retraction are not retryable provide
 
 Security-relevant facts are not hidden behind generic TTL caches:
 
-| Fact | Canonical owner and invalidation |
-| --- | --- |
-| Source eligibility | Computed in the workspace transaction from exact lifecycle, origin, Account/grant/Source generations, health evidence, mode, Consumer, and receipt; never stored as a mutable boolean. An in-memory candidate view may be reused only under an exact dependency digest. |
-| Credential Health | Latest generation-bound Gatekeeper observation stored by Workspace Authority with report sequence, `observedAt`, and `validUntil`. A stale or mismatched report is ignored. |
-| Verification Receipt | Immutable workspace record indexed by its complete verifier/Source/resource/policy/generation tuple and explicit expiry/invalidation. |
-| Artifact Approval | Canonical local Approval epoch and evidence hashes; no cache is needed for authority decisions. |
-| Consumer authentication | A transient Development Session or Workload Attachment generation snapshot, never a shared or durable authentication cache. |
-| Access JWKS | Adapter-owned per issuer, bounded by response freshness and a ten-minute ceiling; one refresh on unknown `kid`, then fail closed. |
+| Fact                    | Canonical owner and invalidation                                                                                                                                                                                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source eligibility      | Computed in the workspace transaction from exact lifecycle, origin, Account/grant/Source generations, health evidence, mode, Consumer, and receipt; never stored as a mutable boolean. An in-memory candidate view may be reused only under an exact dependency digest. |
+| Credential Health       | Latest generation-bound Gatekeeper observation stored by Workspace Authority with report sequence, `observedAt`, and `validUntil`. A stale or mismatched report is ignored.                                                                                             |
+| Verification Receipt    | Immutable workspace record indexed by its complete verifier/Source/resource/policy/generation tuple and explicit expiry/invalidation.                                                                                                                                   |
+| Artifact Approval       | Canonical local Approval epoch and evidence hashes; no cache is needed for authority decisions.                                                                                                                                                                         |
+| Consumer authentication | A transient Development Session or Workload Attachment generation snapshot, never a shared or durable authentication cache.                                                                                                                                             |
+| Access JWKS             | Adapter-owned per issuer, bounded by response freshness and a ten-minute ceiling; one refresh on unknown `kid`, then fail closed.                                                                                                                                       |
 
 For version 1, a healthy Gatekeeper report used by Project authority is valid for at most 15 minutes. Workspace Authority schedules refresh before `validUntil`. When refresh is unavailable or indeterminate, the health fact becomes `unknown` at that persisted deadline:
 
