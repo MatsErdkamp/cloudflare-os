@@ -122,3 +122,14 @@ Every live or tombstoned Contract receives its own legacy Artifact Approval epoc
 Authority state has one transactional owner, exact revocation epochs, durable external recovery, and queryable dependent indexes. Audit facts cannot get ahead of state, and legacy records remain usable without being promoted into evidence or identity they never possessed.
 
 The schema is larger and all writes must use the storage module. Cutover requires shadow staging and delta capture, but that complexity is temporary and avoids permanent dual-write or dual-read behavior. Rollback after cutover is intentionally forward-only because restoring legacy nested bindings would lose authority history and generation semantics.
+
+## Extended Authority amendment (ADR 0023)
+
+The instruction to extend the existing `contracts` collection in place is superseded. Expand adds
+canonical Artifact Approval, Installation Decision, Task Dispatch Decision, discriminated Binding
+Resolution, Contract Instance, Binding, Runtime Approval, Template/task/environment/Ratchet, event,
+and Effect records without adding task authority fields to legacy `ContractRecord`. Contract Instance
+and Binding remain separate. Any duplicated binding name, mode, placement, or task field on legacy
+records is a compatibility projection, never another authoritative read/write model. Agent Task is the
+task-scoped Consumer discriminator and has no Environment Binding Set. The one atomic cutover makes
+the new collections sole authority and Gadget maps become projections.

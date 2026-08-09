@@ -88,3 +88,11 @@ Auto-provisioned first-party Gatekeepers such as R2 may establish stable identit
 - Gatekeeper conformance tests must prove stable identity across reconnect, mismatch refusal, out-of-order callback rejection, generation invalidation of live sessions, idempotent cleanup, bounded results, and no raw-capability escape.
 - Existing Gatekeepers can migrate independently because protocol support is explicit and legacy behavior remains isolated.
 - Persistence and reconciliation can reason about Account, Source, consent, health, and verification without inspecting credentials or vendor-specific verifier methods.
+
+## Extended Authority amendment (ADR 0023)
+
+“Local-first” terminal invalidation is refined by ADR 0020. Workspace Authority first persists the
+exact Invalidation Intent, then invalidates and obtains acknowledgement from every participating
+Binding Enforcement Endpoint and release gate. Only then does the Revocation Commit Point transaction
+terminalize canonical Bindings/instances and root provider cleanup. Gatekeeper cleanup and callbacks
+remain later task-neutral Effects and can never restore the invalidated graph.

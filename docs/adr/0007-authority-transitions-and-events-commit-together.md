@@ -56,3 +56,12 @@ Legacy migration records one baseline event containing the migrated schema versi
 - External workflows need durable attempt records and idempotency before their side effects run.
 - Event payload types and exported query APIs require exhaustive unions, size validation, and public API documentation.
 - Persistence design must index sequences, subjects, actors, operations, and unresolved external attempts without introducing a second authority source of truth.
+
+## Extended Authority amendment (ADR 0023)
+
+The same atomic event rule covers Template Approval lifecycle, Task Dispatch Decisions, Agent Task
+lifecycle, Task Environment and Ratchet generations, protected-result/declassification decisions, and
+task cleanup. New evidence uses four distinct families: Authority Events, task-neutral Source Activity,
+task-correlated Agent Activity, and structured operational logs. Historical Source Action Log records
+remain compatible evidence and are not rewritten; “Source Action Log” is not the canonical name for
+new provider activity records.

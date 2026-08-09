@@ -129,3 +129,10 @@ Session creation, Grant assignment/revocation, lease renewal, expiry, explicit d
 Local development gets a concrete login/dev/status/disconnect experience, fast reconnect, strong TypeScript names, and bounded leases. Workspace Authority retains every authority choice and can revoke all attachments synchronously through generations.
 
 Implementation requires a CLI device-login flow, a small Development API seam, generation-checking Contract bridges, an OS-credential-store adapter, a transparent local Cap'n Web bridge, and alarm-driven lease cleanup. The first slice can implement only the R2 requirement while preserving the same interface and state machine.
+
+## Extended Authority amendment (ADR 0023)
+
+Lease expiry or revocation is externally complete only through ADR 0020's intent-rooted,
+enforcement-first sequence. Every Session endpoint acknowledges invalidation before the canonical
+terminal Binding/environment generation commits. Alarm and provider cleanup may lag but cannot extend
+the persisted deadline or restore a stale bridge.

@@ -16,3 +16,10 @@ Credential expiry is recoverable availability loss: it suspends affected Sources
 - Reauthentication as a different provider identity creates a new Account; existing Sources never silently retarget.
 - Source eligibility is computed from lifecycle, Account health, consent generation, deployment policy, and any Consumer-specific verification rather than stored as a mutable boolean.
 - Local revocation wins even when provider cleanup or cross-Durable-Object notification fails.
+
+## Extended Authority amendment (ADR 0023)
+
+“Local revocation wins” uses ADR 0020's enforcement-first sequence: persist exact invalidation intent,
+invalidate and acknowledge every participating Binding Enforcement Endpoint and release gate, commit
+the canonical terminal generation at the Revocation Commit Point, then run provider cleanup Effects.
+Cross-Durable-Object/provider failure cannot restore locally invalidated authority.

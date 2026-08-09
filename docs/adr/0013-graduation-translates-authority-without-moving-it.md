@@ -139,3 +139,17 @@ Graduation Lineage records source Gadget/binding/Contract IDs, legacy provenance
 Graduation can be resumed after crashes and can truthfully explain exact equivalence, deliberate deviations, and blockers. It preserves the live Gadget while producing independently governed Project Consumers and fresh capabilities.
 
 Implementation must add immutable Plan/Item/Lineage records, split Contract preparation from Binding publication, materialize Development Placement Templates, activate a target in one local transaction, and expose explicit recovery/cleanup state. No step may use the existing immediate create-and-bind helper as an approximation.
+
+## Extended Authority amendment (ADR 0023)
+
+References to Source Action Logs mean preserved historical provider activity. New provider evidence is
+Source Activity and remains distinct from Authority Events, Agent Activity, and operational logs.
+Graduation remains a standing-only translation and cannot seed an Agent Task, Task Template, or Task
+Dispatch Decision without their independent current approvals.
+
+Rollback replacement ordering is also refined by ADR 0020: prepare and acknowledge the exact fresh
+replacement, persist Invalidation Intent, invalidate and acknowledge the predecessor, then atomically
+commit the redirect and predecessor terminal generation at the Revocation Commit Point. Only after
+canonical revalidation and fresh acknowledgement may the replacement publish. A crash after old-
+generation invalidation leaves safe over-revocation, never an active replacement beside a still-live
+predecessor; reconciliation resumes the same intent and cleanup.

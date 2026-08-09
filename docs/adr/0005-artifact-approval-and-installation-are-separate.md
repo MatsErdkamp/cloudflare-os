@@ -17,3 +17,12 @@ Replacement and rollback create new Contract Instances and atomically redirect t
 - Changing the Source or Consumer is a new installation even when the Artifact hash is unchanged.
 - Rollback installs a previously approved Artifact as a new instance and requires a fresh placement decision.
 - Runtime Approval Gates move from `context.policy.approval` to `context.approval` in a new harness version; old hashed Artifacts retain their historical interface.
+
+## Extended Authority amendment (ADR 0023)
+
+Installation Decision is the standing-placement decision. A task instead uses a distinct Task
+Template Approval and per-task Task Dispatch Decision through the same Binding Resolution model.
+“Runtime Approval Gate” is now the distinct Runtime Approval Request/Decision pair; organization and
+resource-owner gates are separate conjunctive release conditions. All may release authority already
+present in the installed Contract/current task envelope, but none may create, broaden, extend, or
+restore it. Replacement publication and retraction follow ADRs 0019 and 0020.

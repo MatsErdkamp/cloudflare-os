@@ -16,3 +16,10 @@ Projects, Environments, Development Sessions, and Workloads use stable or leased
 - An authenticated provider subject maps to at most one active Workload within a workspace, avoiding ambiguous authority resolution.
 - Project and Environment names are mutable labels. Identity equality and bindings use their opaque IDs, and retired IDs are never reused.
 - Repository configuration can propose project, environment, workload, ref, and path claims, but Workspace Authority establishes every relationship that can convey authority.
+
+## Extended Authority amendment (ADR 0023)
+
+The Consumer list above describes standing Consumers. One Agent Task may additionally act as a
+task-scoped Consumer for its own lifetime. It has no Environment Binding Set or standing identity; its
+Task Binding Requirements and Task Dispatch Decision use the same canonical Binding Resolution model.
+Project remains cross-repository software scope inside the Workspace, never the authority aggregate.

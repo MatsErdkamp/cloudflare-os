@@ -76,3 +76,10 @@ The rollout is recoverable before cutover and intentionally forward-only afterwa
 - Automatically granting authority management to builders was rejected because build and authority roles are orthogonal.
 - Rewriting old artifacts or inferring provider identities was rejected because it fabricates provenance.
 - Enabling every provider or shipping workload attachment before the development slice was rejected because it broadens the trust boundary before the end-to-end model is proven.
+
+## Extended Authority amendment (ADR 0023)
+
+The ten-step standing delivery order above was provisional and is superseded by the exact issue DAG
+and conformance matrix in `docs/workspace-authority.md`. Its migration invariants remain controlling:
+bounded invisible staging, transactional deltas, one canonical cutover, no permanent dual authority,
+byte-stable historical artifacts, and forward-only repair after activation.

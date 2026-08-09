@@ -41,3 +41,11 @@ This decision does not select a Binding enforcement topology, define the externa
 - Standing and task placement use one Resolution model with explicit discriminated references rather than parallel resolvers.
 - Provider observations stay task-neutral; Workspace/task enforcement adds Consumer, task, environment, invocation, generation, and Trust Ratchet correlation.
 - A runtime unsupported by the eventual enforcement design cannot host an Agent Task.
+
+## Resolution of reserved decisions (ADR 0023)
+
+The reserved mechanisms are now resolved: ADR 0019 selects the materialized generation-acknowledged
+Contract Instance Facet; ADR 0020 selects acknowledged enforcement-first revocation; ADR 0021 defines
+deadline/lease/continuation/child/terminal task lifecycle; ADR 0022 defines Template governance,
+dispatch, Ratchet, protected release, and evidence separation. The integrated delivery and conformance
+contract is `docs/workspace-authority.md`.

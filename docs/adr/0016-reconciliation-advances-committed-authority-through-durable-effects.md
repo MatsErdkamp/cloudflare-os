@@ -224,3 +224,14 @@ The implementation is not ready to cut over until deterministic tests cover:
 Reconciliation is deterministic, crash-safe, and auditable without becoming a second authority system. Local fail-closed behavior is synchronous with canonical generations; provider availability affects cleanup and new issuance, not the truth of committed local revocation.
 
 Implementation must add a coalescing reconciliation queue, extend the existing single-alarm coordinator, implement exact Effect claim/outcome entrypoints and per-adapter retry/probe profiles, store bounded health validity, project Consumer Readiness transactionally, and make every Contract bridge enforce generations and deadlines. These kernel changes should be split by concern and reviewed before Gatekeeper/UI expansion.
+
+## Extended Authority amendment (ADR 0023)
+
+Workspace Authority governs Project-scoped standing Consumers and task-scoped Consumers; “Project
+authority” is not another owner. Binding invalidation RPC/acknowledgement is the security precondition
+to ADR 0020's Revocation Commit Point and is distinct from later provider cleanup Effects. Restart
+conformance injects failure before/after intent persistence, endpoint invalidation, acknowledgement,
+terminal commit, fresh replacement acknowledgement/publication, result release, and cleanup
+scheduling. Reconciliation advances only the same accepted intent and never invents policy, placement,
+or broader authority. Its durable evidence remains distinct from Source Activity, Agent Activity, and
+operational attempt logs.

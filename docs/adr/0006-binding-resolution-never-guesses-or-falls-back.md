@@ -30,3 +30,13 @@ Candidate discovery never confers authority. An existing approved resolution win
 - Development Session and Workload protocols must authenticate a Consumer before selecting its assigned Binding Set or resolving personal and verified modes.
 - Provider adapters must return stable resource identity and bounded verification evidence, not just success or failure.
 - The existing invariant that Consumer bindings target Contract Instances rather than Gatekeeper Sources remains the runtime enforcement boundary.
+
+## Extended Authority amendment (ADR 0023)
+
+“Every Consumer” above is scoped to standing Consumers. The canonical Resolution has closed
+discriminants: a standing placement references one Environment Binding Requirement version,
+Installation Decision, and exact Source Upstream Authority; a task placement references one Task
+Binding Requirement in an immutable Task Template Version, Task Dispatch Decision, and exact Source or
+Binding Upstream Authority. Both record the complete upstream generations, Artifact Approval epoch,
+separate Contract Instance, shared-state choice, and expected Binding generation. Neither path guesses,
+falls back, or exposes the Upstream Authority raw to its Consumer.

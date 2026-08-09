@@ -221,6 +221,15 @@ Clients explicitly own every returned root, owner-control child, reader, subscri
 - Persisting Authority Sessions was rejected because durable identity belongs to grants, decisions, and Operations; transport capabilities are ephemeral.
 - Treating manager revocation as revocation of every prior decision was rejected because decision authority is historical and explicit; owners must revoke the actual Approval, placement, Registration, or Binding they intend to remove.
 
+## Extended Authority amendment (ADR 0023)
+
+The same revocable Authority Session gains bounded Template, dispatch, task, Ratchet, protected-result,
+evidence, and operations commands/queries; it never returns raw Sources or live task authority. The
+older Emergency Retraction sentence's local-transaction-first ordering is superseded: retraction
+persists an Invalidation Intent, invalidates and acknowledges every participating endpoint, commits
+the canonical terminal generation at ADR 0020's Revocation Commit Point, then schedules provider
+cleanup. Epoch rotation remains administration recovery and does not create or restore authority.
+
 ## Consequences
 
 Authority administration becomes separately obtainable, immediately revocable, promise-pipelining-friendly, and recoverable after any transport or Durable Object restart. Builders, personal account owners, Workloads, Development Sessions, and use-only collaborators each retain a narrower seam with no path to authority administration.
