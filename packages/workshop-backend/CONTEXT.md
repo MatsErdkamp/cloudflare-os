@@ -45,16 +45,44 @@ The explicit parent-to-child request that may dispatch one fresh child Agent Tas
 _Avoid_: Ambient inheritance, subroutine call, shared Task Environment
 
 **Task Template**:
-An immutable maximum-authority description for a class of Agent Tasks; approval and dispatch cite one exact version.
-_Avoid_: Agent Task, runtime prompt, mutable policy
+A stable lineage for immutable Task Template Versions that describe the maximum authority of one class of Agent Tasks.
+_Avoid_: Agent Task, mutable policy document, approved version
+
+**Task Template Version**:
+One complete immutable maximum-authority ceiling in a Task Template lineage, including exact Task Binding Requirements, duration, delegation, runtime-coverage, release, and Principal-eligibility constraints.
+_Avoid_: Task Template Approval, Task Dispatch Decision, mutable revision
+
+**Task Template Approval**:
+One immutable Workspace decision accepting an exact Task Template Version and the exact Artifact Approval epochs it cites. Its lifecycle may later be deprecated or revoked, but its accepted ceiling is never edited.
+_Avoid_: Artifact Approval, Task Dispatch Decision, runtime approval
+
+**Task Consumer**:
+The authority-recognized role of one Agent Task for the lifetime of that task. It receives only task Bindings placed by that task's Task Dispatch Decision and is never a standing Consumer identity.
+_Avoid_: Agent Service, Workload, Chat, reusable Consumer
 
 **Task Environment**:
-The generation-tagged set of exact capabilities and egress materialized for one Agent Task.
+The immutable, generation-tagged set of exact task Bindings, enforcement endpoints, mediators, deadlines, and egress materialized for one Agent Task.
 _Avoid_: Ambient environment, Chat bindings
+
+**Effective Authority Envelope**:
+The normalized immutable value used at Template review, dispatch, environment publication, and Ratchet comparison to describe exact provider/resource and Upstream Authority identities, Artifact Approval epoch, operations, recipients, egress, release classes, sharing, enforcement profile, and maximum expiry.
+_Avoid_: Permission bag, policy summary, provider-native scope
 
 **Trust Ratchet**:
 The monotonic discipline that may preserve or narrow an Agent Task's effective authority but never broaden, extend, or restore it.
 _Avoid_: Scope reset, runtime approval
+
+**Trust Ratchet Transition**:
+One immutable, lineage-linked replacement of a Task Environment that retracts or narrows existing task Bindings and records permanently removed authority.
+_Avoid_: Re-dispatch, permission edit, scope refresh
+
+**Protected Observation**:
+Provider Observation Evidence or a derived result held outside model context behind Workspace-owned task and generation correlation until release is allowed and every participating enforcement endpoint acknowledges the current Task Environment.
+_Avoid_: Agent Activity, prompt content, untrusted model result
+
+**Reviewed Declassification Decision**:
+A human-reviewed decision to release one exact content-addressed Protected Observation to one recipient already allowed by the current task ceiling and Ratchet state. It changes data classification, never authority.
+_Avoid_: Runtime Approval Decision, Task Template Approval, Binding
 
 **Authority Manager**:
 A named workspace member whom the owner has explicitly granted `manageAuthority`. An Authority Manager may make workspace authority decisions but gains no build rights from that permission.
@@ -105,7 +133,7 @@ Untrusted attributed provenance and discovery metadata asserting that a reposito
 _Avoid_: Project identity, trusted repository
 
 **Consumer**:
-An authority-recognized Gadget, Development Session, or Workload that may receive capabilities from Contract Instances.
+A canonical discriminated Binding recipient: a standing Gadget, Development Session, or Workload, or one task-scoped Agent Task acting as a Task Consumer.
 _Avoid_: App when the distinction matters
 
 **Development Session**:
@@ -157,11 +185,15 @@ A stable, versioned declaration within a Binding Set that names one standing cap
 _Avoid_: Task Binding Requirement, grant, environment variable
 
 **Task Binding Requirement**:
-A stable declaration within one immutable Task Template version that names and constrains one capability within that Task Template's maximum authority ceiling.
+A stable declaration within one immutable Task Template Version that names one capability and fixes its Artifact Approval epoch, Upstream Authority constraints, provider/resource/operation/recipient/egress ceiling, duration, sharing, runtime-coverage, release, and Authority Debt constraints.
 _Avoid_: Environment Binding Requirement, ambient binding, runtime request
 
+**Task Binding**:
+A Binding whose Consumer is one Task Consumer, placed only by that task's Task Dispatch Decision and expiring no later than the Agent Task. It is never ambient, standing, or reusable by the Agent Service Workload.
+_Avoid_: Workload Binding, Chat binding, copied capability
+
 **Binding Requirement Reference**:
-The exact reference from a Binding Resolution to either an Environment Binding Requirement version or a Task Binding Requirement in one Task Template version.
+The exact reference from a Binding Resolution to either an Environment Binding Requirement version or a Task Binding Requirement in one Task Template Version.
 _Avoid_: Binding name, inferred requirement
 
 **Binding Set**:
@@ -177,7 +209,7 @@ Workspace Authority's canonical immutable placement result for one Consumer and 
 _Avoid_: Candidate, best match
 
 **Task Dispatch Decision**:
-The Workspace decision that authorizes exact task placement for one Agent Task under one approved Task Template version without granting reusable standing authority.
+The immutable Workspace decision that authorizes exact placement for one Task Consumer after intersecting its approved Task Template Version with the initiating Principal, Agent Service Workload, resource-owner and organization policy, optional Pre-established Application Scope, current upstream health, and parent delegation.
 _Avoid_: Installation Decision, runtime approval, chat continuation
 
 **Verification Receipt**:
@@ -211,6 +243,14 @@ _Avoid_: Canonical Binding, migration grant
 **Authority Event**:
 An immutable, workspace-sequenced audit fact written atomically with the local authority decision or lifecycle transition it records. It is an audit projection of authority state, not an operational log or the source of truth.
 _Avoid_: Log line, Source Action
+
+**Source Activity**:
+Task-neutral evidence that a Contract or Gatekeeper attempted or completed one provider-facing action or observation. Workspace Authority may reference it from task correlation records but never rewrites it as task authority.
+_Avoid_: Authority Event, Agent Activity, operational log
+
+**Agent Activity**:
+Workspace-owned evidence of one Agent Task runtime, mediator, invocation, acknowledgement, or protected-result event carrying exact Task Authority Correlation. It is not an authority decision or provider record.
+_Avoid_: Authority Event, Source Activity, prompt transcript, operational log
 
 **Authority Operation**:
 An idempotent causal group containing every Authority Event produced while carrying one requested change or recovery step across local state and external effects.

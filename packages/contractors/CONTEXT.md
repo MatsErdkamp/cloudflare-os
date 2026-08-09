@@ -29,7 +29,7 @@ A workspace decision accepting one exact Contract Artifact and Review Bundle for
 _Avoid_: Installation, deployment
 
 **Task Template Approval**:
-A Workspace decision accepting one exact immutable Task Template version and its pinned Artifact Approval epochs as a maximum task ceiling, without authorizing every principal to dispatch it.
+A Workspace decision accepting one exact immutable Task Template Version and its pinned Artifact Approval epochs as a maximum task ceiling, without authorizing every Principal to dispatch it.
 _Avoid_: Artifact Approval, Task Dispatch Decision, runtime approval
 
 **Installation Decision**:
