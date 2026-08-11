@@ -1261,6 +1261,10 @@ export interface LegacyWorkspaceAuthorityCompatibility {
     consumerId: WorkpieceId;
     forChatId?: number;
   }): [string, LegacyGadgetBindingRecord][];
+  /** Lists canonical lifecycle lineage, including invalidating and terminal Bindings, for cleanup. */
+  queryBindingLineage(request: {
+    consumerId: WorkpieceId;
+  }): [string, LegacyGadgetBindingRecord][];
   bindContract(request: {
     consumerId: WorkpieceId;
     name: string;
@@ -5152,6 +5156,37 @@ export function createWorkspaceAuthorityModule<
         ]);
       }
       return projected;
+    },
+    queryBindingLineage({consumerId}) {
+      const gadget = requireGadget(adapter, consumerId);
+      if (requireAuthorityState(storage).state !== "active") {
+        return Object.entries(gadget.bindings);
+      }
+      const canonicalConsumerId =
+        storage.hostAuthorityIdentities.get(compositeKey("consumer", consumerId))?.canonicalId ??
+        findMappedLegacyIdentity(storage, "consumer", consumerId);
+      if (!canonicalConsumerId) return [];
+      return Array.from(storage.bindings.byConsumer.get(canonicalConsumerId as ConsumerId))
+        .toSorted((left, right) => {
+          const terminalOrder = Number(left.status === "retracted") -
+            Number(right.status === "retracted");
+          return terminalOrder || right.generation - left.generation;
+        })
+        .flatMap(binding => {
+          const instance = storage.contractInstances.get(binding.contractInstanceId);
+          const runtimeWorkpieceId = instance?.runtimeWorkpieceId ?? instance?.legacyWorkpieceId;
+          if (runtimeWorkpieceId === undefined) return [];
+          const metadata = gadget.bindings[binding.name];
+          return [[
+            binding.name,
+            {
+              target: runtimeWorkpieceId,
+              ...(metadata?.blueprintAnnotation
+                ? {blueprintAnnotation: metadata.blueprintAnnotation}
+                : {}),
+            },
+          ] as [string, LegacyGadgetBindingRecord]];
+        });
     },
     bindContract({consumerId, name, contractId, chatId}) {
       storage.transaction(() => {

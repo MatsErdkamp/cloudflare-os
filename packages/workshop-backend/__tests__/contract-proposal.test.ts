@@ -217,40 +217,6 @@ async function proposalInput(sourceCode: string, publicTypes = `
 }
 
 describe("Contract proposal compilation boundary", () => {
-  it("runs and retracts the current Artifact through the production Workshop lifecycle adapter", async () => {
-    await runInDurableObject(
-      env.TEST_OVERSEER.getByName("contract-current-production-adapter"),
-      async (instance: OverseerDurableObject) => {
-        const impl = (instance as any).impl;
-        prepareProposalFixture(impl);
-        const artifact = await currentContractArtifact({
-          sourceCode: COMPILER_STYLE_MODULE,
-          publicTypes: `
-            import {RpcTarget} from "cloudflare:workers";
-            export interface ContractBinding extends RpcTarget { ping(): string; }
-          `,
-          sourceTypes: SOURCE_TYPES,
-          compatibilityDate: "2026-02-02",
-        });
-        const contract = await impl.createContract(
-          artifact, 17, "Current Contract", "admin", 9, "CURRENT",
-        );
-        const root = await impl.startContractSession(
-          contract.id, {from: "gadget", gadgetId: 9}, "ping",
-        );
-        try {
-          await expect(root.ping()).resolves.toBe("pong");
-          await impl.deleteContract(contract.id);
-          await expect(Promise.resolve().then(() => root.ping())).rejects.toThrow();
-          expect(impl.storage.contracts.get(contract.id)).toBeUndefined();
-          expect(impl.storage.contractTombstones.get(contract.id)).toBeDefined();
-        } finally {
-          root[Symbol.dispose]?.();
-        }
-      },
-    );
-  }, 15_000);
-
   it("accepts the compiler's named default-export ESM form for human review", async () => {
     await runInDurableObject(
       env.TEST_OVERSEER.getByName("contract-proposal-compiled-esm"),
@@ -656,6 +622,7 @@ describe("Contract proposal compilation boundary", () => {
         expect(impl.visibleBindings(impl.storage.gadgets.get(9))).toEqual([
           ["R2_STORAGE", expect.objectContaining({target: expect.any(Number)})],
         ]);
+        expect(impl.storage.gadgets.get(9).bindings).toEqual({});
         await expect(authority.getOperation(operation.id)).resolves.toMatchObject({
           state: "completed",
           result: {type: "standingBindingInstalled", bindingGeneration: 1},

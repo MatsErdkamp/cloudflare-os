@@ -87,7 +87,6 @@ import type {
   ContractRestorationReference,
 } from "@gadgets/contractors/runtime";
 import {
-  assertCurrentContractArtifact,
   hashContractValue,
   hashSourceTypes,
   isContractPackageName,
@@ -2168,6 +2167,12 @@ class OverseerImpl implements AgentHooks {
     });
   }
 
+  // Lifecycle cleanup includes invalidating and terminal canonical Binding lineage that ordinary
+  // executable visibility deliberately hides.
+  bindingLineage(gadget: GadgetRecord): [string, BindingRecord][] {
+    return this.legacyWorkspaceAuthority.queryBindingLineage({consumerId: gadget.id});
+  }
+
   // Bind a Contract instance into gadget `gadgetId`'s env under `name`. If `chatId` is
   // given, the edge is provisional to that chat (see BindingRecord.pending); the caller is
   // responsible for getting the addition recorded in the chat log so the pending edge gets
@@ -2208,8 +2213,8 @@ class OverseerImpl implements AgentHooks {
 
     // A Contract instance is one approved binding placement. Removing its owning Gadget retracts
     // that instance instead of leaving movable ambient authority behind.
-    let contracts = new Set(Object.values(gadget.bindings)
-        .map(edge => edge.target)
+    let contracts = new Set(this.bindingLineage(gadget)
+        .map(([, edge]) => edge.target)
         .filter(target => this.storage.contracts.get(target) !== undefined));
     for (let contractId of contracts) await this.deleteContract(contractId);
 
@@ -3570,57 +3575,6 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
-  async createContract(
-      artifact: ContractArtifact,
-      sourceGatekeeperId: WorkpieceId,
-      title: string,
-      approvedBy: string,
-      targetGadgetId: WorkpieceId,
-      bindingName: string,
-      sharedStateKey?: string,
-      installationRequestId?: string): Promise<ContractRecord> {
-    if (artifact.mainModule !== "contract.js" ||
-        typeof artifact.modules["contract.js"] !== "string") {
-      throw new Error("Contract artifact must provide its reviewed contract.js main module.");
-    }
-    await assertCurrentContractArtifact(artifact);
-    await this.validateContractArtifactPolicy(artifact);
-
-    let source = this.getGatekeeperFacet(sourceGatekeeperId);
-    let [sourceDescription, sourceTypes] = await Promise.all([
-      source.describe(),
-      source.getTypeScriptTypes(),
-    ]);
-    if (sourceDescription.tsType !== artifact.sourceRootType ||
-        await hashSourceTypes(sourceTypes) !== artifact.sourceTypeHash) {
-      throw new Error("Contract artifact was compiled against different Source types.");
-    }
-
-    await this.validateContractArtifact(artifact);
-    await new R2ContractArtifactStore(this.env.BLUEPRINT_CONTENT).put(artifact);
-    let id = this.allocateWorkpieceId();
-    let record: ContractRecord = {
-      id,
-      artifactHash: artifact.hash,
-      runtimeProfileHash: artifact.runtimeProfileHash,
-      sourceGatekeeperId,
-      title: title.trim() || "Contract",
-      publicTypes: artifact.publicTypes,
-      createdAt: new Date(),
-      approvedBy,
-      ...(sharedStateKey ? {sharedStateKey} : {}),
-      ...(installationRequestId ? {installationRequestId} : {}),
-    };
-    this.storage.contracts.put(record);
-    try {
-      this.bindWorkpiece(targetGadgetId, bindingName, id);
-    } catch (error) {
-      this.storage.contracts.delete(id);
-      throw error;
-    }
-    return record;
-  }
-
   async deleteContract(contractId: WorkpieceId): Promise<void> {
     let contract = this.requireContract(contractId);
     const executionMode = this.resolveContractExecution(contractId, "retract");
@@ -4011,52 +3965,6 @@ class OverseerImpl implements AgentHooks {
       observationEnforcer[Symbol.dispose]?.();
       actionStager[Symbol.dispose]?.();
     }
-  }
-
-  async invokeContractMethod(
-      contractId: WorkpieceId, caller: GatekeeperCaller,
-      methodName: string, args: unknown[]): Promise<unknown> {
-    let binding = await this.startContractSession(contractId, caller, methodName);
-    try {
-      let method = Reflect.get(binding as object, methodName);
-      if (typeof method !== "function") {
-        throw new TypeError(`Contract binding has no callable method ${methodName}.`);
-      }
-      return await Reflect.apply(method, binding, args);
-    } finally {
-      (binding as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-    }
-  }
-
-  async invokeConsumerBindingMethod(
-      snapshot: ReturnType<ConsumerEnvironmentAuthority["openDevelopmentEnvironment"]>,
-      bindingName: string,
-      methodName: string,
-      args: unknown[]): Promise<unknown> {
-    if (!this.consumerEnvironments.validateEnvironmentSnapshot(snapshot)) {
-      throw new Error("Canonical Consumer environment generation is stale.");
-    }
-    const cited = snapshot.bindings.find(binding => binding.name === bindingName);
-    if (!cited) throw new Error("Canonical Consumer Binding is unavailable.");
-    const execution = this.workspaceAuthority.query({
-      type: "bindingExecution",
-      consumerId: snapshot.consumerId as ConsumerId,
-      name: bindingName,
-    });
-    if (execution.type !== "bindingExecution" || !execution.value ||
-        execution.value.binding.id !== cited.bindingId ||
-        execution.value.binding.generation !== cited.bindingGeneration ||
-        execution.value.instance.id !== cited.contractInstanceId ||
-        execution.value.instance.generation !== cited.contractInstanceGeneration ||
-        execution.value.instance.runtimeWorkpieceId === undefined) {
-      throw new Error("Canonical Consumer Binding generation is stale.");
-    }
-    return this.invokeContractMethod(
-      execution.value.instance.runtimeWorkpieceId,
-      {from: "canonicalConsumer", consumerId: snapshot.consumerId},
-      methodName,
-      args,
-    );
   }
 
   async disconnectDevelopmentConsumer(input: Readonly<{
@@ -8992,20 +8900,6 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return this.impl.startManagerSourceSession(gatekeeperId, caller);
   }
 
-  async invokeContractMethod(
-      contractId: WorkpieceId, caller: GatekeeperCaller,
-      methodName: string, args: unknown[]): Promise<unknown> {
-    return this.impl.invokeContractMethod(contractId, caller, methodName, args);
-  }
-
-  async invokeConsumerBindingMethod(
-      snapshot: ReturnType<ConsumerEnvironmentAuthority["openDevelopmentEnvironment"]>,
-      bindingName: string,
-      methodName: string,
-      args: unknown[]): Promise<unknown> {
-    return this.impl.invokeConsumerBindingMethod(snapshot, bindingName, methodName, args);
-  }
-
   async invokeRestoredContractMethod(
       contractId: WorkpieceId, restoration: ContractRestorationReference,
       caller: GatekeeperCaller,
@@ -9368,18 +9262,50 @@ class CanonicalConsumerBindingTarget extends NativeRpcTarget {
             throw new Error("Canonical Consumer environment was disposed.");
           }
           await target.requireLive();
-          return target.impl.invokeConsumerBindingMethod(
-            target.snapshot,
-            target.bindingName,
-            property,
-            args,
-          );
+          return target.invoke(property, args);
         };
       },
       getPrototypeOf() {
         return NativeRpcTarget.prototype;
       },
     });
+  }
+
+  async invoke(methodName: string, args: readonly unknown[]): Promise<unknown> {
+    if (!this.impl.consumerEnvironments.validateEnvironmentSnapshot(this.snapshot)) {
+      throw new Error("Canonical Consumer environment generation is stale.");
+    }
+    const cited = this.snapshot.bindings.find(binding => binding.name === this.bindingName);
+    if (!cited) throw new Error("Canonical Consumer Binding is unavailable.");
+    const execution = this.impl.workspaceAuthority.query({
+      type: "bindingExecution",
+      consumerId: this.snapshot.consumerId as ConsumerId,
+      name: this.bindingName,
+    });
+    if (execution.type !== "bindingExecution" || !execution.value ||
+        execution.value.binding.id !== cited.bindingId ||
+        execution.value.binding.generation !== cited.bindingGeneration ||
+        execution.value.instance.id !== cited.contractInstanceId ||
+        execution.value.instance.generation !== cited.contractInstanceGeneration ||
+        execution.value.instance.runtimeWorkpieceId === undefined) {
+      throw new Error("Canonical Consumer Binding generation is stale.");
+    }
+    const contract = this.impl.requireContract(execution.value.instance.runtimeWorkpieceId);
+    const capability = await this.impl.startCanonicalContractSession(
+      contract,
+      execution.value,
+      {from: "canonicalConsumer", consumerId: this.snapshot.consumerId},
+      methodName,
+    );
+    try {
+      const method = Reflect.get(capability as object, methodName);
+      if (typeof method !== "function") {
+        throw new TypeError(`Contract binding has no callable method ${methodName}.`);
+      }
+      return await Reflect.apply(method, capability, args);
+    } finally {
+      (capability as {[Symbol.dispose]?: () => void})[Symbol.dispose]?.();
+    }
   }
 
   dummyMethodToWorkAroundValidatorBug() {}
@@ -12330,7 +12256,8 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   }
 
   async unbind(name: string): Promise<void> {
-    let edge = this.impl.getGadgetRecord(this.id).bindings[name];
+    const record = this.impl.getGadgetRecord(this.id);
+    let edge = this.impl.bindingLineage(record).find(([candidate]) => candidate === name)?.[1];
     if (!edge) throw new Error(`No such binding: ${name}`);
     if (this.impl.storage.contracts.get(edge.target)) {
       await this.impl.deleteContract(edge.target);

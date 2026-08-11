@@ -760,6 +760,8 @@ describe("Workspace Authority module", () => {
         intendedRequirement: requirement,
         sharedState: {type: "isolated"},
         predecessorId: prepared.id,
+        runtimeWorkpieceId: 11,
+        sourceGatekeeperId: 20,
       },
     });
     if (replacementInstance.type !== "contractInstancePrepared") {
@@ -805,6 +807,10 @@ describe("Workspace Authority module", () => {
         type: "binding",
         value: {status: "active", generation: 2, predecessorId: published.bindingId},
       });
+    expect(module.compatibility.queryBindingLineage({consumerId: 1})).toEqual([
+      ["FILES", {target: 11}],
+      ["FILES", {target: 10}],
+    ]);
     expect(module.authority.query({type: "status"})).toMatchObject({
       value: {pendingEffects: 1},
     });
@@ -841,6 +847,10 @@ describe("Workspace Authority module", () => {
     expect(suspended).toMatchObject({type: "bindingSuspended", generation: 3});
     expect(module.authority.query({type: "contractInstance", id: replacementInstance.id}))
       .toMatchObject({type: "contractInstance", value: {lifecycle: "suspended", generation: 2}});
+    expect(module.compatibility.queryBindingLineage({consumerId: 1})).toEqual([
+      ["FILES", {target: 11}],
+      ["FILES", {target: 10}],
+    ]);
     expect(() => module.authority.execute({
       type: "requestRuntimeApproval",
       operationId: "stale-runtime-request",
@@ -1795,6 +1805,9 @@ describe("Workspace Authority module", () => {
       value: {terminalReason: "legacy-contract-deleted", cleanup: "pending"},
     });
     expect(module.compatibility.queryVisibleBindings({consumerId: 1})).toEqual([]);
+    expect(module.compatibility.queryBindingLineage({consumerId: 1})).toEqual([
+      ["FILES", {target: 10}],
+    ]);
   });
 
   it("shadow-backfills byte-stable identities and atomically cuts legacy bindings over to projections", () => {
