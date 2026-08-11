@@ -1406,6 +1406,88 @@ describe("Workspace Authority module", () => {
         },
       },
     })).toThrow("no application-scope adapter");
+    const authoritySession = module.authority.openSession("test-owner", true);
+    if (!authoritySession) throw new Error("owner authority unavailable");
+    const cancellationDigest = `sha256:${"1".repeat(64)}`;
+    const cancellationOperation = module.authority.beginOperation(
+      authoritySession,
+      "cancel-agent-task-1",
+      cancellationDigest,
+    );
+    const cancellationCommand = {
+      type: <const>"cancelAgentTask",
+      operationId: cancellationOperation.id,
+      stepKey: "request-cancellation",
+      requestDigest: cancellationDigest,
+      expectedAuthorityEpoch: authoritySession.authorityEpoch,
+      expectedPermissionGeneration: authoritySession.permissionGeneration,
+      taskId: materialized.taskId,
+      expectedTaskGeneration: 1,
+      expectedEnvironmentGeneration: 1,
+      expectedRatchetVersion: 1,
+    };
+    expect(module.authority.requestAgentTaskCancellation(
+      authoritySession,
+      cancellationCommand,
+      cancellationDigest,
+    )).toMatchObject({
+      type: "agentTaskCancellationRequested",
+      cancellationGeneration: 1,
+      state: "requested",
+    });
+    expect(module.authority.requestAgentTaskCancellation(
+      authoritySession,
+      cancellationCommand,
+      cancellationDigest,
+    )).toMatchObject({cancellationGeneration: 1});
+    expect(module.authority.execute({
+      type: "recordAgentTaskOperationalState",
+      record: {
+        taskId: materialized.taskId,
+        taskGeneration: 1,
+        environmentGeneration: 1,
+        ratchetVersion: 1,
+        protectedResultRefs: ["protected-result:1"],
+        missingAcknowledgementRefs: ["endpoint:1"],
+        staleParallelWorkRefs: ["invocation:old"],
+        sourceActivityRefs: ["source-activity:1"],
+        agentActivityRefs: ["agent-activity:1"],
+        revision: 1,
+      },
+    })).toMatchObject({type: "agentTaskOperationalStateRecorded", revision: 1});
+    expect(module.authority.listAgentTaskAuthorityViews(authoritySession)).toEqual([
+      expect.objectContaining({
+        taskId: materialized.taskId,
+        template: expect.objectContaining({version: 1, approvalLifecycle: "active"}),
+        environment: expect.objectContaining({generation: 1, ratchetVersion: 1}),
+        agentServiceWorkload: {id: "workload-1", generation: 1},
+        cancellation: {generation: 1, state: "requested"},
+        blocks: expect.arrayContaining([
+          {type: "protectedResult", reference: "protected-result:1"},
+          {type: "missingAcknowledgement", reference: "endpoint:1"},
+          {type: "staleParallelWork", reference: "invocation:old"},
+        ]),
+        evidence: expect.objectContaining({
+          authorityEvents: expect.arrayContaining([expect.stringMatching(/^authority-event:/)]),
+          sourceActivities: ["source-activity:1"],
+          agentActivities: ["agent-activity:1"],
+        }),
+      }),
+    ]);
+    expect(module.authority.listTaskTemplateAuthorityViews(authoritySession)).toEqual([
+      expect.objectContaining({
+        id: taskTemplateId,
+        version: 1,
+        approvalLifecycle: "active",
+        requirements: [expect.objectContaining({
+          name: "R2_STORAGE",
+          artifactApprovalId: approval.id,
+          artifactApprovalEpoch: 1,
+        })],
+        newDispatchConsequence: expect.any(String),
+        activeTaskConsequence: expect.any(String),
+      }),
+    ]);
     expect(module.authority.execute({
       type: "terminateUnpublishedAgentTask",
       operationId: "cancel-materializing-task",

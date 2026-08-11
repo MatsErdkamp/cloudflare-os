@@ -326,6 +326,32 @@ export type AgentTaskRecord = Readonly<{
     "suspendedLeaseExpired" | "completed" | "failed" | "cancelled" | "expired";
 }>;
 
+/** Durable enforcement-first cancellation request for one exact Agent Task generation. */
+export type AgentTaskCancellationRecord = Readonly<{
+  taskId: AgentTaskId;
+  generation: number;
+  expectedTaskGeneration: number;
+  expectedEnvironmentGeneration: number;
+  expectedRatchetVersion: number;
+  requestedBy: string;
+  requestedAt: number;
+  state: "requested" | "acknowledged";
+}>;
+
+/** Bounded task-operation references projected into the authority review surface. */
+export type AgentTaskOperationalRecord = Readonly<{
+  taskId: AgentTaskId;
+  taskGeneration: number;
+  environmentGeneration: number;
+  ratchetVersion: number;
+  protectedResultRefs: readonly string[];
+  missingAcknowledgementRefs: readonly string[];
+  staleParallelWorkRefs: readonly string[];
+  sourceActivityRefs: readonly string[];
+  agentActivityRefs: readonly string[];
+  revision: number;
+}>;
+
 /** One immutable manifest of the exact task placements for one environment generation. */
 export type TaskEnvironmentRecord = Readonly<{
   id: string;

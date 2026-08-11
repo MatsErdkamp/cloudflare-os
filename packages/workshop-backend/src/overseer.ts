@@ -136,6 +136,8 @@ import {
   hashAuthorityCommand,
   hashAuthorityRequest,
   type AuthorityApi,
+  type AgentTaskAuthorityView,
+  type TaskTemplateAuthorityView,
   type AuthorityOwnerApi,
   type AuthorityOwnerCommand,
   type AuthorityOwnerCommandResult,
@@ -9893,6 +9895,14 @@ class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
     );
   }
 
+  async listAgentTasks(): Promise<readonly AgentTaskAuthorityView[]> {
+    return this.impl.workspaceAuthority.listAgentTaskAuthorityViews(this.#requireLiveSession());
+  }
+
+  async listTaskTemplates(): Promise<readonly TaskTemplateAuthorityView[]> {
+    return this.impl.workspaceAuthority.listTaskTemplateAuthorityViews(this.#requireLiveSession());
+  }
+
   async #installStandingBinding(
     session: AuthoritySessionBinding,
     command: InstallStandingBindingCommand,
@@ -10071,6 +10081,13 @@ class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
     const requestDigest = await hashAuthorityCommand(payload);
     if (command.type === "installStandingBinding") {
       return this.#installStandingBinding(session, command, requestDigest);
+    }
+    if (command.type === "cancelAgentTask") {
+      return this.impl.workspaceAuthority.requestAgentTaskCancellation(
+        session,
+        command,
+        requestDigest,
+      );
     }
     const proposal = this.impl.workspaceAuthority.query({
       type: "artifactProposal",

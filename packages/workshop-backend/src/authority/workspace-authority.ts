@@ -6,10 +6,13 @@ import {
 } from "@gadgets/workshop-shared/api";
 import type {
   AuthorityCommandResult,
+  AgentTaskAuthorityView,
+  TaskTemplateAuthorityView,
   AuthorityCommandEnvelope,
   AuthorityOwnerCommand,
   AuthorityOwnerCommandResult,
   DecideArtifactProposalCommand,
+  CancelAgentTaskCommand,
   InstallStandingBindingCommand,
   StandingBindingInstallationResult,
 } from "@gadgets/workshop-shared/authority-api";
@@ -24,6 +27,8 @@ import type {
   AuthorityLifecycleTombstoneRecord,
   AgentServiceProfileRecord,
   AgentTaskId,
+  AgentTaskCancellationRecord,
+  AgentTaskOperationalRecord,
   AgentTaskRecord,
   BindingId,
   BindingPublicationPlanId,
@@ -205,6 +210,13 @@ type AuthorityOwnerCommandReceipt = {
   state: "active" | "revoked";
 };
 
+type AgentTaskCancellationReceipt = {
+  key: string;
+  requestDigest: string;
+  taskId: AgentTaskId;
+  generation: number;
+};
+
 type WorkspaceAuthorityEvent = {
   sequence: number;
   type:
@@ -213,6 +225,7 @@ type WorkspaceAuthorityEvent = {
     | "artifactApprovalRecorded"
     | "installationDecisionRecorded"
     | "taskDispatchDecisionRecorded"
+    | "agentTaskCancellationRequested"
     | "agentServiceProfileChanged"
     | "workspacePrincipalChanged"
     | "taskTemplateVersionRecorded"
@@ -498,6 +511,10 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
           },
         },
       }),
+      agentTaskCancellations: collection<AgentTaskCancellationRecord>()({primaryKey: "taskId"}),
+      agentTaskCancellationReceipts:
+        collection<AgentTaskCancellationReceipt>()({primaryKey: "key"}),
+      agentTaskOperationalState: collection<AgentTaskOperationalRecord>()({primaryKey: "taskId"}),
       taskEnvironments: collection<TaskEnvironmentRecord>()({
         primaryKey: "id",
         uniqueIndexes: {
@@ -709,6 +726,7 @@ export type WorkspaceAuthorityCommand =
       record: Omit<TaskTemplateApprovalRecord, "id">;
     }
   | {type: "materializeAgentTaskDispatch"; input: MaterializeAgentTaskDispatchInput}
+  | {type: "recordAgentTaskOperationalState"; record: AgentTaskOperationalRecord}
   | {
       type: "terminateUnpublishedAgentTask";
       operationId: string;
@@ -816,6 +834,7 @@ export type WorkspaceAuthorityCommandResult =
   | {type: "workspacePrincipalRecorded"; id: string; generation: number}
   | {type: "taskTemplateVersionRecorded"; id: string}
   | {type: "taskTemplateApprovalRecorded"; id: TaskTemplateApprovalId}
+  | {type: "agentTaskOperationalStateRecorded"; taskId: AgentTaskId; revision: number}
   | {
       type: "agentTaskDispatched";
       taskId: AgentTaskId;
@@ -1047,6 +1066,13 @@ export interface WorkspaceAuthority {
     command: DecideArtifactProposalCommand,
     requestDigest: string,
   ): Extract<WorkspaceAuthorityCommandResult, {type: "artifactApprovalRecorded"}>;
+  requestAgentTaskCancellation(
+    session: AuthoritySessionBinding,
+    command: CancelAgentTaskCommand,
+    requestDigest: string,
+  ): Extract<AuthorityCommandResult, {type: "agentTaskCancellationRequested"}>;
+  listAgentTaskAuthorityViews(session: AuthoritySessionBinding): readonly AgentTaskAuthorityView[];
+  listTaskTemplateAuthorityViews(session: AuthoritySessionBinding): readonly TaskTemplateAuthorityView[];
   recordStandingInstallationDecision(
     session: AuthoritySessionBinding,
     command: InstallStandingBindingCommand,
@@ -2004,6 +2030,243 @@ export function createWorkspaceAuthorityModule<
         return {type: "artifactApprovalRecorded", id, approvalEpoch, sequence};
       });
     },
+    requestAgentTaskCancellation(session, command, requestDigest) {
+      return storage.transaction(() => {
+        const {operation} = requireAuthorityCommandContext(
+          storage,
+          session,
+          command,
+          requestDigest,
+        );
+        const receiptKey = compositeKey(session.principalId, command.operationId, command.stepKey);
+        const receipt = storage.agentTaskCancellationReceipts.get(receiptKey);
+        if (receipt) {
+          if (receipt.requestDigest !== requestDigest) {
+            throw new Error("Authority idempotency conflict.");
+          }
+          const cancellation = storage.agentTaskCancellations.get(receipt.taskId);
+          return {
+            type: <const>"agentTaskCancellationRequested",
+            taskId: receipt.taskId,
+            cancellationGeneration: receipt.generation,
+            state: cancellation?.state ?? <const>"requested",
+          };
+        }
+        const taskId = command.taskId as AgentTaskId;
+        const task = storage.agentTasks.get(taskId);
+        const environment = task && storage.taskEnvironments.byTaskGeneration.get(
+          compositeKey(task.id, task.environmentGeneration),
+        );
+        if (!task || !environment || task.generation !== command.expectedTaskGeneration ||
+            environment.generation !== command.expectedEnvironmentGeneration ||
+            environment.ratchetVersion !== command.expectedRatchetVersion ||
+            ["completed", "failed", "cancelled", "expired"].includes(task.lifecycle)) {
+          throw new Error("Agent Task cancellation target is unavailable or stale.");
+        }
+        const previous = storage.agentTaskCancellations.get(taskId);
+        const generation = (previous?.generation ?? 0) + 1;
+        storage.agentTaskCancellations.put({
+          taskId,
+          generation,
+          expectedTaskGeneration: task.generation,
+          expectedEnvironmentGeneration: environment.generation,
+          expectedRatchetVersion: environment.ratchetVersion,
+          requestedBy: session.principalId,
+          requestedAt: Date.now(),
+          state: "requested",
+        });
+        appendAuthorityEvent(storage, {
+          type: "agentTaskCancellationRequested",
+          subjectId: taskId,
+          operationId: command.operationId,
+          beforeGeneration: previous?.generation,
+          afterGeneration: generation,
+        });
+        const result = {
+          type: <const>"agentTaskCancellationRequested",
+          taskId,
+          cancellationGeneration: generation,
+          state: <const>"requested",
+        };
+        storage.agentTaskCancellationReceipts.put({
+          key: receiptKey,
+          requestDigest,
+          taskId,
+          generation,
+        });
+        storage.authorityOperations.put({
+          ...operation,
+          state: "completed",
+          lastCompletedStep: command.stepKey,
+          result,
+        });
+        return result;
+      });
+    },
+    listAgentTaskAuthorityViews(session) {
+      return storage.transaction(() => {
+        const live = authority.openSession(
+          session.principalId,
+          session.permissionKind === "owner",
+        );
+        if (!live || live.authorityEpoch !== session.authorityEpoch ||
+            live.permissionGeneration !== session.permissionGeneration ||
+            live.permissionKind !== session.permissionKind) {
+          throw new Error("Authority session is stale or revoked.");
+        }
+        return Array.from(storage.agentTasks.list()).map(task => {
+          const environment = storage.taskEnvironments.byTaskGeneration.get(
+            compositeKey(task.id, task.environmentGeneration),
+          );
+          const approval = storage.taskTemplateApprovals.get(task.templateApprovalId);
+          const template = approval && storage.taskTemplateVersions.get(
+            compositeKey(approval.taskTemplateId, approval.taskTemplateVersion),
+          );
+          const dispatch = storage.taskDispatchDecisions.get(task.dispatchDecisionId);
+          if (!environment || !approval || !template || !dispatch) {
+            throw new Error(`Agent Task ${task.id} governance lineage is incomplete.`);
+          }
+          const blocks: Array<AgentTaskAuthorityView["blocks"][number]> = [];
+          if (environment.state !== "ready") {
+            blocks.push({type: "missingAcknowledgement", reference: environment.id});
+          }
+          for (const placement of environment.bindings) {
+            const binding = storage.bindings.get(placement.bindingId);
+            if (!binding || binding.status !== "active") {
+              blocks.push({type: "staleParallelWork", reference: placement.bindingId});
+            }
+          }
+          const cancellation = storage.agentTaskCancellations.get(task.id);
+          const operational = storage.agentTaskOperationalState.get(task.id);
+          const profile = storage.agentServiceProfiles.get(task.agentServiceProfileId);
+          if (!profile || profile.generation !== task.agentServiceProfileGeneration) {
+            throw new Error(`Agent Task ${task.id} Agent Service lineage is incomplete.`);
+          }
+          if (cancellation?.state === "requested") {
+            blocks.push({type: "missingAcknowledgement",
+              reference: `cancellation:${cancellation.generation}`});
+          }
+          for (const reference of operational?.protectedResultRefs ?? []) {
+            blocks.push({type: "protectedResult", reference});
+          }
+          for (const reference of operational?.missingAcknowledgementRefs ?? []) {
+            blocks.push({type: "missingAcknowledgement", reference});
+          }
+          for (const reference of operational?.staleParallelWorkRefs ?? []) {
+            blocks.push({type: "staleParallelWork", reference});
+          }
+          const authorityEvents = Array.from(storage.workspaceAuthorityEvents.list())
+            .filter(event => event.subjectId === task.id)
+            .map(event => `authority-event:${event.sequence}`);
+          return {
+            taskId: task.id,
+            taskGeneration: task.generation,
+            lifecycle: task.lifecycle,
+            principal: structuredClone(task.correlation.principal),
+            agentServiceProfile: {
+              id: task.agentServiceProfileId,
+              generation: task.agentServiceProfileGeneration,
+            },
+            agentServiceWorkload: {
+              id: profile.workloadId,
+              generation: profile.workloadGeneration,
+            },
+            template: {
+              id: template.taskTemplateId,
+              version: template.version,
+              approvalId: approval.id,
+              approvalLifecycle: approval.lifecycle,
+              ...(template.supersedesVersion === undefined
+                ? {}
+                : {supersedesVersion: template.supersedesVersion}),
+              ceilingDigest: template.ceilingDigest,
+              artifactApprovals: structuredClone(approval.artifactApprovals),
+            },
+            lease: {
+              generation: task.leaseGeneration,
+              expiresAt: task.leaseExpiresAt,
+              absoluteExpiresAt: task.absoluteExpiresAt,
+            },
+            environment: {
+              generation: environment.generation,
+              ratchetVersion: environment.ratchetVersion,
+              state: environment.state,
+              originalAuthorityDigest: dispatch.effectiveAuthorityEnvelopeHash,
+              currentAuthorityDigest: environment.effectiveAuthorityDigest,
+              bindings: environment.bindings.map(binding => ({
+                name: binding.name,
+                bindingId: binding.bindingId,
+                contractInstanceId: binding.contractInstanceId,
+              })),
+            },
+            ...(cancellation ? {cancellation: {
+              generation: cancellation.generation,
+              state: cancellation.state,
+            }} : {}),
+            blocks,
+            evidence: {
+              authorityEvents,
+              sourceActivities: structuredClone(operational?.sourceActivityRefs ?? []),
+              agentActivities: structuredClone(operational?.agentActivityRefs ?? []),
+            },
+          } satisfies AgentTaskAuthorityView;
+        });
+      });
+    },
+    listTaskTemplateAuthorityViews(session) {
+      return storage.transaction(() => {
+        const live = authority.openSession(
+          session.principalId,
+          session.permissionKind === "owner",
+        );
+        if (!live || live.authorityEpoch !== session.authorityEpoch ||
+            live.permissionGeneration !== session.permissionGeneration ||
+            live.permissionKind !== session.permissionKind) {
+          throw new Error("Authority session is stale or revoked.");
+        }
+        const approvals = Array.from(storage.taskTemplateApprovals.list());
+        return approvals.map(approval => {
+          const template = storage.taskTemplateVersions.get(
+            compositeKey(approval.taskTemplateId, approval.taskTemplateVersion),
+          );
+          if (!template || template.ceilingDigest !== approval.ceilingDigest) {
+            throw new Error(`Task Template Approval ${approval.id} lineage is incomplete.`);
+          }
+          const consequences = approval.lifecycle === "revoked" ? {
+            newDispatchConsequence: "Refused immediately.",
+            activeTaskConsequence: "Invalidate environments and result gates; cancel without resume.",
+          } : approval.lifecycle === "deprecated" ? {
+            newDispatchConsequence: "Refused from deprecation.",
+            activeTaskConsequence:
+              "May continue only within the existing absolute deadline; no new child may cite it.",
+          } : {
+            newDispatchConsequence: "Eligible while every pinned fact remains active.",
+            activeTaskConsequence: "Remains pinned to this exact version and approval epoch.",
+          };
+          return {
+            id: template.taskTemplateId,
+            version: template.version,
+            approvalId: approval.id,
+            approvalLifecycle: approval.lifecycle,
+            ...(template.supersedesVersion === undefined
+              ? {}
+              : {supersedesVersion: template.supersedesVersion}),
+            ceilingDigest: template.ceilingDigest,
+            artifactApprovals: structuredClone(approval.artifactApprovals),
+            requirements: template.requirements.map(requirement => ({
+              requirementId: requirement.requirementId,
+              name: requirement.name,
+              required: requirement.required,
+              authorityEnvelopeHash: requirement.maximumEffectiveAuthorityEnvelopeHash,
+              artifactApprovalId: requirement.artifactApprovalId,
+              artifactApprovalEpoch: requirement.artifactApprovalEpoch,
+            })),
+            maximumTaskDurationMs: template.maximumTaskDurationMs,
+            ...consequences,
+          } satisfies TaskTemplateAuthorityView;
+        });
+      });
+    },
     setManagerGrant(ownerSession, command, requestDigest) {
       return storage.transaction(() => {
         const state = requireActiveAuthority(storage);
@@ -2399,6 +2662,34 @@ export function createWorkspaceAuthorityModule<
               afterGeneration: record.approvalEpoch,
             });
             return {type: <const>"taskTemplateApprovalRecorded", id: record.id};
+          });
+        case "recordAgentTaskOperationalState":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const record = command.record;
+            const task = storage.agentTasks.get(record.taskId);
+            const environment = task && storage.taskEnvironments.byTaskGeneration.get(
+              compositeKey(task.id, task.environmentGeneration),
+            );
+            if (!task || !environment || task.generation !== record.taskGeneration ||
+                environment.generation !== record.environmentGeneration ||
+                environment.ratchetVersion !== record.ratchetVersion) {
+              throw new Error("Agent Task operational state generations are stale.");
+            }
+            const previous = storage.agentTaskOperationalState.get(record.taskId);
+            if (previous && record.revision < previous.revision) {
+              throw new Error("Agent Task operational state revision is stale.");
+            }
+            if (previous?.revision === record.revision) {
+              if (JSON.stringify(previous) !== JSON.stringify(record)) {
+                throw new Error("Agent Task operational state replay differs.");
+              }
+              return {type: <const>"agentTaskOperationalStateRecorded", taskId: record.taskId,
+                revision: record.revision};
+            }
+            storage.agentTaskOperationalState.put(structuredClone(record));
+            return {type: <const>"agentTaskOperationalStateRecorded", taskId: record.taskId,
+              revision: record.revision};
           });
         case "materializeAgentTaskDispatch":
           return storage.transaction(() => {

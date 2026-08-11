@@ -107,8 +107,23 @@ export interface InstallStandingBindingCommand extends AuthorityCommandEnvelope 
   readonly sharedStateKey?: string;
 }
 
+/** Closed command requesting enforcement-first cancellation of one exact Agent Task generation. */
+export interface CancelAgentTaskCommand extends AuthorityCommandEnvelope {
+  /** Command discriminant. */
+  readonly type: "cancelAgentTask";
+  /** Canonical Agent Task identity. */
+  readonly taskId: string;
+  /** Exact Task generation shown to the operator. */
+  readonly expectedTaskGeneration: number;
+  /** Exact Task Environment generation shown to the operator. */
+  readonly expectedEnvironmentGeneration: number;
+  /** Exact Trust Ratchet version shown to the operator. */
+  readonly expectedRatchetVersion: number;
+}
+
 /** Closed command union accepted by the Workspace Authority root. */
-export type AuthorityCommand = DecideArtifactProposalCommand | InstallStandingBindingCommand;
+export type AuthorityCommand = DecideArtifactProposalCommand | InstallStandingBindingCommand |
+  CancelAgentTaskCommand;
 
 /** Durable result of an Artifact Proposal decision. */
 export interface ArtifactDecisionResult {
@@ -138,8 +153,173 @@ export interface StandingBindingInstallationResult {
   readonly bindingGeneration: number;
 }
 
+/** Durable/local outcome of an explicit Agent Task cancellation request. */
+export interface AgentTaskCancellationResult {
+  /** Result discriminant. */
+  readonly type: "agentTaskCancellationRequested";
+  /** Canonical Agent Task identity. */
+  readonly taskId: string;
+  /** Monotonic cancellation generation. */
+  readonly cancellationGeneration: number;
+  /** Durable request state; transport completion does not imply endpoint invalidation. */
+  readonly state: "requested" | "acknowledged";
+}
+
 /** Closed result union returned by Workspace Authority commands. */
-export type AuthorityCommandResult = ArtifactDecisionResult | StandingBindingInstallationResult;
+export type AuthorityCommandResult = ArtifactDecisionResult | StandingBindingInstallationResult |
+  AgentTaskCancellationResult;
+
+/** One immutable Artifact Approval pinned by a Task Template Approval. */
+export interface AgentTaskArtifactApprovalRef {
+  /** Canonical Artifact Approval identity. */
+  readonly id: string;
+  /** Exact approval epoch. */
+  readonly epoch: number;
+}
+
+/** Immutable Task Template governance shown to an authority operator. */
+export interface AgentTaskTemplateReview {
+  /** Canonical Task Template identity. */
+  readonly id: string;
+  /** Immutable version number. */
+  readonly version: number;
+  /** Canonical Task Template Approval identity. */
+  readonly approvalId: string;
+  /** Current approval lifecycle. */
+  readonly approvalLifecycle: string;
+  /** Previous immutable version superseded by this version, when any. */
+  readonly supersedesVersion?: number;
+  /** Content digest of the approved authority ceiling. */
+  readonly ceilingDigest: string;
+  /** Exact Artifact Approval epochs pinned by the template approval. */
+  readonly artifactApprovals: readonly AgentTaskArtifactApprovalRef[];
+}
+
+/** One immutable requirement ceiling in a Task Template version. */
+export interface TaskTemplateRequirementReview {
+  /** Canonical Requirement identity. */
+  readonly requirementId: string;
+  /** Published Binding name. */
+  readonly name: string;
+  /** Whether dispatch fails when the requirement is unavailable. */
+  readonly required: boolean;
+  /** Maximum Effective Authority Envelope hash. */
+  readonly authorityEnvelopeHash: string;
+  /** Pinned Artifact Approval identity. */
+  readonly artifactApprovalId: string;
+  /** Pinned Artifact Approval epoch. */
+  readonly artifactApprovalEpoch: number;
+}
+
+/** Immutable Task Template version and approval lifecycle for governance review. */
+export interface TaskTemplateAuthorityView extends AgentTaskTemplateReview {
+  /** Exact requirement ceilings in this immutable version. */
+  readonly requirements: readonly TaskTemplateRequirementReview[];
+  /** Maximum task duration admitted by this version. */
+  readonly maximumTaskDurationMs: number;
+  /** Human-readable normative consequence for new dispatches. */
+  readonly newDispatchConsequence: string;
+  /** Human-readable normative consequence for already-dispatched tasks. */
+  readonly activeTaskConsequence: string;
+}
+
+/** Current bounded Task lease view. */
+export interface AgentTaskLeaseView {
+  /** Monotonic lease generation. */
+  readonly generation: number;
+  /** Current lease expiry in Unix milliseconds. */
+  readonly expiresAt: number;
+  /** Immutable absolute Task expiry in Unix milliseconds. */
+  readonly absoluteExpiresAt: number;
+}
+
+/** One capability-free Binding reference in the current Task Environment. */
+export interface AgentTaskBindingView {
+  /** Published Binding name. */
+  readonly name: string;
+  /** Canonical Binding identity. */
+  readonly bindingId: string;
+  /** Canonical Contract Instance identity. */
+  readonly contractInstanceId: string;
+}
+
+/** Current Task Environment and Trust Ratchet view. */
+export interface AgentTaskEnvironmentView {
+  /** Monotonic Task Environment generation. */
+  readonly generation: number;
+  /** Monotonic Trust Ratchet version. */
+  readonly ratchetVersion: number;
+  /** Current environment lifecycle. */
+  readonly state: string;
+  /** Authority digest admitted by the original dispatch. */
+  readonly originalAuthorityDigest: string;
+  /** Authority digest active in the current environment. */
+  readonly currentAuthorityDigest: string;
+  /** Capability-free references to current task Bindings. */
+  readonly bindings: readonly AgentTaskBindingView[];
+}
+
+/** One bounded operational block safe for display. */
+export interface AgentTaskOperationalBlock {
+  /** Closed block category. */
+  readonly type: "protectedResult" | "missingAcknowledgement" | "staleParallelWork";
+  /** Stable capability-free record reference. */
+  readonly reference: string;
+}
+
+/** Separately typed evidence references for one task. */
+export interface AgentTaskEvidenceRefs {
+  /** Workspace Authority Event references. */
+  readonly authorityEvents: readonly string[];
+  /** Provider-owned Source Activity references. */
+  readonly sourceActivities: readonly string[];
+  /** Workspace-owned Agent Activity references. */
+  readonly agentActivities: readonly string[];
+}
+
+/** Canonical identity paired with one monotonic generation. */
+export interface AgentTaskGenerationRef {
+  /** Canonical identity. */
+  readonly id: string;
+  /** Monotonic generation. */
+  readonly generation: number;
+}
+
+/** Durable cancellation state, distinct from transport completion. */
+export interface AgentTaskCancellationView {
+  /** Monotonic cancellation generation. */
+  readonly generation: number;
+  /** Durable/local cancellation state. */
+  readonly state: "requested" | "acknowledged";
+}
+
+/** Bounded, capability-free operator view of one Agent Task and its immutable governance. */
+export interface AgentTaskAuthorityView {
+  /** Canonical Agent Task identity. */
+  readonly taskId: string;
+  /** Current Task generation. */
+  readonly taskGeneration: number;
+  /** Current lifecycle. */
+  readonly lifecycle: string;
+  /** Initiating Principal identity and generation. */
+  readonly principal: AgentTaskGenerationRef;
+  /** Agent Service Workload profile identity and generation. */
+  readonly agentServiceProfile: AgentTaskGenerationRef;
+  /** Canonical Agent Service Workload identity and generation. */
+  readonly agentServiceWorkload: AgentTaskGenerationRef;
+  /** Immutable approved Task Template identity and version. */
+  readonly template: AgentTaskTemplateReview;
+  /** Current lease and immutable absolute expiry. */
+  readonly lease: AgentTaskLeaseView;
+  /** Current Task Environment and Trust Ratchet generation. */
+  readonly environment: AgentTaskEnvironmentView;
+  /** Durable cancellation state, distinct from transport outcome. */
+  readonly cancellation?: AgentTaskCancellationView;
+  /** Bounded operational blocks safe for the authority UI. */
+  readonly blocks: readonly AgentTaskOperationalBlock[];
+  /** Separately typed evidence references; bodies and credentials are never included. */
+  readonly evidence: AgentTaskEvidenceRefs;
+}
 
 function canonicalAuthorityJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -163,7 +343,8 @@ function canonicalAuthorityJson(value: unknown): string {
 export async function hashAuthorityCommand(
   command:
     | Omit<DecideArtifactProposalCommand, "requestDigest">
-    | Omit<InstallStandingBindingCommand, "requestDigest">,
+    | Omit<InstallStandingBindingCommand, "requestDigest">
+    | Omit<CancelAgentTaskCommand, "requestDigest">,
 ): Promise<string> {
   return hashAuthorityRequest(command);
 }
@@ -192,6 +373,10 @@ export interface AuthorityApi extends RpcTarget {
   openOwnerControl(): Promise<RpcStub<AuthorityOwnerApi> | null>;
   /** Opens a guarded reader for the exact immutable evidence under review. */
   openReviewEvidence(request: OpenReviewEvidenceRequest): Promise<RpcStub<ReviewEvidenceReader>>;
+  /** Lists bounded current Agent Task authority views for review and operations. */
+  listAgentTasks(): Promise<readonly AgentTaskAuthorityView[]>;
+  /** Lists every approved immutable Task Template version and approval consequence. */
+  listTaskTemplates(): Promise<readonly TaskTemplateAuthorityView[]>;
 }
 
 /** Owner-only control over named `manageAuthority` grants. */

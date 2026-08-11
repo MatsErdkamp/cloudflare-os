@@ -103,6 +103,7 @@ import { normalizeResourceUrl } from "./resourceMatching";
 import DeleteConfirmationDialog from "./components/DeleteConfirmationDialog";
 import AutoApproveConfirmDialog from "./components/AutoApproveConfirmDialog";
 import { AlwaysApproveButton, ResolveButton } from "./components/ResolveButton";
+import {AgentTaskAuthorityPanel} from "./components/AgentTaskAuthorityPanel";
 import { useActionEntries } from "./useActions";
 import { useAlwaysApproveTag } from "./useAlwaysApproveTag";
 import { useResolveAction } from "./useResolveAction";
@@ -4329,7 +4330,7 @@ function ChatInterface({
   );
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [sidebarActiveTab, setSidebarActiveTab] = useState<
-    "chat" | "connections"
+    "chat" | "connections" | "tasks"
   >("chat");
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
 
@@ -6997,6 +6998,17 @@ function ChatInterface({
               >
                 Connections
               </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setSidebarActiveTab("tasks")}
+                className={`relative flex h-full cursor-pointer items-center text-[13px] leading-[18px] tracking-[-0.25px] transition-colors ${
+                  sidebarActiveTab === "tasks"
+                    ? "font-medium text-foreground after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:rounded-full after:bg-foreground/70"
+                    : "font-normal text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Tasks
+              </Button>
             </div>
           )}
 
@@ -7006,6 +7018,15 @@ function ChatInterface({
             renderExtraTab && (
               <div className="flex-1 overflow-auto">{renderExtraTab()}</div>
             )}
+
+          {sidebarMode && sidebarActiveTab === "tasks" && (
+            <div className="flex-1 overflow-auto">
+              <AgentTaskAuthorityPanel
+                authenticatedApi={authenticatedApi}
+                workspaceId={workspaceId}
+              />
+            </div>
+          )}
 
           {/* Chat content — hidden when connections tab is active in sidebar mode */}
           {(!sidebarMode || sidebarActiveTab === "chat") && (
