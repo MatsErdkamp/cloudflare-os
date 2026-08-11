@@ -6,9 +6,12 @@ import {
 } from "@gadgets/workshop-shared/api";
 import type {
   AuthorityCommandResult,
+  AuthorityCommandEnvelope,
   AuthorityOwnerCommand,
   AuthorityOwnerCommandResult,
   DecideArtifactProposalCommand,
+  InstallStandingBindingCommand,
+  StandingBindingInstallationResult,
 } from "@gadgets/workshop-shared/authority-api";
 import type {
   AuthorityId,
@@ -20,6 +23,8 @@ import type {
   AuthorityDebtRecord,
   AuthorityLifecycleTombstoneRecord,
   BindingId,
+  BindingPublicationPlanId,
+  BindingPublicationPlanRecord,
   BindingRecord,
   BindingRequirementReference,
   BindingResolutionId,
@@ -31,6 +36,8 @@ import type {
   ContractInstanceRecord,
   InstallationDecisionId,
   InstallationDecisionRecord,
+  InvalidationIntentId,
+  InvalidationIntentRecord,
   LiveUpstreamAuthorityReference,
   PlacementDecisionReference,
   RuntimeApprovalDecisionId,
@@ -43,6 +50,16 @@ import type {
   RequirementId,
   UpstreamAuthorityReference,
 } from "./records";
+import type {
+  ContractInvalidationAcknowledgement,
+  ContractReachabilitySnapshot,
+} from "@gadgets/contractors/runtime";
+import {validateContractReachabilitySnapshot} from "@gadgets/contractors/host";
+import type {
+  ProviderAuthorityDescription,
+  ProviderAuthorityIdentity,
+  ProviderAuthorityLifecycleResult,
+} from "@gadgets/workshop-shared/gatekeeper-authority";
 
 const LEGACY_MANAGER_SOURCE_SAMPLE_LIMIT = 16;
 const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
@@ -189,6 +206,11 @@ type WorkspaceAuthorityEvent = {
     | "taskDispatchDecisionRecorded"
     | "contractInstancePrepared"
     | "contractInstanceRetracted"
+    | "authorityEffectCreated"
+    | "authorityEffectSucceeded"
+    | "authorityEffectDeadLettered"
+    | "bindingPublicationPlanned"
+    | "invalidationStarted"
     | "bindingPublished"
     | "bindingSuspended"
     | "bindingRetracted"
@@ -196,6 +218,7 @@ type WorkspaceAuthorityEvent = {
     | "runtimeApprovalDecided"
     | "authorityDebtRecorded"
     | "authorityManagerGrantChanged"
+    | "hostAuthorityIdentityIssued"
     | "migrationBaseline";
   revision: number;
   subjectId?: string;
@@ -210,10 +233,111 @@ type WorkspaceAuthorityEvent = {
   };
 };
 
-type WorkspaceAuthorityEffect = {
+type WorkspaceAuthorityEffectBase = {
   id: string;
-  state: "pending" | "completed";
+  operationId: string;
+  stepKey: string;
+  lane: string;
+  causalSequence: number;
+  inputDigest: string;
+  state: "pending" | "claimed" | "retryScheduled" | "outcomeUnknown" |
+    "succeeded" | "deadLetter";
+  attempt: number;
+  firstAttemptAt?: number;
+  claimToken?: string;
+  claimUntil?: number;
+  nextAttemptAt: number;
+  reason?: "providerUnavailable" | "claimExpired";
 };
+
+type StandingInstallationEffectContext = {
+  targetId: ContractInstanceId;
+  decisionId: InstallationDecisionId;
+  command: InstallStandingBindingCommand;
+  principalId: string;
+  permissionGeneration: number;
+  providerDescription: ProviderAuthorityDescription;
+  planId: BindingPublicationPlanId;
+  bindingId: BindingId;
+  targetBindingGeneration: number;
+  phase: "providerPrepare" | "endpointInstall" | "providerActivate" |
+    "predecessorInvalidate" | "publish";
+  endpointAcknowledgement?: Readonly<{endpointId: string; reachabilityGeneration: number}>;
+  cleanupResponsibility: false;
+};
+
+/** Exact provider preparation call for an accepted standing installation. */
+export type PrepareProviderBackingEffect = WorkspaceAuthorityEffectBase &
+  StandingInstallationEffectContext & {kind: "prepareProviderBacking"};
+
+/** Exact Contract Facet endpoint-install call after provider preparation. */
+export type InstallContractEndpointEffect = WorkspaceAuthorityEffectBase &
+  StandingInstallationEffectContext & {
+    kind: "installContractEndpoint";
+    providerPrepared: ProviderAuthorityLifecycleResult;
+    snapshot: ContractReachabilitySnapshot;
+  };
+
+/** Exact provider activation call after durable endpoint acknowledgement. */
+export type ActivateProviderBackingEffect = WorkspaceAuthorityEffectBase &
+  StandingInstallationEffectContext & {
+    kind: "activateProviderBacking";
+    providerPrepared: ProviderAuthorityLifecycleResult;
+    snapshot: ContractReachabilitySnapshot;
+    endpointAcknowledgement: Readonly<{endpointId: string; reachabilityGeneration: number}>;
+  };
+
+/** Exact predecessor endpoint invalidation call before replacement publication. */
+export type InvalidatePredecessorEffect = WorkspaceAuthorityEffectBase &
+  StandingInstallationEffectContext & {
+    kind: "invalidatePredecessorEndpoint";
+    providerPrepared: ProviderAuthorityLifecycleResult;
+    snapshot: ContractReachabilitySnapshot;
+    endpointAcknowledgement: Readonly<{endpointId: string; reachabilityGeneration: number}>;
+    intentId: InvalidationIntentId;
+    predecessorRuntimeWorkpieceId: WorkpieceId;
+    predecessorSnapshot: ContractReachabilitySnapshot;
+  };
+
+/** One immutable external call in a standing installation chain. */
+export type StandingInstallationEffect = PrepareProviderBackingEffect |
+  InstallContractEndpointEffect | ActivateProviderBackingEffect | InvalidatePredecessorEffect;
+
+/** One exact, durable external cleanup obligation claimed by the workspace reconciler. */
+export type CleanupAuthorityEffect = WorkspaceAuthorityEffectBase & {
+  kind: "cleanupProviderBacking" | "cleanupObsoleteContract";
+  targetId: ContractInstanceId;
+  sourceGatekeeperId: WorkpieceId;
+  runtimeWorkpieceId?: WorkpieceId;
+  endpointSnapshot?: ContractReachabilitySnapshot;
+  expectedProvider: ProviderAuthorityIdentity;
+  contractInstance: Readonly<{id: ContractInstanceId; generation: number}>;
+  expectedCapabilityGeneration: number;
+  deactivationOperationId: string;
+  cleanupResponsibility: true;
+};
+
+/** Exact Contract endpoint invalidation rooted with a terminal Invalidation Intent. */
+export type TerminalInvalidationEffect = WorkspaceAuthorityEffectBase & {
+  kind: "invalidateTerminalEndpoint";
+  targetId: ContractInstanceId;
+  intentId: InvalidationIntentId;
+  runtimeWorkpieceId: WorkpieceId;
+  endpointSnapshot: ContractReachabilitySnapshot;
+  cleanupResponsibility: false;
+};
+
+/** One exact external obligation owned by Workspace Authority. */
+export type WorkspaceAuthorityEffect = StandingInstallationEffect | CleanupAuthorityEffect |
+  TerminalInvalidationEffect;
+
+function isStandingInstallationEffect(
+  effect: WorkspaceAuthorityEffect | undefined,
+): effect is StandingInstallationEffect {
+  return effect?.kind === "prepareProviderBacking" || effect?.kind === "installContractEndpoint" ||
+    effect?.kind === "activateProviderBacking" ||
+    effect?.kind === "invalidatePredecessorEndpoint";
+}
 
 type LegacyManagerSourceUse = {
   chatId: number;
@@ -229,6 +353,14 @@ type LegacyManagerSourceTelemetry = {
 type LegacyIdentityMapRecord = {
   key: string;
   canonicalId: string;
+};
+
+type HostAuthorityIdentityRecord = {
+  key: string;
+  kind: "consumer" | "source" | "requirement";
+  hostId: WorkpieceId | string;
+  canonicalId: string;
+  createdSequence: number;
 };
 
 type AuthorityMigrationDelta = {
@@ -251,8 +383,28 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
       workspaceAuthorityEvents: collection<WorkspaceAuthorityEvent>()({
         primaryKey: "sequence",
       }),
+      hostAuthorityIdentities: collection<HostAuthorityIdentityRecord>()({primaryKey: "key"}),
       workspaceAuthorityEffects: collection<WorkspaceAuthorityEffect>()({
         primaryKey: "id",
+        uniqueIndexes: {
+          byInstallationOperation(record: WorkspaceAuthorityEffect) {
+            return record.kind === "prepareProviderBacking" ? record.operationId : null;
+          },
+        },
+        nonUniqueIndexes: {
+          byTarget(record: WorkspaceAuthorityEffect) {
+            return record.targetId;
+          },
+          byState(record: WorkspaceAuthorityEffect) {
+            return record.state;
+          },
+          byDue(record: WorkspaceAuthorityEffect) {
+            if (record.state === "succeeded" || record.state === "deadLetter") return null;
+            return record.state === "claimed"
+              ? record.claimUntil ?? record.nextAttemptAt
+              : record.nextAttemptAt;
+          },
+        },
       }),
       authorityManagerGrants: collection<AuthorityManagerGrant>()({primaryKey: "principalId"}),
       authorityCommandReceipts: collection<AuthorityCommandReceipt>()({primaryKey: "key"}),
@@ -281,6 +433,11 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
       }),
       installationDecisions: collection<InstallationDecisionRecord>()({
         primaryKey: "id",
+        uniqueIndexes: {
+          byOperation(record: InstallationDecisionRecord) {
+            return record.operationId;
+          },
+        },
       }),
       taskDispatchDecisions: collection<TaskDispatchDecisionRecord>()({
         primaryKey: "id",
@@ -293,6 +450,9 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
         uniqueIndexes: {
           byLegacyWorkpieceId(record: ContractInstanceRecord) {
             return record.legacyWorkpieceId ?? null;
+          },
+          byPlacementDecision(record: ContractInstanceRecord) {
+            return compositeKey(record.placementDecision.type, record.placementDecision.decisionId);
           },
         },
         nonUniqueIndexes: {
@@ -319,6 +479,30 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
           },
         },
       }),
+      bindingPublicationPlans: collection<BindingPublicationPlanRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byOperation(record: BindingPublicationPlanRecord) {
+            return record.operationId;
+          },
+        },
+      }),
+      invalidationIntents: collection<InvalidationIntentRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byPlan(record: InvalidationIntentRecord) {
+            return record.planId ?? null;
+          },
+          byOperation(record: InvalidationIntentRecord) {
+            return record.operationId;
+          },
+        },
+        nonUniqueIndexes: {
+          byBinding(record: InvalidationIntentRecord) {
+            return record.bindingId;
+          },
+        },
+      }),
       runtimeApprovalRequests: collection<RuntimeApprovalRequestRecord>()({
         primaryKey: "id",
       }),
@@ -332,7 +516,7 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
       }),
       authorityDebts: collection<AuthorityDebtRecord>()({
         primaryKey: "id",
-        nonUniqueIndexes: {
+        uniqueIndexes: {
           byBinding(record: AuthorityDebtRecord) {
             return record.bindingId ?? null;
           },
@@ -368,9 +552,10 @@ type LiveArtifactApprovalInput = Omit<
   "id" | "approvalEpoch" | "decisionSequence" | "revision"
 >;
 
-type LiveInstallationDecisionInput = Omit<
+export type LiveInstallationDecisionInput = Omit<
   InstallationDecisionRecord,
   | "id"
+  | "operationId"
   | "decisionSequence"
   | "consumer"
   | "requirement"
@@ -428,7 +613,15 @@ export type WorkspaceAuthorityCommand =
       record: LiveContractInstanceInput;
     }
   | {
-      type: "publishBinding";
+      type: "recordProviderBacking";
+      operationId: string;
+      contractInstanceId: ContractInstanceId;
+      expectedInstanceGeneration: number;
+      description: ProviderAuthorityDescription;
+      result: ProviderAuthorityLifecycleResult;
+    }
+  | {
+      type: "planBindingPublication";
       operationId: string;
       contractInstanceId: ContractInstanceId;
       consumer: ConsumerReference;
@@ -439,11 +632,41 @@ export type WorkspaceAuthorityCommand =
       evaluatorPolicyHash: string;
     }
   | {
-      type: "suspendBinding" | "retractBinding";
+      type: "acknowledgeBindingEndpoint";
+      operationId: string;
+      planId: BindingPublicationPlanId;
+      snapshot: ContractReachabilitySnapshot;
+      acknowledgement: Readonly<{endpointId: string; reachabilityGeneration: number}>;
+    }
+  | {
+      type: "acknowledgeBindingInvalidation";
+      operationId: string;
+      planId: BindingPublicationPlanId;
+      acknowledgement: ContractInvalidationAcknowledgement;
+    }
+  | {
+      type: "commitBindingPublication";
+      operationId: string;
+      planId: BindingPublicationPlanId;
+    }
+  | {
+      type: "beginBindingInvalidation";
       operationId: string;
       bindingId: BindingId;
       expectedGeneration: number;
+      terminalTarget: "suspended" | "retracted";
       reason: string;
+    }
+  | {
+      type: "acknowledgeTerminalBindingInvalidation";
+      operationId: string;
+      intentId: InvalidationIntentId;
+      acknowledgement: ContractInvalidationAcknowledgement;
+    }
+  | {
+      type: "commitTerminalBindingInvalidation";
+      operationId: string;
+      intentId: InvalidationIntentId;
     }
   | {
       type: "requestRuntimeApproval";
@@ -481,6 +704,20 @@ export type WorkspaceAuthorityCommandResult =
   | {type: "installationDecisionRecorded"; id: InstallationDecisionId; sequence: number}
   | {type: "taskDispatchDecisionRecorded"; id: TaskDispatchDecisionId; sequence: number}
   | {type: "contractInstancePrepared"; id: ContractInstanceId; sequence: number}
+  | {type: "providerBackingRecorded"; id: ContractInstanceId; capabilityGeneration: number}
+  | {
+      type: "bindingPublicationPlanned";
+      planId: BindingPublicationPlanId;
+      bindingId: BindingId;
+      resolutionId: BindingResolutionId;
+      generation: number;
+    }
+  | {
+      type: "bindingEndpointAcknowledged";
+      planId: BindingPublicationPlanId;
+      invalidationIntentId?: InvalidationIntentId;
+    }
+  | {type: "bindingInvalidationAcknowledged"; planId: BindingPublicationPlanId}
   | {
       type: "bindingPublished";
       bindingId: BindingId;
@@ -488,6 +725,9 @@ export type WorkspaceAuthorityCommandResult =
       generation: number;
       sequence: number;
     }
+  | {type: "bindingPublicationObsolete"; planId: BindingPublicationPlanId; reason: "staleCas"}
+  | {type: "bindingInvalidationPlanned"; intentId: InvalidationIntentId}
+  | {type: "terminalBindingInvalidationAcknowledged"; intentId: InvalidationIntentId}
   | {type: "bindingSuspended" | "bindingRetracted"; generation: number; sequence: number}
   | {type: "runtimeApprovalRequested"; id: RuntimeApprovalRequestId; sequence: number}
   | {type: "runtimeApprovalDecided"; id: RuntimeApprovalDecisionId; sequence: number}
@@ -504,14 +744,23 @@ export type WorkspaceAuthorityQuery =
   | {type: "artifactApproval"; id: ArtifactApprovalId}
   | {type: "artifactApprovalByProposal"; proposalId: ArtifactProposalId}
   | {type: "installationDecision"; id: InstallationDecisionId}
+  | {type: "installationDecisionByOperation"; operationId: string}
   | {type: "taskDispatchDecision"; id: TaskDispatchDecisionId}
   | {type: "contractInstance"; id: ContractInstanceId}
   | {type: "binding"; id: BindingId}
   | {type: "bindingByConsumerName"; consumerId: ConsumerId; name: string}
+  | {type: "bindingByInstance"; contractInstanceId: ContractInstanceId}
   | {type: "bindingResolution"; id: BindingResolutionId}
+  | {type: "bindingPublicationPlan"; id: BindingPublicationPlanId}
+  | {type: "invalidationIntentByPlan"; planId: BindingPublicationPlanId}
+  | {type: "invalidationIntentByOperation"; operationId: string}
+  | {type: "bindingExecution"; consumerId: ConsumerId; name: string}
+  | {type: "bindingExecutionByInstance"; contractInstanceId: ContractInstanceId}
+  | {type: "consumerReadiness"; consumerId: ConsumerId}
   | {type: "runtimeApprovalRequest"; id: RuntimeApprovalRequestId}
   | {type: "runtimeApprovalDecision"; id: RuntimeApprovalDecisionId}
   | {type: "authorityDebt"; id: AuthorityDebtId}
+  | {type: "authorityDebtByBinding"; bindingId: BindingId}
   | {
       type: "authorityTombstoneBySubject";
       subjectType: AuthorityLifecycleTombstoneRecord["subject"]["type"];
@@ -536,14 +785,23 @@ export type WorkspaceAuthorityQueryResult =
   | {type: "artifactApproval"; value?: ArtifactApprovalRecord}
   | {type: "artifactApprovalByProposal"; value?: ArtifactApprovalRecord}
   | {type: "installationDecision"; value?: InstallationDecisionRecord}
+  | {type: "installationDecisionByOperation"; value?: InstallationDecisionRecord}
   | {type: "taskDispatchDecision"; value?: TaskDispatchDecisionRecord}
   | {type: "contractInstance"; value?: ContractInstanceRecord}
   | {type: "binding"; value?: BindingRecord}
   | {type: "bindingByConsumerName"; value?: BindingRecord}
+  | {type: "bindingByInstance"; value?: BindingRecord}
   | {type: "bindingResolution"; value?: BindingResolutionRecord}
+  | {type: "bindingPublicationPlan"; value?: BindingPublicationPlanRecord}
+  | {type: "invalidationIntentByPlan"; value?: InvalidationIntentRecord}
+  | {type: "invalidationIntentByOperation"; value?: InvalidationIntentRecord}
+  | {type: "bindingExecution"; value?: Readonly<{binding: BindingRecord; instance: ContractInstanceRecord}>}
+  | {type: "bindingExecutionByInstance"; value?: Readonly<{binding: BindingRecord; instance: ContractInstanceRecord}>}
+  | {type: "consumerReadiness"; value: Readonly<{ready: boolean; generation: number}>}
   | {type: "runtimeApprovalRequest"; value?: RuntimeApprovalRequestRecord}
   | {type: "runtimeApprovalDecision"; value?: RuntimeApprovalDecisionRecord}
   | {type: "authorityDebt"; value?: AuthorityDebtRecord}
+  | {type: "authorityDebtByBinding"; value?: AuthorityDebtRecord}
   | {type: "authorityTombstoneBySubject"; value?: AuthorityLifecycleTombstoneRecord};
 
 /** The result of one bounded reconciliation pass. */
@@ -559,6 +817,66 @@ export interface WorkspaceAuthority {
   execute(command: WorkspaceAuthorityCommand): WorkspaceAuthorityCommandResult;
   query(query: WorkspaceAuthorityQuery): WorkspaceAuthorityQueryResult;
   reconcile(): WorkspaceAuthorityReconciliationResult;
+  claimDueEffects(
+    now: number,
+    limit: number,
+    createClaimToken: () => string,
+  ): readonly WorkspaceAuthorityEffect[];
+  startStandingInstallationEffect(input: Readonly<{
+    command: InstallStandingBindingCommand;
+    requestDigest: string;
+    decision: InstallationDecisionRecord;
+    contractInstanceId: ContractInstanceId;
+    providerDescription: ProviderAuthorityDescription;
+  }>): StandingInstallationEffect;
+  advanceStandingInstallationEffect(
+    effectId: string,
+    claimToken: string,
+    phase: StandingInstallationEffect["phase"],
+  ): void;
+  recordStandingInstallationEndpointOutcome(
+    effectId: string,
+    claimToken: string,
+    acknowledgement: Readonly<{endpointId: string; reachabilityGeneration: number}>,
+  ): void;
+  completeProviderPreparationEffect(
+    effectId: string,
+    claimToken: string,
+    result: ProviderAuthorityLifecycleResult,
+    snapshot: ContractReachabilitySnapshot,
+    debt: Omit<AuthorityDebtRecord, "id" | "revision">,
+  ): void;
+  completeEndpointInstallationEffect(
+    effectId: string,
+    claimToken: string,
+    acknowledgement: Readonly<{endpointId: string; reachabilityGeneration: number}>,
+  ): void;
+  completeProviderActivationEffect(
+    effectId: string,
+    claimToken: string,
+    result: ProviderAuthorityLifecycleResult,
+  ): StandingBindingInstallationResult | undefined;
+  completeStandingInstallationEffect(
+    effectId: string,
+    claimToken: string,
+    result: StandingBindingInstallationResult,
+  ): void;
+  completeTerminalInvalidationEffect(
+    effectId: string,
+    claimToken: string,
+    acknowledgement: ContractInvalidationAcknowledgement,
+  ): void;
+  completeEffect(effectId: string, claimToken: string): void;
+  retryEffect(effectId: string, claimToken: string, now: number): void;
+  nextEffectDueAt(): number | undefined;
+  resolveLegacyIdentity(
+    kind: "consumer" | "source" | "requirement",
+    legacyId: WorkpieceId | string,
+  ): string | undefined;
+  ensureHostIdentity(
+    kind: "consumer" | "source" | "requirement",
+    hostId: WorkpieceId | string,
+  ): string;
   openSession(principalId: string, isOwner: boolean): AuthoritySessionBinding | undefined;
   beginOperation(
     session: AuthoritySessionBinding,
@@ -576,6 +894,24 @@ export interface WorkspaceAuthority {
     command: DecideArtifactProposalCommand,
     requestDigest: string,
   ): Extract<WorkspaceAuthorityCommandResult, {type: "artifactApprovalRecorded"}>;
+  recordStandingInstallationDecision(
+    session: AuthoritySessionBinding,
+    command: InstallStandingBindingCommand,
+    requestDigest: string,
+    record: LiveInstallationDecisionInput,
+  ): InstallationDecisionRecord;
+  acceptStandingInstallation(input: Readonly<{
+    session: AuthoritySessionBinding;
+    command: InstallStandingBindingCommand;
+    requestDigest: string;
+    decision: LiveInstallationDecisionInput;
+    instance: Omit<LiveContractInstanceInput, "placementDecision">;
+    providerDescription: ProviderAuthorityDescription;
+  }>): Readonly<{
+    decision: InstallationDecisionRecord;
+    contractInstanceId: ContractInstanceId;
+    effect: StandingInstallationEffect;
+  }>;
   setManagerGrant(
     ownerSession: AuthoritySessionBinding,
     command: AuthorityOwnerCommand,
@@ -683,7 +1019,7 @@ function status(storage: AuthorityStorage): WorkspaceAuthorityStatus {
   const state = storage.workspaceAuthorityState.get();
   let pendingEffects = 0;
   for (const effect of storage.workspaceAuthorityEffects.list()) {
-    if (effect.state === "pending") pendingEffects++;
+    if (effect.state !== "succeeded") pendingEffects++;
   }
   return {
     state: state?.state ?? "uninitialized",
@@ -693,6 +1029,16 @@ function status(storage: AuthorityStorage): WorkspaceAuthorityStatus {
     pendingMigrationDeltas: [...storage.authorityMigrationDeltas.list()].length,
     ...(state?.cutoverDigest ? {cutoverDigest: state.cutoverDigest} : {}),
   };
+}
+
+function effectRetryDelay(effectId: string, attempt: number): number {
+  let hash = 2166136261;
+  for (const character of `${effectId}:${attempt}`) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  const jitter = 0.75 + ((hash >>> 0) / 0xffffffff) * 0.5;
+  return Math.floor(Math.min(5_000 * (2 ** Math.max(0, attempt - 1)), 15 * 60_000) * jitter);
 }
 
 function requireAuthorityState(storage: AuthorityStorage): WorkspaceAuthorityState {
@@ -726,8 +1072,41 @@ function appendAuthorityEvent(
   return sequence;
 }
 
+function canonicalAuthorityValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalAuthorityValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .toSorted(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([key, child]) => [key, canonicalAuthorityValue(child)]));
+  }
+  return value;
+}
+
 function sameAuthorityValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return JSON.stringify(canonicalAuthorityValue(left)) ===
+    JSON.stringify(canonicalAuthorityValue(right));
+}
+
+function validatePublicationSnapshot(
+  plan: BindingPublicationPlanRecord,
+  instance: ContractInstanceRecord,
+  snapshot: ContractReachabilitySnapshot,
+): ContractReachabilitySnapshot {
+  const exact = validateContractReachabilitySnapshot(snapshot);
+  const endpointId = `contract-instance:${instance.id}`;
+  if (exact.endpointId !== endpointId || exact.instanceId !== instance.id ||
+      exact.instanceGeneration !== instance.generation ||
+      exact.artifactHash !== instance.artifactHash ||
+      exact.runtimeProfileHash !== instance.runtimeProfileHash ||
+      exact.reachabilityId !== `binding:${plan.bindingId}` ||
+      exact.reachabilityGeneration !== plan.targetBindingGeneration ||
+      exact.chainDepth !== 0 || exact.maxChainDepth !== 8 ||
+      !sameAuthorityValue(exact.compositionLineage, [endpointId])) {
+    throw new Error("Binding endpoint acknowledgement differs from its canonical publication plan.");
+  }
+  requireContentHash(exact.authoritySnapshotDigest, "Authority snapshot digest");
+  return exact;
 }
 
 function requireActiveApproval(
@@ -885,6 +1264,84 @@ function transitionContractInstance(
   }
 }
 
+function rootProviderCleanupEffect(
+  storage: AuthorityStorage,
+  instance: ContractInstanceRecord,
+  binding: BindingRecord,
+  operationId: string,
+  invalidateEndpoint = false,
+): void {
+  if (!instance.providerBacking || instance.sourceGatekeeperId === undefined) return;
+  if (instance.placementDecision.type !== "installation") {
+    throw new Error("Standing cleanup requires an Installation Decision lineage.");
+  }
+  const decision = storage.installationDecisions.get(instance.placementDecision.decisionId);
+  if (!decision) throw new Error("Installation Decision disappeared before cleanup.");
+  const effectId = issueAuthorityId<"authorityEffect">();
+  const effectSequence = appendAuthorityEvent(storage, {
+    type: "authorityEffectCreated",
+    subjectId: effectId,
+    operationId,
+  });
+  storage.workspaceAuthorityEffects.put({
+    id: effectId,
+    operationId,
+    stepKey: `cleanup-provider:${instance.id}`,
+    kind: invalidateEndpoint ? "cleanupObsoleteContract" : "cleanupProviderBacking",
+    targetId: instance.id,
+    lane: `contract-instance:${instance.id}`,
+    causalSequence: effectSequence,
+    inputDigest: binding.endpointSnapshot!.authoritySnapshotDigest,
+    sourceGatekeeperId: instance.sourceGatekeeperId,
+    ...(instance.runtimeWorkpieceId !== undefined
+      ? {runtimeWorkpieceId: instance.runtimeWorkpieceId}
+      : {}),
+    ...(invalidateEndpoint && binding.endpointSnapshot
+      ? {endpointSnapshot: structuredClone(binding.endpointSnapshot)}
+      : {}),
+    expectedProvider: structuredClone(instance.providerBacking.provider),
+    contractInstance: {id: instance.id, generation: instance.generation},
+    expectedCapabilityGeneration: instance.providerBacking.capabilityGeneration,
+    deactivationOperationId: `${decision.operationId}:provider-deactivate:${instance.id}`,
+    state: "pending",
+    attempt: 0,
+    nextAttemptAt: 0,
+    cleanupResponsibility: true,
+  });
+}
+
+function standingEffectContext(effect: StandingInstallationEffect): StandingInstallationEffectContext {
+  return {
+    targetId: effect.targetId,
+    decisionId: effect.decisionId,
+    command: structuredClone(effect.command),
+    principalId: effect.principalId,
+    permissionGeneration: effect.permissionGeneration,
+    providerDescription: structuredClone(effect.providerDescription),
+    planId: effect.planId,
+    bindingId: effect.bindingId,
+    targetBindingGeneration: effect.targetBindingGeneration,
+    phase: effect.phase,
+    ...(effect.endpointAcknowledgement
+      ? {endpointAcknowledgement: structuredClone(effect.endpointAcknowledgement)}
+      : {}),
+    cleanupResponsibility: false,
+  };
+}
+
+function succeedAuthorityEffect(
+  storage: AuthorityStorage,
+  effect: WorkspaceAuthorityEffect,
+): void {
+  appendAuthorityEvent(storage, {
+    type: "authorityEffectSucceeded",
+    subjectId: effect.id,
+    operationId: effect.operationId,
+  });
+  storage.workspaceAuthorityEffects.put({...effect, state: "succeeded",
+    claimToken: undefined, claimUntil: undefined, reason: undefined});
+}
+
 function backfillLegacyContract<Gadget extends LegacyGadgetAuthorityRecord>(
   storage: AuthorityStorage,
   adapter: LegacyWorkspaceAuthorityAdapter<Gadget>,
@@ -950,6 +1407,7 @@ function backfillLegacyContract<Gadget extends LegacyGadgetAuthorityRecord>(
   });
   storage.installationDecisions.put({
     id: decisionId,
+    operationId: `legacy-contract:${legacy.id}`,
     proposalDigest: digestText(`legacy-contract:${legacy.id}`),
     decision: "approved",
     decidedBy: legacy.approvedBy,
@@ -1082,6 +1540,34 @@ function visibleBindings(
   );
 }
 
+function requireAuthorityCommandContext(
+  storage: AuthorityStorage,
+  session: AuthoritySessionBinding,
+  command: AuthorityCommandEnvelope,
+  requestDigest: string,
+): Readonly<{operation: AuthorityOperationRecord; liveGeneration: number}> {
+  const state = requireActiveAuthority(storage);
+  const authorityEpoch = state.authorityEpoch ?? 1;
+  const liveGeneration = session.permissionKind === "owner"
+    ? state.ownerGeneration ?? 1
+    : (() => {
+        const grant = storage.authorityManagerGrants.get(session.principalId);
+        return grant?.state === "active" ? grant.generation : undefined;
+      })();
+  if (session.authorityEpoch !== authorityEpoch ||
+      command.expectedAuthorityEpoch !== authorityEpoch ||
+      liveGeneration === undefined || session.permissionGeneration !== liveGeneration ||
+      command.expectedPermissionGeneration !== liveGeneration) {
+    throw new Error("Authority session is stale or revoked.");
+  }
+  if (command.requestDigest !== requestDigest) throw new Error("Authority command digest mismatch.");
+  const operation = storage.authorityOperations.get(command.operationId);
+  if (!operation || operation.actor !== session.principalId) {
+    throw new Error("Authority Operation is unavailable.");
+  }
+  return {operation, liveGeneration};
+}
+
 /** Creates the sole in-process Workspace Authority module over the existing Workspace storage. */
 export function createWorkspaceAuthorityModule<
   Gadget extends LegacyGadgetAuthorityRecord = LegacyGadgetAuthorityRecord,
@@ -1171,6 +1657,93 @@ export function createWorkspaceAuthorityModule<
         return [...storage.artifactProposals.list()].some(proposal =>
           proposal.reviewBundleHash === bundleHash &&
           proposal.reviewComparisonHash === comparisonHash);
+      });
+    },
+    recordStandingInstallationDecision(session, command, requestDigest, record) {
+      return storage.transaction(() => {
+        const {liveGeneration} = requireAuthorityCommandContext(
+          storage,
+          session,
+          command,
+          requestDigest,
+        );
+        const existing = storage.installationDecisions.byOperation.get(command.operationId);
+        if (existing) {
+          const expected = {
+            ...structuredClone(record),
+            decidedBy: session.principalId,
+            permissionGeneration: liveGeneration,
+          };
+          const {
+            id: _id,
+            operationId: _operationId,
+            decisionSequence: _decisionSequence,
+            ...actual
+          } = existing;
+          if (!sameAuthorityValue(actual, expected)) {
+            throw new Error("Authority Installation Operation was reused for another decision.");
+          }
+          return existing;
+        }
+        const approval = requireActiveApproval(
+          storage,
+          command.artifactApprovalId as ArtifactApprovalId,
+        );
+        if (approval.approvalEpoch !== command.artifactApprovalEpoch ||
+            approval.evidence !== "complete" || approval.proposalId !== command.proposalId ||
+            approval.policyHash !== command.evaluatorPolicyHash) {
+          throw new Error("Standing installation differs from its active Artifact Approval.");
+        }
+        if (record.decision !== "approved" || !record.consumer || !record.requirement ||
+            record.intendedBindingName !== command.bindingName ||
+            record.expectedBindingGeneration !== command.expectedBindingGeneration) {
+          throw new Error("Standing installation decision is incomplete or mismatched.");
+        }
+        const id = issueAuthorityId<"installationDecision">();
+        const sequence = appendAuthorityEvent(storage, {
+          type: "installationDecisionRecorded",
+          subjectId: id,
+          operationId: command.operationId,
+        });
+        const decision: InstallationDecisionRecord = {
+          ...structuredClone(record),
+          id,
+          operationId: command.operationId,
+          decidedBy: session.principalId,
+          permissionGeneration: liveGeneration,
+          decisionSequence: sequence,
+        };
+        storage.installationDecisions.put(decision);
+        return decision;
+      });
+    },
+    acceptStandingInstallation(input) {
+      return storage.transaction(() => {
+        const decision = authority.recordStandingInstallationDecision(
+          input.session,
+          input.command,
+          input.requestDigest,
+          input.decision,
+        );
+        const prepared = authority.execute({
+          type: "prepareContractInstance",
+          operationId: `${input.command.operationId}:instance`,
+          record: {
+            ...structuredClone(input.instance),
+            placementDecision: {type: "installation", decisionId: decision.id},
+          },
+        });
+        if (prepared.type !== "contractInstancePrepared") {
+          throw new Error("Standing installation did not prepare its Contract Instance.");
+        }
+        const effect = authority.startStandingInstallationEffect({
+          command: input.command,
+          requestDigest: input.requestDigest,
+          decision,
+          contractInstanceId: prepared.id,
+          providerDescription: input.providerDescription,
+        });
+        return {decision, contractInstanceId: prepared.id, effect};
       });
     },
     decideArtifactProposal(session, command, requestDigest) {
@@ -1454,6 +2027,16 @@ export function createWorkspaceAuthorityModule<
                  command.record.expectedBindingGeneration === undefined)) {
               throw new Error("Approved Installation Decisions require an exact placement.");
             }
+            const existing = storage.installationDecisions.byOperation.get(command.operationId);
+            if (existing) {
+              const {id: _id, operationId: _operationId,
+                decisionSequence: _decisionSequence, ...existingRecord} = existing;
+              if (!sameAuthorityValue(existingRecord, command.record)) {
+                throw new Error("Installation Decision Operation was reused for another record.");
+              }
+              return {type: <const>"installationDecisionRecorded", id: existing.id,
+                sequence: existing.decisionSequence};
+            }
             const id = issueAuthorityId<"installationDecision">();
             const sequence = appendAuthorityEvent(storage, {
               type: "installationDecisionRecorded",
@@ -1463,6 +2046,7 @@ export function createWorkspaceAuthorityModule<
             storage.installationDecisions.put({
               ...structuredClone(command.record),
               id,
+              operationId: command.operationId,
               decisionSequence: sequence,
             });
             return {type: "installationDecisionRecorded", id, sequence};
@@ -1528,6 +2112,31 @@ export function createWorkspaceAuthorityModule<
             if (!requirementAccepted) {
               throw new Error("Contract Instance requirement differs from its placement decision.");
             }
+            const placementKey = compositeKey(
+              command.record.placementDecision.type,
+              command.record.placementDecision.decisionId,
+            );
+            const existing = storage.contractInstances.byPlacementDecision.get(placementKey);
+            if (existing) {
+              const {
+                id: _id,
+                legacyWorkpieceId: _legacyWorkpieceId,
+                providerBacking: _providerBacking,
+                lifecycle: _lifecycle,
+                generation: _generation,
+                revision: _revision,
+                createdSequence: _createdSequence,
+                ...actual
+              } = existing;
+              if (!sameAuthorityValue(actual, command.record)) {
+                throw new Error("Placement Decision was reused for another Contract Instance.");
+              }
+              return {
+                type: "contractInstancePrepared",
+                id: existing.id,
+                sequence: existing.createdSequence,
+              };
+            }
             const id = issueAuthorityId<"contractInstance">();
             const sequence = appendAuthorityEvent(storage, {
               type: "contractInstancePrepared",
@@ -1544,7 +2153,46 @@ export function createWorkspaceAuthorityModule<
             });
             return {type: "contractInstancePrepared", id, sequence};
           });
-        case "publishBinding":
+        case "recordProviderBacking":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const instance = storage.contractInstances.get(command.contractInstanceId);
+            if (!instance || instance.generation !== command.expectedInstanceGeneration ||
+                (!instance.providerBacking && instance.lifecycle !== "prepared")) {
+              throw new Error("Contract Instance is unavailable for provider backing.");
+            }
+            if (command.description.health !== "healthy" ||
+                !sameAuthorityValue(command.description.identity, command.result.provider) ||
+                command.result.contractInstance.id !== instance.id ||
+                command.result.contractInstance.generation !== instance.generation ||
+                command.result.state !== "prepared" ||
+                command.result.cleanup !== "not-required" ||
+                instance.upstreamAuthority.origin.type === "legacyGatekeeper" ||
+                instance.upstreamAuthority.origin.id !== command.result.provider.accountId ||
+                instance.upstreamAuthority.origin.generation !==
+                  command.result.provider.sourceGeneration) {
+              throw new Error("Provider backing differs from the approved Contract Instance tuple.");
+            }
+            const providerBacking = {
+              provider: structuredClone(command.result.provider),
+              backingReference: command.result.backingReference,
+              capabilityGeneration: command.result.capabilityGeneration,
+              providerNativeScope: structuredClone(command.description.providerNativeScope),
+              providerNativeRevocationGranularity:
+                command.description.providerNativeRevocationGranularity,
+              localEnforcementRevocationGranularity:
+                command.description.localEnforcementRevocationGranularity,
+            };
+            if (instance.providerBacking &&
+                !sameAuthorityValue(instance.providerBacking, providerBacking)) {
+              throw new Error("Provider backing changed across an exact retry.");
+            }
+            storage.contractInstances.put({...instance, providerBacking,
+              revision: instance.revision + (instance.providerBacking ? 0 : 1)});
+            return {type: "providerBackingRecorded", id: instance.id,
+              capabilityGeneration: providerBacking.capabilityGeneration};
+          });
+        case "planBindingPublication":
           return storage.transaction(() => {
             requireActiveAuthority(storage);
             validateBindingName(command.name);
@@ -1574,122 +2222,450 @@ export function createWorkspaceAuthorityModule<
               }
             }
             const activeKey = compositeKey(command.consumer.consumerId, command.name);
+            const existing = storage.bindingPublicationPlans.byOperation.get(command.operationId);
+            if (existing) {
+              const expected = {
+                contractInstanceId: command.contractInstanceId,
+                consumer: command.consumer,
+                requirement: command.requirement,
+                name: command.name,
+                verification: command.verification,
+                expectedBindingGeneration: command.expectedBindingGeneration,
+                evaluatorPolicyHash: command.evaluatorPolicyHash,
+              };
+              const actual = {
+                contractInstanceId: existing.contractInstanceId,
+                consumer: existing.consumer,
+                requirement: existing.requirement,
+                name: existing.name,
+                verification: existing.verification,
+                expectedBindingGeneration: existing.expectedBindingGeneration,
+                evaluatorPolicyHash: existing.evaluatorPolicyHash,
+              };
+              if (!sameAuthorityValue(actual, expected)) {
+                throw new Error("Binding publication Operation was reused for another plan.");
+              }
+              return {
+                type: <const>"bindingPublicationPlanned",
+                planId: existing.id,
+                bindingId: existing.bindingId,
+                resolutionId: existing.resolutionId,
+                generation: existing.targetBindingGeneration,
+              };
+            }
             const predecessor = storage.bindings.currentByConsumerName.get(activeKey);
             const actualGeneration = predecessor?.generation ?? 0;
             if (actualGeneration !== command.expectedBindingGeneration) {
               throw new Error(`Stale Binding generation: expected ` +
                 `${command.expectedBindingGeneration}, current ${actualGeneration}.`);
             }
+            const planId = issueAuthorityId<"bindingPublicationPlan">();
             const bindingId = issueAuthorityId<"binding">();
             const resolutionId = issueAuthorityId<"bindingResolution">();
             const generation = actualGeneration + 1;
-            const sequence = appendAuthorityEvent(storage, {
-              type: "bindingPublished",
-              subjectId: bindingId,
+            appendAuthorityEvent(storage, {
+              type: "bindingPublicationPlanned",
+              subjectId: planId,
               operationId: command.operationId,
               beforeGeneration: actualGeneration,
               afterGeneration: generation,
             });
-            if (predecessor) {
-              storage.bindings.put({
-                ...predecessor,
-                status: "retracted",
-                generation,
-                revision: predecessor.revision + 1,
+            storage.bindingPublicationPlans.put({
+              id: planId,
+              operationId: command.operationId,
+              contractInstanceId: command.contractInstanceId,
+              consumer: structuredClone(command.consumer),
+              requirement: structuredClone(command.requirement),
+              name: command.name,
+              verification: structuredClone(command.verification),
+              evaluatorPolicyHash: command.evaluatorPolicyHash,
+              expectedBindingGeneration: actualGeneration,
+              targetBindingGeneration: generation,
+              bindingId,
+              resolutionId,
+              ...(predecessor ? {predecessorId: predecessor.id} : {}),
+              state: "planned",
+            });
+            return {type: "bindingPublicationPlanned", planId, bindingId, resolutionId, generation};
+          });
+        case "acknowledgeBindingEndpoint":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const plan = storage.bindingPublicationPlans.get(command.planId);
+            if (!plan || plan.operationId !== command.operationId ||
+                (plan.state !== "planned" && plan.state !== "endpointAcknowledged" &&
+                 plan.state !== "invalidationPending" && plan.state !== "readyToCommit" &&
+                 plan.state !== "committed")) {
+              throw new Error("Binding publication plan is unavailable for endpoint acknowledgement.");
+            }
+            const instance = storage.contractInstances.get(plan.contractInstanceId);
+            if (!instance) throw new Error("Planned Contract Instance is unavailable.");
+            const snapshot = validatePublicationSnapshot(plan, instance, command.snapshot);
+            if (command.acknowledgement.endpointId !== snapshot.endpointId ||
+                command.acknowledgement.reachabilityGeneration !== snapshot.reachabilityGeneration) {
+              throw new Error("Contract endpoint returned an invalid installation acknowledgement.");
+            }
+            if (plan.endpointSnapshot && !sameAuthorityValue(plan.endpointSnapshot, snapshot)) {
+              throw new Error("Binding endpoint acknowledgement changed across retries.");
+            }
+            if (plan.state === "committed") {
+              const committedIntent = storage.invalidationIntents.byPlan.get(plan.id);
+              return {
+                type: "bindingEndpointAcknowledged",
+                planId: plan.id,
+                ...(committedIntent ? {invalidationIntentId: committedIntent.id} : {}),
+              };
+            }
+            let intent = storage.invalidationIntents.byPlan.get(plan.id);
+            if (plan.predecessorId && !intent) {
+              const predecessor = storage.bindings.get(plan.predecessorId);
+              if (!predecessor?.endpointSnapshot || predecessor.status !== "active" ||
+                  predecessor.generation !== plan.expectedBindingGeneration) {
+                throw new Error("Predecessor Binding lacks an active acknowledged endpoint.");
+              }
+              const intentId = issueAuthorityId<"invalidationIntent">();
+              appendAuthorityEvent(storage, {
+                type: "invalidationStarted",
+                subjectId: predecessor.id,
+                operationId: plan.operationId,
+                beforeGeneration: predecessor.generation,
+                afterGeneration: plan.targetBindingGeneration,
+              });
+              intent = {
+                id: intentId,
+                operationId: plan.operationId,
+                planId: plan.id,
+                bindingId: predecessor.id,
+                bindingGeneration: predecessor.generation,
+                endpointSnapshot: structuredClone(predecessor.endpointSnapshot),
+                replacementBindingId: plan.bindingId,
+                replacementGeneration: plan.targetBindingGeneration,
+                state: "pending",
+              };
+              storage.invalidationIntents.put(intent);
+            }
+            storage.bindingPublicationPlans.put({
+              ...plan,
+              endpointSnapshot: structuredClone(snapshot),
+              state: intent ? "invalidationPending" : "readyToCommit",
+            });
+            return {
+              type: "bindingEndpointAcknowledged",
+              planId: plan.id,
+              ...(intent ? {invalidationIntentId: intent.id} : {}),
+            };
+          });
+        case "acknowledgeBindingInvalidation":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const plan = storage.bindingPublicationPlans.get(command.planId);
+            const intent = storage.invalidationIntents.byPlan.get(command.planId);
+            if (!plan || !intent || plan.operationId !== command.operationId ||
+                intent.operationId !== command.operationId ||
+                (intent.state !== "pending" && intent.state !== "acknowledged" &&
+                 intent.state !== "committed")) {
+              throw new Error("Binding invalidation intent is unavailable.");
+            }
+            if (command.acknowledgement.endpointId !== intent.endpointSnapshot.endpointId ||
+                command.acknowledgement.reachabilityGeneration !== intent.bindingGeneration ||
+                command.acknowledgement.invalidated !== true) {
+              throw new Error("Contract endpoint returned an invalid invalidation acknowledgement.");
+            }
+            if (intent.state !== "committed") {
+              storage.invalidationIntents.put({...intent, state: "acknowledged"});
+              storage.bindingPublicationPlans.put({...plan, state: "readyToCommit"});
+            }
+            return {type: "bindingInvalidationAcknowledged", planId: plan.id};
+          });
+        case "commitBindingPublication":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const plan = storage.bindingPublicationPlans.get(command.planId);
+            if (!plan || plan.operationId !== command.operationId ||
+                (plan.state !== "readyToCommit" && plan.state !== "committed") ||
+                !plan.endpointSnapshot) {
+              throw new Error("Binding publication plan is not ready to commit.");
+            }
+            if (plan.state === "committed") {
+              const binding = storage.bindings.get(plan.bindingId);
+              if (!binding || binding.generation !== plan.targetBindingGeneration) {
+                throw new Error("Committed Binding publication differs from canonical state.");
+              }
+              const event = [...storage.workspaceAuthorityEvents.list()].find(candidate =>
+                candidate.type === "bindingPublished" && candidate.subjectId === binding.id &&
+                candidate.operationId === command.operationId);
+              if (!event) throw new Error("Committed Binding publication is missing its event.");
+              return {type: "bindingPublished", bindingId: binding.id,
+                resolutionId: binding.resolutionId, generation: binding.generation,
+                sequence: event.sequence};
+            }
+            const instance = storage.contractInstances.get(plan.contractInstanceId);
+            if (!instance || (instance.lifecycle !== "prepared" && instance.lifecycle !== "ready")) {
+              throw new Error("Planned Contract Instance is no longer publishable.");
+            }
+            const activeKey = compositeKey(plan.consumer.consumerId, plan.name);
+            const predecessor = storage.bindings.currentByConsumerName.get(activeKey);
+            const actualGeneration = predecessor?.generation ?? 0;
+            if (actualGeneration !== plan.expectedBindingGeneration ||
+                predecessor?.id !== plan.predecessorId) {
+              const sequence = appendAuthorityEvent(storage, {
+                type: "contractInstanceRetracted",
+                subjectId: instance.id,
+                operationId: command.operationId,
+                beforeGeneration: instance.generation,
+                afterGeneration: instance.generation + 1,
               });
               transitionContractInstance(
                 storage,
-                predecessor.contractInstanceId,
+                instance.id,
                 "retracted",
                 sequence,
-                "binding-replaced",
+                "binding-publication-stale-cas",
+              );
+              rootProviderCleanupEffect(storage, instance, {
+                id: plan.bindingId,
+                consumer: plan.consumer,
+                name: plan.name,
+                requirement: plan.requirement,
+                contractInstanceId: instance.id,
+                resolutionId: plan.resolutionId,
+                status: "retracted",
+                generation: plan.targetBindingGeneration,
+                revision: 1,
+                installedSequence: sequence,
+                endpointSnapshot: plan.endpointSnapshot,
+              }, command.operationId, true);
+              storage.bindingPublicationPlans.put({...plan, state: "obsolete"});
+              return {type: "bindingPublicationObsolete", planId: plan.id, reason: <const>"staleCas"};
+            }
+            const intent = storage.invalidationIntents.byPlan.get(plan.id);
+            if (predecessor && (!intent || intent.state !== "acknowledged" ||
+                intent.bindingId !== predecessor.id ||
+                intent.bindingGeneration !== predecessor.generation)) {
+              throw new Error("Predecessor invalidation has not been acknowledged.");
+            }
+            const sequence = appendAuthorityEvent(storage, {
+              type: "bindingPublished",
+              subjectId: plan.bindingId,
+              operationId: command.operationId,
+              beforeGeneration: actualGeneration,
+              afterGeneration: plan.targetBindingGeneration,
+            });
+            if (predecessor) {
+              const predecessorInstance = storage.contractInstances.get(
+                predecessor.contractInstanceId,
+              );
+              if (!predecessorInstance) {
+                throw new Error("Predecessor Contract Instance disappeared before publication.");
+              }
+              storage.bindings.put({...predecessor, status: "retracted",
+                generation: plan.targetBindingGeneration, revision: predecessor.revision + 1});
+              transitionContractInstance(storage, predecessor.contractInstanceId, "retracted",
+                sequence, "binding-replaced");
+              storage.authorityTombstones.put({
+                id: issueAuthorityId<"authorityTombstone">(),
+                subject: {type: "binding", id: predecessor.id},
+                lineage: predecessor.predecessorId,
+                terminalReason: "binding-replaced",
+                terminalSequence: sequence,
+                cleanup: "pending",
+              });
+              storage.invalidationIntents.put({...intent!, state: "committed"});
+              rootProviderCleanupEffect(
+                storage,
+                predecessorInstance,
+                predecessor,
+                command.operationId,
               );
             }
             const resolution: BindingResolutionRecord = {
-              id: resolutionId,
-              consumer: structuredClone(command.consumer),
-              requirement: structuredClone(command.requirement),
+              id: plan.resolutionId,
+              consumer: structuredClone(plan.consumer),
+              requirement: structuredClone(plan.requirement),
               upstreamAuthority: structuredClone(instance.upstreamAuthority),
-              verification: structuredClone(command.verification),
+              verification: structuredClone(plan.verification),
               artifactApprovalId: instance.artifactApprovalId,
               artifactApprovalEpoch: requireActiveApproval(storage, instance.artifactApprovalId)
                 .approvalEpoch,
               placementDecision: structuredClone(instance.placementDecision),
               contractInstanceId: instance.id,
-              bindingId,
+              bindingId: plan.bindingId,
               sharedState: structuredClone(instance.sharedState),
-              expectedBindingGeneration: command.expectedBindingGeneration,
-              evaluatorPolicyHash: command.evaluatorPolicyHash,
+              expectedBindingGeneration: plan.expectedBindingGeneration,
+              evaluatorPolicyHash: plan.evaluatorPolicyHash,
               createdSequence: sequence,
             };
             const binding: BindingRecord = {
-              id: bindingId,
-              consumer: structuredClone(command.consumer),
-              name: command.name,
-              requirement: structuredClone(command.requirement),
+              id: plan.bindingId,
+              consumer: structuredClone(plan.consumer),
+              name: plan.name,
+              requirement: structuredClone(plan.requirement),
               contractInstanceId: instance.id,
-              resolutionId,
+              resolutionId: plan.resolutionId,
               status: "active",
-              generation,
+              generation: plan.targetBindingGeneration,
               revision: 1,
               installedSequence: sequence,
+              endpointSnapshot: structuredClone(plan.endpointSnapshot),
               ...(predecessor ? {predecessorId: predecessor.id} : {}),
             };
             storage.bindingResolutions.put(resolution);
             storage.contractInstances.put({...instance, lifecycle: "ready", revision: instance.revision + 1});
             storage.bindings.put(binding);
-            return {type: "bindingPublished", bindingId, resolutionId, generation, sequence};
+            storage.bindingPublicationPlans.put({...plan, state: "committed"});
+            return {type: "bindingPublished", bindingId: plan.bindingId,
+              resolutionId: plan.resolutionId, generation: plan.targetBindingGeneration, sequence};
           });
-        case "suspendBinding":
-        case "retractBinding":
+        case "beginBindingInvalidation":
           return storage.transaction(() => {
             requireActiveAuthority(storage);
+            const existing = storage.invalidationIntents.byOperation.get(command.operationId);
+            if (existing) {
+              if (existing.bindingId !== command.bindingId ||
+                  existing.bindingGeneration !== command.expectedGeneration ||
+                  existing.terminalTarget !== command.terminalTarget ||
+                  existing.reason !== command.reason) {
+                throw new Error("Binding invalidation Operation was reused for another intent.");
+              }
+              return {type: "bindingInvalidationPlanned", intentId: existing.id};
+            }
             const current = storage.bindings.get(command.bindingId);
-            if (!current || current.status === "retracted") {
+            if (!current || current.status === "retracted" || !current.endpointSnapshot) {
               throw new Error(`Binding is not mutable: ${command.bindingId}`);
             }
             if (current.generation !== command.expectedGeneration) {
               throw new Error(`Stale Binding generation: expected ${command.expectedGeneration}, ` +
                 `current ${current.generation}.`);
             }
+            const intentId = issueAuthorityId<"invalidationIntent">();
+            const intentSequence = appendAuthorityEvent(storage, {
+              type: "invalidationStarted",
+              subjectId: current.id,
+              operationId: command.operationId,
+              beforeGeneration: current.generation,
+              afterGeneration: current.generation + 1,
+            });
+            storage.invalidationIntents.put({
+              id: intentId,
+              operationId: command.operationId,
+              bindingId: current.id,
+              bindingGeneration: current.generation,
+              endpointSnapshot: structuredClone(current.endpointSnapshot),
+              terminalTarget: command.terminalTarget,
+              reason: command.reason,
+              state: "pending",
+            });
+            const instance = storage.contractInstances.get(current.contractInstanceId);
+            if (instance?.runtimeWorkpieceId !== undefined) {
+              const effectId = issueAuthorityId<"authorityEffect">();
+              const effectSequence = appendAuthorityEvent(storage, {
+                type: "authorityEffectCreated",
+                subjectId: effectId,
+                operationId: command.operationId,
+              });
+              storage.workspaceAuthorityEffects.put({
+                id: effectId,
+                operationId: command.operationId,
+                stepKey: `invalidate-terminal:${current.id}:${current.generation}`,
+                kind: "invalidateTerminalEndpoint",
+                targetId: instance.id,
+                lane: `contract-instance:${instance.id}`,
+                causalSequence: Math.max(intentSequence, effectSequence),
+                inputDigest: current.endpointSnapshot.authoritySnapshotDigest,
+                intentId,
+                runtimeWorkpieceId: instance.runtimeWorkpieceId,
+                endpointSnapshot: structuredClone(current.endpointSnapshot),
+                state: "pending",
+                attempt: 0,
+                nextAttemptAt: 0,
+                cleanupResponsibility: false,
+              });
+            }
+            return {type: "bindingInvalidationPlanned", intentId};
+          });
+        case "acknowledgeTerminalBindingInvalidation":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const intent = storage.invalidationIntents.get(command.intentId);
+            if (!intent || intent.operationId !== command.operationId ||
+                !intent.terminalTarget ||
+                (intent.state !== "pending" && intent.state !== "acknowledged" &&
+                 intent.state !== "committed")) {
+              throw new Error("Terminal Binding invalidation intent is unavailable.");
+            }
+            if (command.acknowledgement.endpointId !== intent.endpointSnapshot.endpointId ||
+                command.acknowledgement.reachabilityGeneration !==
+                  intent.endpointSnapshot.reachabilityGeneration ||
+                command.acknowledgement.invalidated !== true) {
+              throw new Error("Contract endpoint returned an invalid invalidation acknowledgement.");
+            }
+            if (intent.state !== "committed") {
+              storage.invalidationIntents.put({...intent, state: "acknowledged"});
+            }
+            return {type: "terminalBindingInvalidationAcknowledged", intentId: intent.id};
+          });
+        case "commitTerminalBindingInvalidation":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const intent = storage.invalidationIntents.get(command.intentId);
+            if (!intent || intent.operationId !== command.operationId ||
+                !intent.terminalTarget ||
+                (intent.state !== "acknowledged" && intent.state !== "committed")) {
+              throw new Error("Terminal Binding invalidation is not ready to commit.");
+            }
+            const current = storage.bindings.get(intent.bindingId);
+            if (intent.state === "committed") {
+              const expectedStatus = intent.terminalTarget === "retracted" ? "retracted" : "suspended";
+              if (!current || current.status !== expectedStatus ||
+                  current.generation !== intent.bindingGeneration + 1) {
+                throw new Error("Committed Binding invalidation differs from canonical state.");
+              }
+              const event = [...storage.workspaceAuthorityEvents.list()].find(candidate =>
+                candidate.operationId === command.operationId &&
+                candidate.subjectId === current.id &&
+                (candidate.type === "bindingRetracted" || candidate.type === "bindingSuspended"));
+              if (!event) throw new Error("Committed Binding invalidation is missing its event.");
+              return {
+                type: intent.terminalTarget === "retracted"
+                  ? <const>"bindingRetracted"
+                  : <const>"bindingSuspended",
+                generation: current.generation,
+                sequence: event.sequence,
+              };
+            }
+            if (!current || current.status === "retracted" ||
+                current.generation !== intent.bindingGeneration) {
+              throw new Error("Terminal Binding invalidation lost its generation precondition.");
+            }
+            const instance = storage.contractInstances.get(current.contractInstanceId);
+            if (!instance) throw new Error("Terminal Contract Instance is unavailable.");
             const generation = current.generation + 1;
-            const retracted = command.type === "retractBinding";
-            const eventType = retracted ? "bindingRetracted" : "bindingSuspended";
+            const retracted = intent.terminalTarget === "retracted";
             const sequence = appendAuthorityEvent(storage, {
-              type: eventType,
+              type: retracted ? "bindingRetracted" : "bindingSuspended",
               subjectId: current.id,
               operationId: command.operationId,
               beforeGeneration: current.generation,
               afterGeneration: generation,
             });
-            storage.bindings.put({
-              ...current,
+            storage.bindings.put({...current,
               status: retracted ? "retracted" : "suspended",
-              generation,
-              revision: current.revision + 1,
-            });
-            transitionContractInstance(
-              storage,
-              current.contractInstanceId,
-              retracted ? "retracted" : "suspended",
-              sequence,
-              command.reason,
-            );
+              generation, revision: current.revision + 1});
+            transitionContractInstance(storage, current.contractInstanceId,
+              retracted ? "retracted" : "suspended", sequence, intent.reason!);
+            storage.invalidationIntents.put({...intent, state: "committed"});
             if (retracted) {
               storage.authorityTombstones.put({
                 id: issueAuthorityId<"authorityTombstone">(),
                 subject: {type: "binding", id: current.id},
                 lineage: current.predecessorId,
-                terminalReason: command.reason,
+                terminalReason: intent.reason!,
                 terminalSequence: sequence,
                 cleanup: "pending",
               });
+              rootProviderCleanupEffect(storage, instance, current, command.operationId);
             }
-            return {
-              type: retracted ? "bindingRetracted" : "bindingSuspended",
-              generation,
-              sequence,
-            };
+            return {type: retracted ? "bindingRetracted" : "bindingSuspended", generation, sequence};
           });
         case "requestRuntimeApproval":
           return storage.transaction(() => {
@@ -1738,8 +2714,25 @@ export function createWorkspaceAuthorityModule<
         case "recordAuthorityDebt":
           return storage.transaction(() => {
             requireActiveAuthority(storage);
-            if (command.record.bindingId && !storage.bindings.get(command.record.bindingId)) {
-              throw new Error(`No such Binding: ${command.record.bindingId}`);
+            if (command.record.bindingId) {
+              const bindingExists = storage.bindings.get(command.record.bindingId) !== undefined;
+              const plannedBindingExists = [...storage.bindingPublicationPlans.list()].some(
+                plan => plan.bindingId === command.record.bindingId && plan.state !== "obsolete",
+              );
+              if (!bindingExists && !plannedBindingExists) {
+                throw new Error(`No such planned or published Binding: ${command.record.bindingId}`);
+              }
+              const existing = storage.authorityDebts.byBinding.get(command.record.bindingId);
+              if (existing) {
+                const {id: _id, revision: _revision, ...actual} = existing;
+                if (!sameAuthorityValue(actual, command.record)) {
+                  throw new Error("Binding Authority Debt changed across an exact retry.");
+                }
+                const event = [...storage.workspaceAuthorityEvents.list()].find(candidate =>
+                  candidate.type === "authorityDebtRecorded" && candidate.subjectId === existing.id);
+                if (!event) throw new Error("Authority Debt is missing its Authority Event.");
+                return {type: "authorityDebtRecorded", id: existing.id, sequence: event.sequence};
+              }
             }
             const id = issueAuthorityId<"authorityDebt">();
             const sequence = appendAuthorityEvent(storage, {
@@ -1815,6 +2808,13 @@ export function createWorkspaceAuthorityModule<
               ? storage.installationDecisions.get(query.id)
               : undefined,
           };
+        case "installationDecisionByOperation":
+          return {
+            type: "installationDecisionByOperation",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.installationDecisions.byOperation.get(query.operationId)
+              : undefined,
+          };
         case "taskDispatchDecision":
           return {
             type: "taskDispatchDecision",
@@ -1845,6 +2845,14 @@ export function createWorkspaceAuthorityModule<
                 )
               : undefined,
           };
+        case "bindingByInstance":
+          return {
+            type: "bindingByInstance",
+            value: requireAuthorityState(storage).state === "active"
+              ? [...storage.bindings.byInstance.get(query.contractInstanceId)]
+                .toSorted((left, right) => right.generation - left.generation)[0]
+              : undefined,
+          };
         case "bindingResolution":
           return {
             type: "bindingResolution",
@@ -1852,6 +2860,91 @@ export function createWorkspaceAuthorityModule<
               ? storage.bindingResolutions.get(query.id)
               : undefined,
           };
+        case "bindingPublicationPlan":
+          return {
+            type: "bindingPublicationPlan",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.bindingPublicationPlans.get(query.id)
+              : undefined,
+          };
+        case "invalidationIntentByPlan":
+          return {
+            type: "invalidationIntentByPlan",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.invalidationIntents.byPlan.get(query.planId)
+              : undefined,
+          };
+        case "invalidationIntentByOperation":
+          return {
+            type: "invalidationIntentByOperation",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.invalidationIntents.byOperation.get(query.operationId)
+              : undefined,
+          };
+        case "bindingExecution": {
+          if (requireAuthorityState(storage).state !== "active") {
+            return {type: "bindingExecution", value: undefined};
+          }
+          const binding = storage.bindings.currentByConsumerName.get(
+            compositeKey(query.consumerId, query.name),
+          );
+          if (!binding || binding.status !== "active" ||
+              Array.from(storage.invalidationIntents.byBinding.get(binding.id))
+                .some(intent => intent.state !== "committed")) {
+            return {type: "bindingExecution", value: undefined};
+          }
+          const instance = storage.contractInstances.get(binding.contractInstanceId);
+          return {
+            type: "bindingExecution",
+            value: instance?.lifecycle === "ready"
+              ? {binding, instance}
+              : undefined,
+          };
+        }
+        case "bindingExecutionByInstance": {
+          if (requireAuthorityState(storage).state !== "active") {
+            return {type: "bindingExecutionByInstance", value: undefined};
+          }
+          const binding = Array.from(storage.bindings.byInstance.get(query.contractInstanceId))
+            .find(candidate => candidate.status === "active");
+          if (!binding || Array.from(storage.invalidationIntents.byBinding.get(binding.id))
+            .some(intent => intent.state !== "committed")) {
+            return {type: "bindingExecutionByInstance", value: undefined};
+          }
+          const instance = storage.contractInstances.get(binding.contractInstanceId);
+          return {
+            type: "bindingExecutionByInstance",
+            value: instance?.lifecycle === "ready" ? {binding, instance} : undefined,
+          };
+        }
+        case "consumerReadiness": {
+          if (requireAuthorityState(storage).state !== "active") {
+            return {type: "consumerReadiness", value: {ready: false, generation: 0}};
+          }
+          const required = [...storage.installationDecisions.list()].filter(decision =>
+            decision.decision === "approved" &&
+            decision.consumer?.consumerId === query.consumerId &&
+            decision.requirement !== undefined &&
+            decision.intendedBindingName !== undefined,
+          );
+          const bindings = [...storage.bindings.byConsumer.get(query.consumerId)]
+            .filter(binding => binding.status !== "retracted");
+          const generation = bindings.reduce(
+            (highest, binding) => Math.max(highest, binding.generation),
+            0,
+          );
+          const ready = required.length > 0 && required.every(decision => {
+            const binding = bindings.find(candidate =>
+              candidate.name === decision.intendedBindingName &&
+              sameAuthorityValue(candidate.requirement, decision.requirement));
+            if (!binding) return false;
+            if (binding.status !== "active" ||
+                [...storage.invalidationIntents.byBinding.get(binding.id)]
+                  .some(intent => intent.state !== "committed")) return false;
+            return storage.contractInstances.get(binding.contractInstanceId)?.lifecycle === "ready";
+          });
+          return {type: "consumerReadiness", value: {ready, generation}};
+        }
         case "runtimeApprovalRequest":
           return {
             type: "runtimeApprovalRequest",
@@ -1873,6 +2966,13 @@ export function createWorkspaceAuthorityModule<
               ? storage.authorityDebts.get(query.id)
               : undefined,
           };
+        case "authorityDebtByBinding":
+          return {
+            type: "authorityDebtByBinding",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.authorityDebts.byBinding.get(query.bindingId)
+              : undefined,
+          };
         case "authorityTombstoneBySubject":
           return {
             type: "authorityTombstoneBySubject",
@@ -1885,7 +2985,529 @@ export function createWorkspaceAuthorityModule<
       }
     },
     reconcile() {
-      return {attemptedEffects: status(storage).pendingEffects};
+      const now = Date.now();
+      const dueEnd = now < Number.MAX_SAFE_INTEGER ? now + 1 : now;
+      let attemptedEffects = 0;
+      storage.transaction(() => {
+        for (const effect of Array.from(
+          storage.workspaceAuthorityEffects.byDue.list({end: dueEnd}),
+        )) {
+          if (effect.state === "claimed" && effect.claimUntil !== undefined &&
+              effect.claimUntil <= now) {
+            storage.workspaceAuthorityEffects.put({
+              ...effect,
+              state: "outcomeUnknown",
+              claimToken: undefined,
+              claimUntil: undefined,
+              nextAttemptAt: now,
+              reason: "claimExpired",
+            });
+            attemptedEffects++;
+          }
+        }
+      });
+      return {attemptedEffects};
+    },
+    claimDueEffects(now, requestedLimit, createClaimToken) {
+      return storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const limit = Math.max(0, Math.min(16, Math.floor(requestedLimit)));
+        const claimedLanes = new Set(
+          [...storage.workspaceAuthorityEffects.byState.get("claimed")]
+            .filter(effect => (effect.claimUntil ?? 0) > now)
+            .map(effect => effect.lane),
+        );
+        const claimed: WorkspaceAuthorityEffect[] = [];
+        const dueEffects = now >= Number.MAX_SAFE_INTEGER - 1
+          ? storage.workspaceAuthorityEffects.byDue.list({limit: 16})
+          : storage.workspaceAuthorityEffects.byDue.list({end: now + 1, limit: 16});
+        for (const effect of Array.from(dueEffects)) {
+          if (claimed.length >= limit) break;
+          if ((effect.state !== "pending" && effect.state !== "retryScheduled" &&
+               effect.state !== "outcomeUnknown") || effect.nextAttemptAt > now ||
+              claimedLanes.has(effect.lane)) continue;
+          const claimToken = createClaimToken();
+          const next: WorkspaceAuthorityEffect = {
+            ...effect,
+            state: "claimed",
+            attempt: effect.attempt + 1,
+            firstAttemptAt: effect.firstAttemptAt ?? now,
+            claimToken,
+            claimUntil: Math.min(Number.MAX_SAFE_INTEGER - 1, now + 30_000),
+            reason: undefined,
+          };
+          storage.workspaceAuthorityEffects.put(next);
+          claimedLanes.add(effect.lane);
+          claimed.push(structuredClone(next));
+        }
+        return claimed;
+      });
+    },
+    startStandingInstallationEffect(input) {
+      return storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const existing = storage.workspaceAuthorityEffects.byInstallationOperation.get(
+          input.command.operationId,
+        );
+        if (isStandingInstallationEffect(existing)) {
+          if (existing.targetId !== input.contractInstanceId ||
+              existing.decisionId !== input.decision.id ||
+              existing.inputDigest !== input.requestDigest ||
+              !sameAuthorityValue(existing.command, input.command) ||
+              !sameAuthorityValue(existing.providerDescription, input.providerDescription)) {
+            throw new Error("Standing installation Effect changed across an exact retry.");
+          }
+          return structuredClone(existing);
+        }
+        const operation = storage.authorityOperations.get(input.command.operationId);
+        if (!operation || operation.actor !== input.decision.decidedBy ||
+            operation.state !== "begun") {
+          throw new Error("Standing installation Effect lacks its accepted Authority Operation.");
+        }
+        const id = issueAuthorityId<"authorityEffect">();
+        const instance = storage.contractInstances.get(input.contractInstanceId);
+        if (!instance?.intendedConsumer || !instance.intendedRequirement) {
+          throw new Error("Standing installation Effect lacks its intended Binding tuple.");
+        }
+        const planned = authority.execute({
+          type: "planBindingPublication",
+          operationId: `${input.command.operationId}:publication`,
+          contractInstanceId: instance.id,
+          consumer: instance.intendedConsumer,
+          requirement: instance.intendedRequirement,
+          name: input.command.bindingName,
+          verification: {type: "notRequired"},
+          expectedBindingGeneration: input.command.expectedBindingGeneration,
+          evaluatorPolicyHash: input.command.evaluatorPolicyHash,
+        });
+        if (planned.type !== "bindingPublicationPlanned") {
+          throw new Error("Standing installation Effect could not plan Binding publication.");
+        }
+        const causalSequence = appendAuthorityEvent(storage, {
+          type: "authorityEffectCreated",
+          subjectId: id,
+          operationId: input.command.operationId,
+        });
+        const effect: StandingInstallationEffect = {
+          id,
+          operationId: input.command.operationId,
+          stepKey: input.command.stepKey,
+          kind: "prepareProviderBacking",
+          targetId: input.contractInstanceId,
+          lane: `contract-instance:${input.contractInstanceId}`,
+          causalSequence,
+          inputDigest: input.requestDigest,
+          decisionId: input.decision.id,
+          command: structuredClone(input.command),
+          principalId: input.decision.decidedBy,
+          permissionGeneration: input.decision.permissionGeneration ?? 1,
+          providerDescription: structuredClone(input.providerDescription),
+          planId: planned.planId,
+          bindingId: planned.bindingId,
+          targetBindingGeneration: planned.generation,
+          phase: "providerPrepare",
+          state: "pending",
+          attempt: 0,
+          nextAttemptAt: 0,
+          cleanupResponsibility: false,
+        };
+        storage.workspaceAuthorityEffects.put(effect);
+        return structuredClone(effect);
+      });
+    },
+    advanceStandingInstallationEffect(effectId, claimToken, phase) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (!isStandingInstallationEffect(effect) || effect.state !== "claimed" ||
+            effect.claimToken !== claimToken) {
+          throw new Error("Standing installation Effect claim is stale.");
+        }
+        storage.workspaceAuthorityEffects.put({...effect, phase});
+      });
+    },
+    completeProviderPreparationEffect(effectId, claimToken, result, snapshot, debt) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (effect?.kind !== "prepareProviderBacking" || effect.state !== "claimed" ||
+            effect.claimToken !== claimToken) {
+          throw new Error("Provider preparation Effect claim is stale.");
+        }
+        const instance = storage.contractInstances.get(effect.targetId);
+        const plan = storage.bindingPublicationPlans.get(effect.planId);
+        if (!instance || !plan || plan.contractInstanceId !== instance.id ||
+            plan.bindingId !== effect.bindingId ||
+            plan.targetBindingGeneration !== effect.targetBindingGeneration) {
+          throw new Error("Provider preparation Effect preconditions changed.");
+        }
+        requireActiveApproval(storage, instance.artifactApprovalId);
+        authority.execute({
+          type: "recordProviderBacking",
+          operationId: effect.id,
+          contractInstanceId: instance.id,
+          expectedInstanceGeneration: instance.generation,
+          description: effect.providerDescription,
+          result,
+        });
+        validatePublicationSnapshot(plan, instance, snapshot);
+        authority.execute({
+          type: "recordAuthorityDebt",
+          operationId: `${effect.operationId}:authority-debt`,
+          record: debt,
+        });
+        succeedAuthorityEffect(storage, effect);
+        const childId = issueAuthorityId<"authorityEffect">();
+        const causalSequence = appendAuthorityEvent(storage, {
+          type: "authorityEffectCreated",
+          subjectId: childId,
+          operationId: effect.operationId,
+        });
+        const child: InstallContractEndpointEffect = {
+          ...standingEffectContext(effect),
+          id: childId,
+          operationId: effect.operationId,
+          stepKey: `install-endpoint:${instance.id}`,
+          kind: "installContractEndpoint",
+          lane: effect.lane,
+          causalSequence,
+          inputDigest: snapshot.authoritySnapshotDigest,
+          providerPrepared: structuredClone(result),
+          snapshot: structuredClone(snapshot),
+          phase: "endpointInstall",
+          state: "pending",
+          attempt: 0,
+          nextAttemptAt: 0,
+        };
+        storage.workspaceAuthorityEffects.put(child);
+      });
+    },
+    completeEndpointInstallationEffect(effectId, claimToken, acknowledgement) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (effect?.kind !== "installContractEndpoint" || effect.state !== "claimed" ||
+            effect.claimToken !== claimToken) {
+          throw new Error("Endpoint installation Effect claim is stale.");
+        }
+        if (acknowledgement.endpointId !== effect.snapshot.endpointId ||
+            acknowledgement.reachabilityGeneration !== effect.snapshot.reachabilityGeneration) {
+          throw new Error("Contract endpoint returned an invalid installation acknowledgement.");
+        }
+        const instance = storage.contractInstances.get(effect.targetId);
+        const plan = storage.bindingPublicationPlans.get(effect.planId);
+        if (!instance || !plan || !instance.providerBacking ||
+            !sameAuthorityValue(instance.providerBacking.provider, effect.providerPrepared.provider) ||
+            instance.providerBacking.capabilityGeneration !==
+              effect.providerPrepared.capabilityGeneration ||
+            !sameAuthorityValue(validatePublicationSnapshot(plan, instance, effect.snapshot),
+              effect.snapshot)) {
+          throw new Error("Endpoint installation Effect preconditions changed.");
+        }
+        requireActiveApproval(storage, instance.artifactApprovalId);
+        succeedAuthorityEffect(storage, effect);
+        const childId = issueAuthorityId<"authorityEffect">();
+        const causalSequence = appendAuthorityEvent(storage, {
+          type: "authorityEffectCreated",
+          subjectId: childId,
+          operationId: effect.operationId,
+        });
+        storage.workspaceAuthorityEffects.put({
+          ...standingEffectContext(effect),
+          id: childId,
+          operationId: effect.operationId,
+          stepKey: `activate-provider:${instance.id}`,
+          kind: "activateProviderBacking",
+          lane: effect.lane,
+          causalSequence,
+          inputDigest: effect.snapshot.authoritySnapshotDigest,
+          providerPrepared: structuredClone(effect.providerPrepared),
+          snapshot: structuredClone(effect.snapshot),
+          endpointAcknowledgement: structuredClone(acknowledgement),
+          phase: "providerActivate",
+          state: "pending",
+          attempt: 0,
+          nextAttemptAt: 0,
+          cleanupResponsibility: false,
+        });
+      });
+    },
+    completeProviderActivationEffect(effectId, claimToken, result) {
+      return storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (effect?.kind !== "activateProviderBacking" || effect.state !== "claimed" ||
+            effect.claimToken !== claimToken) {
+          throw new Error("Provider activation Effect claim is stale.");
+        }
+        const instance = storage.contractInstances.get(effect.targetId);
+        const plan = storage.bindingPublicationPlans.get(effect.planId);
+        if (!instance || !plan || !instance.providerBacking ||
+            result.state !== "active" || result.cleanup !== "not-required" ||
+            result.capabilityGeneration !== effect.providerPrepared.capabilityGeneration ||
+            !sameAuthorityValue(result.provider, effect.providerDescription.identity) ||
+            !sameAuthorityValue(result.contractInstance,
+              {id: instance.id, generation: instance.generation})) {
+          throw new Error("Provider activation outcome differs from its exact Effect.");
+        }
+        requireActiveApproval(storage, instance.artifactApprovalId);
+        const acknowledged = authority.execute({
+          type: "acknowledgeBindingEndpoint",
+          operationId: plan.operationId,
+          planId: plan.id,
+          snapshot: effect.snapshot,
+          acknowledgement: effect.endpointAcknowledgement,
+        });
+        if (acknowledged.type !== "bindingEndpointAcknowledged") {
+          throw new Error("Provider activation could not acknowledge the Contract endpoint.");
+        }
+        if (acknowledged.invalidationIntentId) {
+          const intent = storage.invalidationIntents.get(acknowledged.invalidationIntentId);
+          const predecessor = intent
+            ? storage.bindings.get(intent.bindingId)
+            : undefined;
+          const predecessorInstance = predecessor
+            ? storage.contractInstances.get(predecessor.contractInstanceId)
+            : undefined;
+          if (!intent || predecessorInstance?.runtimeWorkpieceId === undefined) {
+            throw new Error("Replacement invalidation Effect lacks its predecessor runtime.");
+          }
+          succeedAuthorityEffect(storage, effect);
+          const childId = issueAuthorityId<"authorityEffect">();
+          const causalSequence = appendAuthorityEvent(storage, {
+            type: "authorityEffectCreated",
+            subjectId: childId,
+            operationId: effect.operationId,
+          });
+          storage.workspaceAuthorityEffects.put({
+            ...standingEffectContext(effect),
+            id: childId,
+            operationId: effect.operationId,
+            stepKey: `invalidate-predecessor:${intent.bindingId}:${intent.bindingGeneration}`,
+            kind: "invalidatePredecessorEndpoint",
+            lane: `contract-instance:${predecessorInstance.id}`,
+            causalSequence,
+            inputDigest: intent.endpointSnapshot.authoritySnapshotDigest,
+            providerPrepared: structuredClone(effect.providerPrepared),
+            snapshot: structuredClone(effect.snapshot),
+            endpointAcknowledgement: structuredClone(effect.endpointAcknowledgement),
+            intentId: intent.id,
+            predecessorRuntimeWorkpieceId: predecessorInstance.runtimeWorkpieceId,
+            predecessorSnapshot: structuredClone(intent.endpointSnapshot),
+            phase: "predecessorInvalidate",
+            state: "pending",
+            attempt: 0,
+            nextAttemptAt: 0,
+            cleanupResponsibility: false,
+          });
+          return undefined;
+        }
+        const published = authority.execute({
+          type: "commitBindingPublication",
+          operationId: plan.operationId,
+          planId: plan.id,
+        });
+        if (published.type !== "bindingPublished") {
+          // commitBindingPublication atomically retracts the unpublished instance and roots its
+          // cleanup Effect on a stale CAS. Finish this exact external-call Effect without throwing
+          // so the enclosing transaction preserves that compensation work.
+          succeedAuthorityEffect(storage, effect);
+          return undefined;
+        }
+        const installationResult: StandingBindingInstallationResult = {
+          type: "standingBindingInstalled",
+          installationDecisionId: effect.decisionId,
+          contractInstanceId: effect.targetId,
+          bindingId: published.bindingId,
+          bindingResolutionId: published.resolutionId,
+          bindingGeneration: published.generation,
+        };
+        authority.completeStandingInstallationEffect(effect.id, claimToken, installationResult);
+        return installationResult;
+      });
+    },
+    recordStandingInstallationEndpointOutcome(effectId, claimToken, acknowledgement) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (!isStandingInstallationEffect(effect) || effect.state !== "claimed" ||
+            effect.claimToken !== claimToken) {
+          throw new Error("Standing installation Effect claim is stale.");
+        }
+        if (effect.endpointAcknowledgement &&
+            !sameAuthorityValue(effect.endpointAcknowledgement, acknowledgement)) {
+          throw new Error("Contract endpoint acknowledgement changed across retries.");
+        }
+        storage.workspaceAuthorityEffects.put({
+          ...effect,
+          endpointAcknowledgement: structuredClone(acknowledgement),
+          phase: "providerActivate",
+        });
+      });
+    },
+    completeStandingInstallationEffect(effectId, claimToken, result) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (!isStandingInstallationEffect(effect) || effect.state !== "claimed" ||
+            effect.claimToken !== claimToken) {
+          throw new Error("Standing installation Effect claim is stale.");
+        }
+        const operation = storage.authorityOperations.get(effect.operationId);
+        if (!operation || operation.actor !== effect.principalId) {
+          throw new Error("Standing installation Authority Operation is unavailable.");
+        }
+        const plan = storage.bindingPublicationPlans.get(effect.planId);
+        const binding = storage.bindings.get(effect.bindingId);
+        const instance = storage.contractInstances.get(effect.targetId);
+        if (!plan || plan.state !== "committed" || !binding || !instance ||
+            instance.lifecycle !== "ready" ||
+            result.installationDecisionId !== effect.decisionId ||
+            result.contractInstanceId !== effect.targetId ||
+            result.bindingId !== effect.bindingId ||
+            result.bindingResolutionId !== plan.resolutionId ||
+            result.bindingGeneration !== effect.targetBindingGeneration ||
+            binding.generation !== effect.targetBindingGeneration) {
+          throw new Error("Standing installation outcome differs from canonical publication.");
+        }
+        requireActiveApproval(storage, instance.artifactApprovalId);
+        if (operation.state === "completed" && !sameAuthorityValue(operation.result, result)) {
+          throw new Error("Standing installation completed with another result.");
+        }
+        appendAuthorityEvent(storage, {
+          type: "authorityEffectSucceeded",
+          subjectId: effect.id,
+          operationId: effect.operationId,
+        });
+        storage.workspaceAuthorityEffects.put({...effect, state: "succeeded",
+          claimToken: undefined, claimUntil: undefined, reason: undefined});
+        storage.authorityOperations.put({...operation, state: "completed",
+          lastCompletedStep: effect.stepKey, result: structuredClone(result)});
+      });
+    },
+    completeTerminalInvalidationEffect(effectId, claimToken, acknowledgement) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (effect?.kind !== "invalidateTerminalEndpoint" || effect.state !== "claimed" ||
+            effect.claimToken !== claimToken) {
+          throw new Error("Terminal invalidation Effect claim is stale.");
+        }
+        authority.execute({
+          type: "acknowledgeTerminalBindingInvalidation",
+          operationId: effect.operationId,
+          intentId: effect.intentId,
+          acknowledgement,
+        });
+        authority.execute({
+          type: "commitTerminalBindingInvalidation",
+          operationId: effect.operationId,
+          intentId: effect.intentId,
+        });
+        appendAuthorityEvent(storage, {
+          type: "authorityEffectSucceeded",
+          subjectId: effect.id,
+          operationId: effect.operationId,
+        });
+        storage.workspaceAuthorityEffects.put({...effect, state: "succeeded",
+          claimToken: undefined, claimUntil: undefined, reason: undefined});
+      });
+    },
+    completeEffect(effectId, claimToken) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (!effect || isStandingInstallationEffect(effect) ||
+            effect.kind === "invalidateTerminalEndpoint") {
+          throw new Error("Cleanup Authority Effect is unavailable.");
+        }
+        if (effect.state === "succeeded") return;
+        if (effect.state !== "claimed" || effect.claimToken !== claimToken) {
+          throw new Error("Authority Effect claim is stale.");
+        }
+        const tombstone = storage.authorityTombstones.bySubject.get(
+          compositeKey("contractInstance", effect.targetId),
+        );
+        if (!tombstone || tombstone.cleanup !== "pending") {
+          throw new Error("Authority Effect cleanup responsibility is unavailable.");
+        }
+        appendAuthorityEvent(storage, {
+          type: "authorityEffectSucceeded",
+          subjectId: effect.id,
+          operationId: effect.operationId,
+        });
+        storage.workspaceAuthorityEffects.put({
+          ...effect,
+          state: "succeeded",
+          claimToken: undefined,
+          claimUntil: undefined,
+          reason: undefined,
+        });
+        storage.authorityTombstones.put({...tombstone, cleanup: "complete"});
+        for (const binding of storage.bindings.byInstance.get(effect.targetId)) {
+          const bindingTombstone = storage.authorityTombstones.bySubject.get(
+            compositeKey("binding", binding.id),
+          );
+          if (bindingTombstone?.cleanup === "pending") {
+            storage.authorityTombstones.put({...bindingTombstone, cleanup: "complete"});
+          }
+        }
+      });
+    },
+    retryEffect(effectId, claimToken, now) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        const effect = storage.workspaceAuthorityEffects.get(effectId);
+        if (!effect || effect.state !== "claimed" || effect.claimToken !== claimToken) {
+          throw new Error("Authority Effect claim is stale.");
+        }
+        const deadLetter = effect.attempt >= 12 ||
+          (effect.firstAttemptAt !== undefined && now - effect.firstAttemptAt >= 24 * 60 * 60_000);
+        if (deadLetter) {
+          appendAuthorityEvent(storage, {
+            type: "authorityEffectDeadLettered",
+            subjectId: effect.id,
+            operationId: effect.operationId,
+          });
+        }
+        storage.workspaceAuthorityEffects.put({
+          ...effect,
+          state: deadLetter ? "deadLetter" : "retryScheduled",
+          claimToken: undefined,
+          claimUntil: undefined,
+          nextAttemptAt: deadLetter ? effect.nextAttemptAt : Math.min(
+            Number.MAX_SAFE_INTEGER - 1,
+            now + effectRetryDelay(effect.id, effect.attempt),
+          ),
+          reason: "providerUnavailable",
+        });
+      });
+    },
+    nextEffectDueAt() {
+      const next = [...storage.workspaceAuthorityEffects.byDue.list({limit: 1})][0];
+      return next?.state === "claimed"
+        ? next.claimUntil ?? next.nextAttemptAt
+        : next?.nextAttemptAt;
+    },
+    resolveLegacyIdentity(kind, legacyId) {
+      return storage.hostAuthorityIdentities.get(compositeKey(kind, legacyId))?.canonicalId ??
+        findMappedLegacyIdentity(storage, kind, legacyId);
+    },
+    ensureHostIdentity(kind, hostId) {
+      requireAuthorityState(storage);
+      return storage.transaction(() => {
+        const key = compositeKey(kind, hostId);
+        const existing = storage.hostAuthorityIdentities.get(key);
+        if (existing) return existing.canonicalId;
+        const canonicalId = findMappedLegacyIdentity(storage, kind, hostId) ??
+          issueAuthorityId<typeof kind>();
+        const createdSequence = appendAuthorityEvent(storage, {
+          type: "hostAuthorityIdentityIssued",
+          subjectId: canonicalId,
+        });
+        storage.hostAuthorityIdentities.put({key, kind, hostId, canonicalId, createdSequence});
+        return canonicalId;
+      });
     },
   };
 
@@ -1895,18 +3517,23 @@ export function createWorkspaceAuthorityModule<
       if (requireAuthorityState(storage).state !== "active") {
         return visibleBindings(gadget, forChatId);
       }
-      const canonicalConsumerId = findMappedLegacyIdentity(storage, "consumer", consumerId);
+      const canonicalConsumerId =
+        storage.hostAuthorityIdentities.get(compositeKey("consumer", consumerId))?.canonicalId ??
+        findMappedLegacyIdentity(storage, "consumer", consumerId);
       if (!canonicalConsumerId) return [];
       const projected: [string, LegacyGadgetBindingRecord][] = [];
-      for (const binding of storage.bindings.byConsumer.get(canonicalConsumerId)) {
-        if (binding.status !== "active") continue;
+      for (const binding of storage.bindings.byConsumer.get(canonicalConsumerId as ConsumerId)) {
+        if (binding.status !== "active" ||
+            [...storage.invalidationIntents.byBinding.get(binding.id)]
+              .some(intent => intent.state !== "committed")) continue;
         const instance = storage.contractInstances.get(binding.contractInstanceId);
-        if (instance?.legacyWorkpieceId === undefined) continue;
+        const runtimeWorkpieceId = instance?.runtimeWorkpieceId ?? instance?.legacyWorkpieceId;
+        if (runtimeWorkpieceId === undefined) continue;
         const metadata = gadget.bindings[binding.name];
         projected.push([
           binding.name,
           {
-            target: instance.legacyWorkpieceId,
+            target: runtimeWorkpieceId,
             ...(metadata?.blueprintAnnotation
               ? {blueprintAnnotation: metadata.blueprintAnnotation}
               : {}),

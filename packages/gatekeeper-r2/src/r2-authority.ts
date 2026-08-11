@@ -657,15 +657,14 @@ export class R2Authority extends DurableObject<Env, AuthorityProps>
   }
 
   async #identity(): Promise<ProviderAuthorityIdentity> {
-    let sourceId = this.ctx.storage.kv.get<string>("provider:sourceId");
-    if (!sourceId) {
-      sourceId = crypto.randomUUID();
-      this.ctx.storage.kv.put("provider:sourceId", sourceId);
-    }
+    // Provider lifecycle facets are deliberately per-Contract Instance.  Their identity must
+    // nevertheless describe the account-owned Source rather than the individual facet, otherwise
+    // a description obtained before an Instance exists could never authorize the Instance facet.
+    const accountId = this.ctx.props.accountId ?? this.ctx.id.toString();
     return {
       providerId: PROVIDER_ID,
-      accountId: this.ctx.props.accountId ?? this.ctx.id.toString(),
-      sourceId,
+      accountId,
+      sourceId: `r2-account:${accountId}`,
       sourceGeneration: this.ctx.storage.kv.get<number>("provider:sourceGeneration") ?? 1,
     };
   }

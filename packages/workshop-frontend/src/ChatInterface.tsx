@@ -5876,6 +5876,62 @@ function ChatInterface({
     }
   };
 
+  const installContract = async (
+    message: Extract<AiChatMessage, {type: "contractRequest"}>,
+  ) => {
+    if (message.state !== "approved" || !message.artifactApprovalId ||
+        message.artifactApprovalEpoch === undefined) return;
+    setProcessingConnections(previous => new Set(previous).add(message.requestId));
+    try {
+      using authority = await authenticatedApi.openAuthority(workspaceId);
+      const snapshot = await authority.getSessionSnapshot();
+      const intent = {
+        type: "standingBindingInstallation",
+        requestId: message.requestId,
+        proposalId: message.proposalId,
+        artifactApprovalId: message.artifactApprovalId,
+        artifactApprovalEpoch: message.artifactApprovalEpoch,
+        targetGadgetId: message.targetGadgetId,
+        sourceGatekeeperId: message.sourceGatekeeperId,
+        bindingName: message.bindingName,
+        expectedBindingGeneration: message.expectedBindingGeneration,
+      };
+      const operation = await authority.beginOperation({
+        idempotencyKey: `standing-binding:${message.requestId}`,
+        requestDigest: await hashAuthorityRequest(intent),
+      });
+      const payload = {
+        type: "installStandingBinding" as const,
+        operationId: operation.id,
+        stepKey: "install-standing-binding",
+        expectedAuthorityEpoch: snapshot.authorityEpoch,
+        expectedPermissionGeneration: snapshot.permissionGeneration,
+        requestId: message.requestId,
+        proposalId: message.proposalId,
+        artifactApprovalId: message.artifactApprovalId,
+        artifactApprovalEpoch: message.artifactApprovalEpoch,
+        targetGadgetId: message.targetGadgetId,
+        sourceGatekeeperId: message.sourceGatekeeperId,
+        bindingName: message.bindingName,
+        expectedBindingGeneration: message.expectedBindingGeneration,
+        title: message.title,
+        evaluatorPolicyHash: message.policyHash,
+        ...(message.sharedStateKey ? {sharedStateKey: message.sharedStateKey} : {}),
+      };
+      await authority.execute({...payload, requestDigest: await hashAuthorityCommand(payload)});
+      toasts.add({title: "Contract installed", type: "success"});
+    } catch (error) {
+      console.error("Failed to install canonical Contract Binding:", error);
+      toasts.add({title: "Failed to install Contract", type: "error"});
+    } finally {
+      setProcessingConnections(previous => {
+        const next = new Set(previous);
+        next.delete(message.requestId);
+        return next;
+      });
+    }
+  };
+
   const toggleToolCallExpansion = useCallback((expansionKey: string) => {
     setExpandedToolCalls((prev) => {
       const next = new Set(prev);
@@ -6331,6 +6387,15 @@ function ChatInterface({
                   onClick={() => decideContract(msg, "approved")}
                   className="cursor-pointer rounded-md bg-primary px-3 py-1 font-medium text-white hover:opacity-90 disabled:opacity-40">
                   Approve artifact
+                </Button>
+              </div>
+            )}
+            {msg.state === "approved" && (
+              <div className="ml-3 flex flex-shrink-0 items-center self-center text-[13px]">
+                <Button variant="ghost" type="button" disabled={isProc}
+                  onClick={() => installContract(msg)}
+                  className="cursor-pointer rounded-md bg-primary px-3 py-1 font-medium text-white hover:opacity-90 disabled:opacity-40">
+                  Install for {msg.targetGadgetTitle}
                 </Button>
               </div>
             )}

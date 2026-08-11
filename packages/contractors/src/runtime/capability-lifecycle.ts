@@ -99,6 +99,7 @@ export interface ContractLifecycleEndpoint {
     snapshot: ContractReachabilitySnapshot,
     observer?: ContractLifecycleObserver,
     upstreamCancellation?: ContractUpstreamCancellation,
+    effectId?: string,
   ): Promise<Readonly<{endpointId: string; reachabilityGeneration: number}>>;
   startSession(session: ContractLifecycleSession): Promise<unknown>;
   restoreSession(

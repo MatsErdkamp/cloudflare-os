@@ -2092,6 +2092,8 @@ export type AiChatMessageBody = {
   sourceCode: string;
   /** Name under which the installed Contract appears in the Gadget environment. */
   bindingName: string;
+  /** Exact current Binding generation reviewed for initial publication or replacement. */
+  expectedBindingGeneration: number;
   /** Gadget that will receive the installed capability. */
   targetGadgetId: WorkpieceId;
   /** Denormalized target Gadget title retained for proposal review. */
@@ -2692,6 +2694,10 @@ export type PreApprovableAction = {
 export type GatekeeperCreationSpec = {
   type: "gatekeeper";
   vendorId: string;        // identifies the gatekeeper adapter (e.g. "google")
+  /** User-DO-local connected-account key; absent only on legacy stored records. */
+  accountId?: number;
+  /** Durable Object ID of the User that owns `accountId`; absent only on legacy records. */
+  accountOwnerId?: string;
   resourceUrl: string;
   typeUrlPattern: string;  // URL pattern from the vendor's SupportedResource (not the specific URL)
 } | {

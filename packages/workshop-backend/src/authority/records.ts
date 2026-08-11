@@ -1,4 +1,9 @@
 import type {WorkpieceId} from "@gadgets/workshop-shared/api";
+import type {ContractReachabilitySnapshot} from "@gadgets/contractors/runtime";
+import type {
+  ProviderAuthorityIdentity,
+  ProviderNativeAuthorityScope,
+} from "@gadgets/workshop-shared/gatekeeper-authority";
 
 declare const authorityIdKind: unique symbol;
 
@@ -21,6 +26,8 @@ export type SourceId = AuthorityId<"source">;
 export type RequirementId = AuthorityId<"requirement">;
 export type TaskTemplateId = AuthorityId<"taskTemplate">;
 export type AuthorityTombstoneId = AuthorityId<"authorityTombstone">;
+export type BindingPublicationPlanId = AuthorityId<"bindingPublicationPlan">;
+export type InvalidationIntentId = AuthorityId<"invalidationIntent">;
 
 /** A standing or task-scoped Consumer reference pinned to one generation. */
 export type ConsumerReference =
@@ -149,6 +156,7 @@ export type ArtifactApprovalRecord = ArtifactApprovalRecordBase & Readonly<
 /** A standing placement decision; it never represents Artifact review or task dispatch. */
 export type InstallationDecisionRecord = Readonly<{
   id: InstallationDecisionId;
+  operationId: string;
   proposalDigest: string;
   decision: "approved" | "denied" | "expired";
   decidedBy: string;
@@ -158,6 +166,12 @@ export type InstallationDecisionRecord = Readonly<{
   requirement?: BindingRequirementReference;
   intendedBindingName?: string;
   expectedBindingGeneration?: number;
+  artifactApprovalId?: ArtifactApprovalId;
+  upstreamAuthority?: UpstreamAuthorityReference;
+  authorityMode?: "personal" | "shared" | "verified";
+  sharedState?: SharedStateChoice;
+  evaluatorPolicyHash?: string;
+  runtimeWorkpieceId?: WorkpieceId;
   reason?: string;
 }>;
 
@@ -204,6 +218,19 @@ export type BindingResolutionRecord = Readonly<{
 export type ContractInstanceRecord = Readonly<{
   id: ContractInstanceId;
   legacyWorkpieceId?: WorkpieceId;
+  /** Host transport locator; it is never evidence of authority or Binding possession. */
+  runtimeWorkpieceId?: WorkpieceId;
+  /** Host locator for the selected Gatekeeper Source; never exposed to the Consumer. */
+  sourceGatekeeperId?: WorkpieceId;
+  /** Exact provider backing returned for this instance; it carries no credential or raw Source. */
+  providerBacking?: Readonly<{
+    provider: ProviderAuthorityIdentity;
+    backingReference: string;
+    capabilityGeneration: number;
+    providerNativeScope: ProviderNativeAuthorityScope;
+    providerNativeRevocationGranularity: string;
+    localEnforcementRevocationGranularity: string;
+  }>;
   artifactApprovalId: ArtifactApprovalId;
   artifactHash: string;
   runtimeProfileHash: string;
@@ -232,7 +259,44 @@ export type BindingRecord = Readonly<{
   generation: number;
   revision: number;
   installedSequence: number;
+  /** Exact acknowledged Contract Facet snapshot enforcing this Binding generation. */
+  endpointSnapshot?: ContractReachabilitySnapshot;
   predecessorId?: BindingId;
+}>;
+
+/** Durable pre-publication state for one exact generation-CAS Binding decision. */
+export type BindingPublicationPlanRecord = Readonly<{
+  id: BindingPublicationPlanId;
+  operationId: string;
+  contractInstanceId: ContractInstanceId;
+  consumer: ConsumerReference;
+  requirement: BindingRequirementReference;
+  name: string;
+  verification: BindingVerificationReference;
+  evaluatorPolicyHash: string;
+  expectedBindingGeneration: number;
+  targetBindingGeneration: number;
+  bindingId: BindingId;
+  resolutionId: BindingResolutionId;
+  predecessorId?: BindingId;
+  endpointSnapshot?: ContractReachabilitySnapshot;
+  state: "planned" | "endpointAcknowledged" | "invalidationPending" |
+    "readyToCommit" | "committed" | "obsolete";
+}>;
+
+/** Durable enforcement-first intent for one exact old Binding generation. */
+export type InvalidationIntentRecord = Readonly<{
+  id: InvalidationIntentId;
+  operationId: string;
+  planId?: BindingPublicationPlanId;
+  bindingId: BindingId;
+  bindingGeneration: number;
+  endpointSnapshot: ContractReachabilitySnapshot;
+  replacementBindingId?: BindingId;
+  replacementGeneration?: number;
+  terminalTarget?: "suspended" | "retracted";
+  reason?: string;
+  state: "pending" | "acknowledged" | "committed";
 }>;
 
 /** A runtime request to release authority already present in an installed Contract. */

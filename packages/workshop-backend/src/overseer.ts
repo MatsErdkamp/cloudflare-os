@@ -2,6 +2,14 @@ import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, ContractOperationSummary } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
+import type {
+  GatekeeperAuthorityProvider,
+  ProviderActionEvidence,
+  ProviderActionStager,
+  ProviderAuthorityDescription,
+  ProviderObservationEnforcer,
+  ProviderObservationEvidence,
+} from "@gadgets/workshop-shared/gatekeeper-authority";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
   RpcTarget as NativeRpcTarget, restore,
@@ -56,6 +64,7 @@ import type {
   ContractActionAttribution as ContractorsContractActionAttribution,
   ContractLifecycleEndpoint,
   ContractLifecycleSession,
+  ContractUpstreamCancellation,
   ContractOperationRecord as ContractorsContractOperationRecord,
   ContractRecord as ContractorsContractRecord,
   ContractReachabilitySnapshot,
@@ -91,9 +100,18 @@ import {
   type LegacyGadgetBindingRecord,
   type LegacyManagerSourceAccess,
   type LegacyWorkspaceAuthorityCompatibility,
+  type StandingInstallationEffect,
   type WorkspaceAuthority,
 } from "./authority/workspace-authority";
-import type {ArtifactApprovalId, ArtifactProposalId} from "./authority/records";
+import type {
+  ArtifactApprovalId,
+  ArtifactProposalId,
+  ConsumerId,
+  ContractInstanceId,
+  LiveUpstreamAuthorityReference,
+  RequirementId,
+  SourceId,
+} from "./authority/records";
 import {
   hashAuthorityCommand,
   hashAuthorityRequest,
@@ -106,6 +124,7 @@ import {
   type AuthoritySessionSnapshot,
   type BeginAuthorityOperation,
   type AuthorityOperationView,
+  type InstallStandingBindingCommand,
   type OpenReviewEvidenceRequest,
   type ReviewEvidenceBlobReference,
   type ReviewEvidenceReader,
@@ -248,7 +267,6 @@ type GatekeeperClass = DurableObjectClass<Gatekeeper<any>>;
 // shape to call it — same optional-method-on-a-stub pattern as user.ts's SingletonAccountStub.
 type CatalogGatekeeperFacet =
     Fetcher<Gatekeeper<any> & Required<Pick<Gatekeeper<any>, "getAgentCatalog">>>;
-
 type LegacyBlueprintBindingAnnotation = BlueprintBindingAnnotation & {
   included?: boolean;
 };
@@ -287,7 +305,18 @@ type GatekeeperRecord = {
 // Legacy combined Contract row retained as migration input and runtime locator until retirement.
 type ContractRecord = ContractorsContractRecord<WorkpieceId> & {
   installationRequestId?: string;
+  canonicalInstanceId?: string;
 };
+
+type CanonicalSourceActivityRecord = Readonly<{
+  id: string;
+  bindingId: string;
+  bindingGeneration: number;
+  contractInstanceId: string;
+  kind: "observation" | "action";
+  evidence: ProviderObservationEvidence | ProviderActionEvidence;
+  recordedAt: number;
+}>;
 
 type Mutable<T> = {-readonly [Key in keyof T]: T[Key]};
 type ContractOperationRecord = Omit<
@@ -342,6 +371,91 @@ export function bridgeContractSource(
   // workerd does not reliably recognize a proxied RpcTarget as a top-level RPC value, so create
   // the stub explicitly. The explicit stub also guarantees that the Contract receives dup().
   return new NativeRpcStub(new ContractSourceBridge(source));
+}
+
+class CanonicalProviderObservationEnforcer extends NativeRpcTarget
+    implements ProviderObservationEnforcer {
+  constructor(
+    private readonly impl: OverseerImpl,
+    private readonly consumerId: ConsumerId,
+    private readonly bindingName: string,
+  ) {
+    super();
+  }
+
+  authorizeProviderObservation(evidence: ProviderObservationEvidence): Promise<void> {
+    const execution = this.impl.requireCanonicalBindingExecution(
+      this.consumerId,
+      this.bindingName,
+      evidence,
+    );
+    this.impl.storage.canonicalSourceActivities.put({
+      id: evidence.observationId,
+      bindingId: execution.binding.id,
+      bindingGeneration: execution.binding.generation,
+      contractInstanceId: execution.instance.id,
+      kind: "observation",
+      evidence: structuredClone(evidence),
+      recordedAt: Date.now(),
+    });
+    return Promise.resolve();
+  }
+}
+
+class CanonicalProviderActionStager extends NativeRpcTarget implements ProviderActionStager {
+  constructor(
+    private readonly impl: OverseerImpl,
+    private readonly consumerId: ConsumerId,
+    private readonly bindingName: string,
+    private readonly apply: (evidence: ProviderActionEvidence) => Promise<void>,
+  ) {
+    super();
+  }
+
+  async stageProviderAction(evidence: ProviderActionEvidence): Promise<void> {
+    const execution = this.impl.requireCanonicalBindingExecution(
+      this.consumerId,
+      this.bindingName,
+      evidence,
+    );
+    await this.apply(evidence);
+    this.impl.requireCanonicalBindingExecution(this.consumerId, this.bindingName, evidence);
+    this.impl.storage.canonicalSourceActivities.put({
+      id: evidence.actionId,
+      bindingId: execution.binding.id,
+      bindingGeneration: execution.binding.generation,
+      contractInstanceId: execution.instance.id,
+      kind: "action",
+      evidence: structuredClone(evidence),
+      recordedAt: Date.now(),
+    });
+  }
+}
+
+class CanonicalProviderCancellation extends NativeRpcTarget
+    implements ContractUpstreamCancellation {
+  constructor(
+    private readonly provider: Fetcher<GatekeeperAuthorityProvider<NativeRpcTarget>>,
+    private readonly request: Readonly<{
+      expectedProvider: import("@gadgets/workshop-shared/gatekeeper-authority").ProviderAuthorityIdentity;
+      contractInstance: Readonly<{id: string; generation: number}>;
+      expectedCapabilityGeneration: number;
+    }>,
+    private readonly operationId: string,
+  ) {
+    super();
+  }
+
+  async cancel(snapshot: ContractReachabilitySnapshot): Promise<void> {
+    if (snapshot.instanceId !== this.request.contractInstance.id ||
+        snapshot.instanceGeneration !== this.request.contractInstance.generation) {
+      throw new Error("Provider cancellation snapshot differs from its Contract Instance.");
+    }
+    await this.provider.deactivateProviderAuthority({
+      operationId: this.operationId,
+      ...structuredClone(this.request),
+    });
+  }
 }
 
 type ContractFacetRpc = DurableObject & ContractLifecycleEndpoint;
@@ -952,6 +1066,10 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
         primaryKey: "id",
       }),
 
+      canonicalSourceActivities: collection<CanonicalSourceActivityRecord>()({
+        primaryKey: "id",
+      }),
+
       actions: collection<ActionRecord>()({
         primaryKey: "id"
       }),
@@ -1361,10 +1479,7 @@ class OverseerImpl implements AgentHooks {
   #registerRunningAgent(chatId: number) {
     let wasEmpty = this.#runningAgents.size === 0;
     this.#runningAgents.add(chatId);
-    if (wasEmpty) {
-      // Zero -> one running agents: schedule the keep-alive alarm.
-      this.ctx.storage.setAlarm(Date.now() + OverseerImpl.#AGENT_KEEPALIVE_ALARM_MS);
-    }
+    if (wasEmpty) this.#scheduleNextWorkspaceAlarm();
   }
 
   // Tear down all bookkeeping for a finished agent turn: remove it from the in-memory registry,
@@ -1378,7 +1493,7 @@ class OverseerImpl implements AgentHooks {
     if (this.#runningAgents.size === 0) {
       // One -> zero running agents: replace the keep-alive alarm with any response-target retry/sweep
       // alarm that is now due, and wake any `alarm()` waiter.
-      this.#updateExternalMessageResponseDeliveryAlarm();
+      this.#scheduleNextWorkspaceAlarm();
       for (let waiter of this.#allAgentsIdleWaiters) {
         waiter();
       }
@@ -1386,9 +1501,7 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
-  #updateExternalMessageResponseDeliveryAlarm(): void {
-    if (this.#runningAgents.size > 0) return;
-
+  #scheduleNextWorkspaceAlarm(): void {
     // This DO has one alarm shared by agent keep-alive, response-target retry, and delivered-record sweep.
     // Recompute from storage whenever the alarm may have been overwritten by another concern.
     this.#sweepDeliveredExternalMessageResponses();
@@ -1400,13 +1513,21 @@ class OverseerImpl implements AgentHooks {
       return;
     }
 
+    const dueTimes: number[] = [];
+    if (this.#runningAgents.size > 0) {
+      dueTimes.push(Date.now() + OverseerImpl.#AGENT_KEEPALIVE_ALARM_MS);
+    }
     let nextDeliveredRecord = [...this.storage.gadgetResponseDeliveries.deliveredByDeliveredAt.list({ limit: 1 })][0];
     if (nextDeliveredRecord?.status === "delivered") {
-      this.ctx.storage.setAlarm(nextDeliveredRecord.deliveredAt + AGENT_RESPONSE_DELIVERED_RETENTION_MS);
-      return;
+      dueTimes.push(nextDeliveredRecord.deliveredAt + AGENT_RESPONSE_DELIVERED_RETENTION_MS);
     }
+    const authorityEffectDueAt = this.workspaceAuthority.nextEffectDueAt();
+    if (authorityEffectDueAt !== undefined) dueTimes.push(authorityEffectDueAt);
 
-    this.ctx.storage.deleteAlarm();
+    if (dueTimes.length > 0) {
+      this.ctx.storage.setAlarm(Math.max(Date.now() + 1, Math.min(...dueTimes)));
+    }
+    else this.ctx.storage.deleteAlarm();
   }
 
   #deleteExternalMessageResponseDeliveryRecord(record: ExternalMessageRecord): void {
@@ -1563,6 +1684,12 @@ class OverseerImpl implements AgentHooks {
         this.storage.chatMeta.put(thread);
         this.#deliverWaitingExternalMessageResponse(thread.id);
       }
+    }
+    this.workspaceAuthority.reconcile();
+    if ((this.workspaceAuthority.nextEffectDueAt() ?? Infinity) <= Date.now()) {
+      this.ctx.waitUntil(this.reconcileWorkspaceAuthorityEffects());
+    } else {
+      this.#scheduleNextWorkspaceAlarm();
     }
   }
 
@@ -2277,6 +2404,19 @@ class OverseerImpl implements AgentHooks {
   getEnvForLoader(gadgetId: WorkpieceId, caller: GatekeeperCaller, forChatId?: number): object {
     let env: Record<string, any> = {}
     let gadget = this.getGadgetRecord(gadgetId);
+    const authorityStatus = this.workspaceAuthority.query({type: "status"});
+    if (authorityStatus.type === "status" && authorityStatus.value.state === "active") {
+      const consumerId = this.workspaceAuthority.resolveLegacyIdentity("consumer", gadgetId);
+      if (consumerId) {
+        const readiness = this.workspaceAuthority.query({
+          type: "consumerReadiness",
+          consumerId: consumerId as ConsumerId,
+        });
+        if (readiness.type !== "consumerReadiness" || !readiness.value.ready) {
+          throw new Error("Gadget environment is not ready for its complete Binding generation.");
+        }
+      }
+    }
     env.GADGET = this.makeBindingLoopback({type: "gadget", id: gadgetId}, caller);
     for (let [name, edge] of this.visibleBindings(gadget, forChatId)) {
       this.requireContract(edge.target);
@@ -2798,6 +2938,439 @@ class OverseerImpl implements AgentHooks {
     });
   }
 
+  getCanonicalProviderFacet(
+    contractInstanceId: string,
+    sourceGatekeeperId: WorkpieceId,
+  ): Fetcher<GatekeeperAuthorityProvider<NativeRpcTarget>> {
+    const facetName = `providerAuthority${contractInstanceId}`;
+    return this.ctx.facets.get(facetName, async () => {
+      const cls = await this.getCanonicalProviderClass(sourceGatekeeperId);
+      if (!cls) throw new Error("The selected Source has no canonical provider-authority adapter.");
+      return {class: cls, id: facetName};
+    });
+  }
+
+  async getCanonicalProviderClass(sourceGatekeeperId: WorkpieceId) {
+    const record = this.storage.gatekeepers.get(sourceGatekeeperId);
+    const accountId = record?.creationSpec?.type === "gatekeeper"
+      ? record.creationSpec.accountId
+      : record?.creationSpec?.type === "ambient"
+        ? record.creationSpec.accountId
+        : undefined;
+    const accountOwnerId = record?.creationSpec?.type === "gatekeeper"
+      ? record.creationSpec.accountOwnerId
+      : this.ownerId;
+    if (accountId === undefined || !accountOwnerId || !record?.resourceUrl) return null;
+    const owner = this.users.get(this.users.idFromString(accountOwnerId));
+    return owner.getAuthorityProviderClass(accountId, record.resourceUrl);
+  }
+
+  async describeCanonicalProviderSource(
+    operationId: string,
+    sourceGatekeeperId: WorkpieceId,
+  ): Promise<ProviderAuthorityDescription> {
+    const cls = await this.getCanonicalProviderClass(sourceGatekeeperId);
+    if (!cls) throw new Error("The selected Source has no canonical provider-authority adapter.");
+    const facetName = `providerAuthorityProbe${operationId}`;
+    return this.ctx.facets.get<GatekeeperAuthorityProvider<NativeRpcTarget>>(
+      facetName,
+      () => ({class: cls, id: facetName}),
+    ).describeProviderAuthority();
+  }
+
+  async applyStandingInstallationEffect(effect: StandingInstallationEffect): Promise<void> {
+    const claimToken = effect.claimToken;
+    if (!claimToken) throw new Error("Standing installation Effect is not claimed.");
+    const command = effect.command;
+    const proposal = this.workspaceAuthority.query({
+      type: "artifactProposal",
+      id: command.proposalId as ArtifactProposalId,
+    });
+    const approval = this.workspaceAuthority.query({
+      type: "artifactApproval",
+      id: command.artifactApprovalId as ArtifactApprovalId,
+    });
+    const instance = this.workspaceAuthority.query({
+      type: "contractInstance",
+      id: effect.targetId,
+    });
+    if (proposal.type !== "artifactProposal" || !proposal.value ||
+        approval.type !== "artifactApproval" || approval.value?.evidence !== "complete" ||
+        instance.type !== "contractInstance" || !instance.value ||
+        instance.value.runtimeWorkpieceId === undefined || !instance.value.intendedConsumer ||
+        !instance.value.intendedRequirement) {
+      throw new Error("Standing installation Effect lineage is unavailable.");
+    }
+    const artifact = await new R2ContractArtifactStore(this.env.BLUEPRINT_CONTENT)
+      .get(proposal.value.artifactHash);
+    if (!artifact || artifact.runtimeProfileHash !== proposal.value.runtimeProfileHash) {
+      throw new Error("Approved Contract Artifact is unavailable or mismatched.");
+    }
+    let contract = this.storage.contracts.get(instance.value.runtimeWorkpieceId);
+    if (!contract) {
+      contract = {
+        id: instance.value.runtimeWorkpieceId,
+        canonicalInstanceId: instance.value.id,
+        artifactHash: artifact.hash,
+        runtimeProfileHash: artifact.runtimeProfileHash,
+        sourceGatekeeperId: effect.command.sourceGatekeeperId,
+        title: effect.command.title.trim() || "Contract",
+        publicTypes: artifact.publicTypes,
+        createdAt: new Date(),
+        approvedBy: effect.principalId,
+        installationRequestId: effect.command.requestId,
+        ...(effect.command.sharedStateKey
+          ? {sharedStateKey: effect.command.sharedStateKey}
+          : {}),
+      };
+      this.storage.contracts.put(contract);
+    }
+    const description = effect.providerDescription;
+    const provider = this.getCanonicalProviderFacet(effect.targetId, contract.sourceGatekeeperId);
+    const lifecycleBase = {
+      expectedProvider: structuredClone(description.identity),
+      contractInstance: {id: effect.targetId, generation: instance.value.generation},
+    };
+    const phaseOrder = ["providerPrepare", "endpointInstall", "providerActivate",
+      "predecessorInvalidate", "publish"] as const;
+    const phase = phaseOrder.indexOf(effect.phase);
+    let providerPrepared;
+    if (phase === 0) {
+      providerPrepared = await provider.prepareProviderAuthority({
+        operationId: effect.id,
+        ...lifecycleBase,
+        expectedCapabilityGeneration: 0,
+      });
+    } else {
+      const backing = instance.value.providerBacking;
+      if (!backing) throw new Error("Standing installation lost its prepared provider backing.");
+      providerPrepared = {
+        provider: backing.provider,
+        contractInstance: lifecycleBase.contractInstance,
+        backingReference: backing.backingReference,
+        capabilityGeneration: backing.capabilityGeneration,
+        state: <const>"prepared",
+        cleanup: <const>"not-required",
+      };
+    }
+    const planned = {
+      planId: effect.planId,
+      bindingId: effect.bindingId,
+      generation: effect.targetBindingGeneration,
+    };
+    const debt = {
+        bindingId: planned.bindingId,
+        upstreamAuthority: instance.value.upstreamAuthority as LiveUpstreamAuthorityReference,
+        providerNativeScope: {
+          provider: description.identity.providerId,
+          resources: [...description.providerNativeScope.resources].toSorted(),
+          operations: [...description.providerNativeScope.operations].toSorted(),
+          recipients: [...description.providerNativeScope.recipients].toSorted(),
+          egress: [...description.providerNativeScope.egress].toSorted(),
+        },
+        effectiveScope: {
+          provider: description.identity.providerId,
+          resources: [`contract-instance:${effect.targetId}`],
+          operations: [...description.providerNativeScope.operations].toSorted(),
+          recipients: [],
+          egress: [],
+        },
+        enforcementLayer: "gatekeeper",
+        revocationGranularity: description.localEnforcementRevocationGranularity,
+        risk: description.providerNativeScope.resources.length === 1 &&
+            description.providerNativeScope.resources[0] === `contract-instance:${effect.targetId}`
+          ? "low" : "medium",
+        exceptionOwner: effect.principalId,
+        productionEligibility: "eligible",
+        remediation: "Prefer a provider-native per-Contract backing when R2 offers one.",
+        lifecycle: "open",
+      } as const;
+    const endpointId = `contract-instance:${effect.targetId}`;
+    const snapshot = validateContractReachabilitySnapshot({
+      endpointId,
+      instanceId: effect.targetId,
+      instanceGeneration: instance.value.generation,
+      artifactHash: artifact.hash,
+      runtimeProfileHash: artifact.runtimeProfileHash,
+      reachabilityId: `binding:${planned.bindingId}`,
+      reachabilityGeneration: planned.generation,
+      authoritySnapshotDigest: await hashContractValue({
+        bindingId: planned.bindingId,
+        bindingGeneration: planned.generation,
+        consumer: instance.value.intendedConsumer,
+        requirement: instance.value.intendedRequirement,
+        contractInstanceId: effect.targetId,
+        contractInstanceGeneration: instance.value.generation,
+        artifactApprovalId: approval.value.id,
+        artifactApprovalEpoch: approval.value.approvalEpoch,
+        upstreamAuthority: instance.value.upstreamAuthority,
+        providerCapabilityGeneration: providerPrepared.capabilityGeneration,
+      }),
+      compositionLineage: [endpointId],
+      chainDepth: 0,
+      maxChainDepth: 8,
+    });
+    if (effect.kind === "prepareProviderBacking") {
+      this.workspaceAuthority.completeProviderPreparationEffect(
+        effect.id,
+        claimToken,
+        providerPrepared,
+        snapshot,
+        debt,
+      );
+      return;
+    }
+    let endpointAcknowledgement = effect.endpointAcknowledgement;
+    if (phase <= 1) {
+      this.workspaceAuthority.advanceStandingInstallationEffect(
+        effect.id, claimToken, "endpointInstall",
+      );
+      const cancellation = new NativeRpcStub(new CanonicalProviderCancellation(
+        provider,
+        {...lifecycleBase, expectedCapabilityGeneration: providerPrepared.capabilityGeneration},
+        `${command.operationId}:provider-deactivate:${effect.targetId}`,
+      ));
+      try {
+        endpointAcknowledgement = await this.getContractFacet(contract)
+          .install(snapshot, undefined, cancellation, effect.id);
+      } finally {
+        cancellation[Symbol.dispose]?.();
+      }
+      if (endpointAcknowledgement.endpointId !== snapshot.endpointId ||
+          endpointAcknowledgement.reachabilityGeneration !== snapshot.reachabilityGeneration) {
+        throw new Error("Contract endpoint returned an invalid installation acknowledgement.");
+      }
+      this.workspaceAuthority.completeEndpointInstallationEffect(
+        effect.id,
+        claimToken,
+        endpointAcknowledgement,
+      );
+      return;
+    } else if (!endpointAcknowledgement) {
+      throw new Error("Standing installation lost its durable endpoint acknowledgement.");
+    }
+    if (phase <= 2) {
+      const activated = await provider.activateProviderAuthority({
+        operationId: effect.id,
+        ...lifecycleBase,
+        expectedCapabilityGeneration: providerPrepared.capabilityGeneration,
+      });
+      if (activated.state !== "active" || activated.cleanup !== "not-required" ||
+          activated.capabilityGeneration !== providerPrepared.capabilityGeneration ||
+          JSON.stringify(activated.provider) !== JSON.stringify(description.identity) ||
+          JSON.stringify(activated.contractInstance) !==
+            JSON.stringify(lifecycleBase.contractInstance)) {
+        throw new Error("Provider activation outcome differs from its Authority Effect.");
+      }
+      if (effect.kind === "activateProviderBacking") {
+        const result = this.workspaceAuthority.completeProviderActivationEffect(
+          effect.id,
+          claimToken,
+          activated,
+        );
+        if (result) {
+          this.bumpVersion([command.targetGadgetId]);
+          const fresh = findContractRequest(this, command.requestId);
+          if (fresh?.proposalId === command.proposalId) {
+            fresh.state = "accepted";
+            fresh.contractId = instance.value.runtimeWorkpieceId;
+            fresh.timestamp = this.getChatTimestamp();
+            this.storage.chats.put(fresh);
+          }
+        }
+        return;
+      }
+    }
+    const acknowledged = this.workspaceAuthority.execute({
+      type: "acknowledgeBindingEndpoint",
+      operationId: `${command.operationId}:publication`,
+      planId: planned.planId,
+      snapshot,
+      acknowledgement: endpointAcknowledgement,
+    });
+    if (acknowledged.type !== "bindingEndpointAcknowledged") {
+      throw new Error("Workspace Authority rejected the endpoint acknowledgement.");
+    }
+    if (acknowledged.invalidationIntentId) {
+      const intent = this.workspaceAuthority.query({
+        type: "invalidationIntentByPlan",
+        planId: planned.planId,
+      });
+      if (intent.type !== "invalidationIntentByPlan" || !intent.value) {
+        throw new Error("Replacement invalidation intent is unavailable.");
+      }
+      if (intent.value.state !== "committed") {
+        const predecessorBinding = this.workspaceAuthority.query({
+          type: "binding", id: intent.value.bindingId,
+        });
+        if (predecessorBinding.type !== "binding" || !predecessorBinding.value) {
+          throw new Error("Replacement predecessor Binding is unavailable.");
+        }
+        const predecessor = this.workspaceAuthority.query({
+          type: "contractInstance", id: predecessorBinding.value.contractInstanceId,
+        });
+        if (predecessor.type !== "contractInstance" ||
+            predecessor.value?.runtimeWorkpieceId === undefined) {
+          throw new Error("Replacement predecessor runtime is unavailable.");
+        }
+        this.workspaceAuthority.advanceStandingInstallationEffect(
+          effect.id, claimToken, "predecessorInvalidate",
+        );
+        const invalidation = await this.getContractFacet(
+          this.requireContract(predecessor.value.runtimeWorkpieceId),
+        ).invalidate(intent.value.endpointSnapshot.reachabilityGeneration);
+        this.workspaceAuthority.execute({
+          type: "acknowledgeBindingInvalidation",
+          operationId: `${command.operationId}:publication`,
+          planId: planned.planId,
+          acknowledgement: invalidation,
+        });
+      }
+    }
+    this.workspaceAuthority.advanceStandingInstallationEffect(effect.id, claimToken, "publish");
+    const published = this.workspaceAuthority.execute({
+      type: "commitBindingPublication",
+      operationId: `${command.operationId}:publication`,
+      planId: planned.planId,
+    });
+    if (published.type !== "bindingPublished") {
+      throw new Error("Standing Binding publication lost its generation compare-and-swap.");
+    }
+    const result = {
+      type: <const>"standingBindingInstalled",
+      installationDecisionId: effect.decisionId,
+      contractInstanceId: effect.targetId,
+      bindingId: published.bindingId,
+      bindingResolutionId: published.resolutionId,
+      bindingGeneration: published.generation,
+    };
+    this.workspaceAuthority.completeStandingInstallationEffect(effect.id, claimToken, result);
+    this.bumpVersion([command.targetGadgetId]);
+    const fresh = findContractRequest(this, command.requestId);
+    if (fresh?.proposalId === command.proposalId) {
+      fresh.state = "accepted";
+      fresh.contractId = instance.value.runtimeWorkpieceId;
+      fresh.timestamp = this.getChatTimestamp();
+      this.storage.chats.put(fresh);
+    }
+  }
+
+  async reconcileWorkspaceAuthorityEffects(): Promise<void> {
+    this.workspaceAuthority.reconcile();
+    const effects = this.workspaceAuthority.claimDueEffects(
+      Date.now(),
+      16,
+      () => crypto.randomUUID(),
+    );
+    await Promise.all(effects.map(async effect => {
+      try {
+        if (effect.kind === "prepareProviderBacking" ||
+            effect.kind === "installContractEndpoint" ||
+            effect.kind === "activateProviderBacking" ||
+            effect.kind === "invalidatePredecessorEndpoint") {
+          await this.applyStandingInstallationEffect(effect);
+          return;
+        }
+        if (effect.kind === "invalidateTerminalEndpoint") {
+          const contract = this.storage.contracts.get(effect.runtimeWorkpieceId);
+          if (!contract) throw new Error("Terminal invalidation runtime is unavailable.");
+          const acknowledgement = await this.getContractFacet(contract).invalidate(
+            effect.endpointSnapshot.reachabilityGeneration,
+          );
+          this.workspaceAuthority.completeTerminalInvalidationEffect(
+            effect.id,
+            effect.claimToken!,
+            acknowledgement,
+          );
+          return;
+        }
+        const provider = this.getCanonicalProviderFacet(
+          effect.contractInstance.id,
+          effect.sourceGatekeeperId,
+        );
+        if (effect.kind === "cleanupObsoleteContract") {
+          if (effect.runtimeWorkpieceId === undefined || !effect.endpointSnapshot) {
+            throw new Error("Obsolete Contract cleanup lacks its exact endpoint.");
+          }
+          const contract = this.storage.contracts.get(effect.runtimeWorkpieceId);
+          if (contract) {
+            const acknowledgement = await this.getContractFacet(contract).invalidate(
+              effect.endpointSnapshot.reachabilityGeneration,
+            );
+            if (acknowledgement.endpointId !== effect.endpointSnapshot.endpointId ||
+                acknowledgement.reachabilityGeneration !==
+                  effect.endpointSnapshot.reachabilityGeneration ||
+                acknowledgement.invalidated !== true) {
+              throw new Error("Obsolete Contract endpoint returned an invalid acknowledgement.");
+            }
+          }
+        }
+        const inactive = await provider.deactivateProviderAuthority({
+          operationId: effect.deactivationOperationId,
+          expectedProvider: structuredClone(effect.expectedProvider),
+          contractInstance: structuredClone(effect.contractInstance),
+          expectedCapabilityGeneration: effect.expectedCapabilityGeneration,
+        });
+        if (inactive.state !== "inactive" || inactive.cleanup !== "not-required" ||
+            JSON.stringify(inactive.provider) !== JSON.stringify(effect.expectedProvider) ||
+            JSON.stringify(inactive.contractInstance) !==
+              JSON.stringify(effect.contractInstance)) {
+          throw new Error("Provider deactivation outcome differs from its Authority Effect.");
+        }
+        const destroyed = await provider.destroyProviderAuthority({
+          operationId: effect.id,
+          expectedProvider: structuredClone(effect.expectedProvider),
+          contractInstance: structuredClone(effect.contractInstance),
+          expectedCapabilityGeneration: inactive.capabilityGeneration,
+        });
+        if (destroyed.state !== "destroyed" || destroyed.cleanup !== "complete" ||
+            JSON.stringify(destroyed.provider) !== JSON.stringify(effect.expectedProvider) ||
+            JSON.stringify(destroyed.contractInstance) !==
+              JSON.stringify(effect.contractInstance)) {
+          throw new Error("Provider cleanup outcome differs from its Authority Effect.");
+        }
+        // Host cleanup is idempotent and must finish before the durable Effect is declared
+        // successful. A crash after either deletion simply replays the same provider operation.
+        if (effect.runtimeWorkpieceId !== undefined) {
+          this.storage.contracts.delete(effect.runtimeWorkpieceId);
+          this.ctx.facets.delete(`contract${effect.runtimeWorkpieceId}`);
+        }
+        this.workspaceAuthority.completeEffect(effect.id, effect.claimToken!);
+      } catch (error) {
+        this.logger.warn("failed to apply Workspace Authority effect", {
+          event: "authority.effect.apply.failed",
+          operation: effect.id,
+          error,
+        });
+        this.workspaceAuthority.retryEffect(effect.id, effect.claimToken!, Date.now());
+      }
+    }));
+    this.#scheduleNextWorkspaceAlarm();
+  }
+
+  requireCanonicalBindingExecution(
+    consumerId: ConsumerId,
+    bindingName: string,
+    evidence: ProviderObservationEvidence | ProviderActionEvidence,
+  ) {
+    const execution = this.workspaceAuthority.query({
+      type: "bindingExecution",
+      consumerId,
+      name: bindingName,
+    });
+    if (execution.type !== "bindingExecution" || !execution.value ||
+        !execution.value.instance.providerBacking ||
+        evidence.contractInstance.id !== execution.value.instance.id ||
+        evidence.contractInstance.generation !== execution.value.instance.generation ||
+        evidence.capabilityGeneration !==
+          execution.value.instance.providerBacking.capabilityGeneration ||
+        JSON.stringify(evidence.provider) !==
+          JSON.stringify(execution.value.instance.providerBacking.provider)) {
+      throw new Error("Provider evidence cites stale or inactive canonical authority.");
+    }
+    return execution.value;
+  }
+
   async getContractReachability(
       contract: ContractRecord): Promise<ContractReachabilitySnapshot> {
     let endpointId = `contract:${contract.id}`;
@@ -2933,7 +3506,51 @@ class OverseerImpl implements AgentHooks {
     let contract = this.requireContract(contractId);
 
     // Enforcement closes and acknowledges before any canonical edge or instance is retracted.
-    await this.invalidateContractEndpoint(contract);
+    if (contract.canonicalInstanceId) {
+      const bindingView = this.workspaceAuthority.query({
+        type: "bindingByInstance",
+        contractInstanceId: contract.canonicalInstanceId as ContractInstanceId,
+      });
+      if (bindingView.type !== "bindingByInstance" || !bindingView.value) {
+        throw new Error("Canonical Contract Binding is unavailable for retraction.");
+      }
+      const binding = bindingView.value;
+      const operationId = `retract-contract:${contract.canonicalInstanceId}:${binding.generation}`;
+      let intent = this.workspaceAuthority.query({
+        type: "invalidationIntentByOperation",
+        operationId,
+      });
+      if (binding.status !== "retracted" &&
+          (intent.type !== "invalidationIntentByOperation" || !intent.value)) {
+        const planned = this.workspaceAuthority.execute({
+          type: "beginBindingInvalidation",
+          operationId,
+          bindingId: binding.id,
+          expectedGeneration: binding.generation,
+          terminalTarget: "retracted",
+          reason: "contract-deleted",
+        });
+        if (planned.type !== "bindingInvalidationPlanned") {
+          throw new Error("Canonical Binding retraction was not planned.");
+        }
+        intent = this.workspaceAuthority.query({
+          type: "invalidationIntentByOperation",
+          operationId,
+        });
+      }
+      if (binding.status !== "retracted") {
+        if (intent.type !== "invalidationIntentByOperation" || !intent.value) {
+          throw new Error("Canonical Binding invalidation intent is unavailable.");
+        }
+        await this.reconcileWorkspaceAuthorityEffects();
+        const committed = this.workspaceAuthority.query({type: "binding", id: binding.id});
+        if (committed.type !== "binding" || committed.value?.status !== "retracted") {
+          throw new Error("Canonical Binding retraction is pending reconciliation.");
+        }
+      }
+    } else {
+      await this.invalidateContractEndpoint(contract);
+    }
     for (let hook of Array.from(this.storage.boundHooks.list())) {
       if (hook.contractId !== contractId) continue;
       if (hook.enabled) {
@@ -3120,6 +3737,13 @@ class OverseerImpl implements AgentHooks {
       contractId: WorkpieceId, caller: GatekeeperCaller,
       methodName?: string): Promise<unknown> {
     let contract = this.requireContract(contractId);
+    if (contract.canonicalInstanceId) {
+      return this.startCanonicalContractSession(
+        contract as ContractRecord & {canonicalInstanceId: string},
+        caller,
+        methodName,
+      );
+    }
     let call: ContractCallContext = {
       callId: crypto.randomUUID(),
       contractId,
@@ -3139,6 +3763,136 @@ class OverseerImpl implements AgentHooks {
           await this.makeContractLifecycleSession(contract, call, source, reachability));
     } finally {
       source[Symbol.dispose]?.();
+    }
+  }
+
+  async startCanonicalContractSession(
+      contract: ContractRecord & {canonicalInstanceId: string},
+      caller: GatekeeperCaller,
+      methodName?: string): Promise<unknown> {
+    return this.withCanonicalContractSession(
+      contract,
+      caller,
+      methodName,
+      (facet, session) => facet.startSession(session),
+    );
+  }
+
+  async withCanonicalContractSession<T>(
+      contract: ContractRecord & {canonicalInstanceId: string},
+      caller: GatekeeperCaller,
+      methodName: string | undefined,
+      invoke: (facet: Fetcher<ContractFacetRpc>, session: ContractLifecycleSession) => Promise<T>,
+  ): Promise<T> {
+    const execution = this.workspaceAuthority.query({
+      type: "bindingExecutionByInstance",
+      contractInstanceId: contract.canonicalInstanceId as ContractInstanceId,
+    });
+    if (execution.type !== "bindingExecutionByInstance" || !execution.value ||
+        !execution.value.binding.endpointSnapshot || !execution.value.instance.providerBacking) {
+      throw new Error("Canonical Contract Binding is stale, invalidating, or unavailable.");
+    }
+    const {binding, instance} = execution.value;
+    if (instance.placementDecision.type !== "installation") {
+      throw new Error("Standing Contract execution requires Installation Decision lineage.");
+    }
+    const installationDecision = this.workspaceAuthority.query({
+      type: "installationDecision",
+      id: instance.placementDecision.decisionId,
+    });
+    if (installationDecision.type !== "installationDecision" || !installationDecision.value) {
+      throw new Error("Standing Contract Installation Decision is unavailable.");
+    }
+    const endpointSnapshot = binding.endpointSnapshot!;
+    const providerBacking = instance.providerBacking!;
+    const provider = this.getCanonicalProviderFacet(instance.id, contract.sourceGatekeeperId);
+    const providerRequest = {
+      expectedProvider: structuredClone(providerBacking.provider),
+      contractInstance: {id: instance.id, generation: instance.generation},
+      expectedCapabilityGeneration: providerBacking.capabilityGeneration,
+    };
+    const observationEnforcer = new NativeRpcStub(new CanonicalProviderObservationEnforcer(
+      this,
+      binding.consumer.consumerId,
+      binding.name,
+    ));
+    const actionStager = new NativeRpcStub(new CanonicalProviderActionStager(
+      this,
+      binding.consumer.consumerId,
+      binding.name,
+      evidence => provider.applyProviderAction({
+        operationId: `provider-action:${evidence.actionId}`,
+        expectedProvider: structuredClone(providerBacking.provider),
+        contractInstance: {id: instance.id, generation: instance.generation},
+        expectedCapabilityGeneration: providerBacking.capabilityGeneration,
+        actionId: evidence.actionId,
+      }),
+    ));
+    const call: ContractCallContext = {
+      callId: crypto.randomUUID(),
+      contractId: contract.id,
+      artifactHash: contract.artifactHash,
+      sourceGatekeeperId: contract.sourceGatekeeperId,
+      caller,
+      startedAt: new Date(),
+      ...(methodName ? {methodName} : {}),
+    };
+    let source: NativeRpcTarget | undefined;
+    const sessionBase: Omit<ContractLifecycleSession, "source"> = {
+      approval: new ContractApprovalTarget(this, call),
+      restorer: new ContractRestorerTarget(this, call),
+      ...(contract.sharedStateKey
+        ? {sharedState: new ContractSharedStateTarget(this, contract.sharedStateKey)}
+        : {}),
+      reachability: endpointSnapshot,
+      invocation: createContractInvocationEvidence({
+        invocationId: call.callId,
+        consumerId: binding.consumer.consumerId,
+        bindingId: binding.id,
+        contractInstanceId: instance.id,
+        artifactHash: instance.artifactHash,
+        runtimeProfileHash: instance.runtimeProfileHash,
+        methodName: methodName ?? "open",
+        startedAt: call.startedAt.getTime(),
+        authoritySnapshotDigest: endpointSnapshot.authoritySnapshotDigest,
+        generations: {
+          consumer: binding.consumer.type === "standing" ? binding.consumer.generation : 0,
+          binding: binding.generation,
+          contractInstance: instance.generation,
+          environment: binding.generation,
+          authority: endpointSnapshot.reachabilityGeneration,
+        },
+      }),
+      contract: {id: instance.id, artifactHash: instance.artifactHash},
+    };
+    try {
+      source = await provider.startProviderAuthoritySession(
+        providerRequest,
+        observationEnforcer,
+        actionStager,
+      );
+      const session: ContractLifecycleSession = {...sessionBase, source};
+      const facet = this.getContractFacet(contract);
+      const cancellation = new NativeRpcStub(new CanonicalProviderCancellation(
+        provider,
+        providerRequest,
+        `${installationDecision.value.operationId}:provider-deactivate:${instance.id}`,
+      ));
+      let acknowledgement;
+      try {
+        acknowledgement = await facet.install(endpointSnapshot, undefined, cancellation);
+      } finally {
+        cancellation[Symbol.dispose]?.();
+      }
+      if (acknowledgement.endpointId !== endpointSnapshot.endpointId ||
+          acknowledgement.reachabilityGeneration !== endpointSnapshot.reachabilityGeneration) {
+        throw new Error("Canonical Contract endpoint acknowledgement changed after publication.");
+      }
+      return await invoke(facet, session);
+    } finally {
+      (source as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
+      observationEnforcer[Symbol.dispose]?.();
+      actionStager[Symbol.dispose]?.();
     }
   }
 
@@ -3162,6 +3916,24 @@ class OverseerImpl implements AgentHooks {
       caller: GatekeeperCaller,
       methodName: string, args: unknown[]): Promise<unknown> {
     let contract = this.requireContract(contractId);
+    if (contract.canonicalInstanceId) {
+      let capability: unknown;
+      try {
+        capability = await this.withCanonicalContractSession(
+          contract as ContractRecord & {canonicalInstanceId: string},
+          caller,
+          methodName,
+          (facet, session) => facet.restoreSession(session, restoration),
+        );
+        const method = Reflect.get(capability as object, methodName);
+        if (typeof method !== "function") {
+          throw new TypeError(`Restored Contract capability has no callable method ${methodName}.`);
+        }
+        return await Reflect.apply(method, capability, args);
+      } finally {
+        (capability as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
+      }
+    }
     let call: ContractCallContext = {
       callId: crypto.randomUUID(),
       contractId,
@@ -4570,9 +5342,9 @@ class OverseerImpl implements AgentHooks {
 
     let readyRecord: ExternalMessageRecord = { ...record, status: "ready", responseText: text };
     this.storage.gadgetResponseDeliveries.put(readyRecord);
-    this.#updateExternalMessageResponseDeliveryAlarm();
+    this.#scheduleNextWorkspaceAlarm();
     this.ctx.waitUntil(this.#deliverExternalMessageResponseToTarget(readyRecord).finally(() => {
-      this.#updateExternalMessageResponseDeliveryAlarm();
+      this.#scheduleNextWorkspaceAlarm();
     }));
   }
 
@@ -4611,7 +5383,7 @@ class OverseerImpl implements AgentHooks {
     for (let result of results) {
       if (result.status === "rejected") throw result.reason;
     }
-    this.#updateExternalMessageResponseDeliveryAlarm();
+    this.#scheduleNextWorkspaceAlarm();
   }
 
   cancelAgent(chatId: number) {
@@ -6623,14 +7395,38 @@ class OverseerImpl implements AgentHooks {
     return result;
   }
 
-  private ensureCanonicalAuthorityActive(): void {
+  private ensureCanonicalAuthorityActive(seed?: Readonly<{
+    consumerIds?: readonly WorkpieceId[];
+    sourceIds?: readonly WorkpieceId[];
+    requirementKeys?: readonly string[];
+  }>): void {
     let status = this.workspaceAuthority.query({type: "status"});
     if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
-    if (status.value.state === "active") return;
+    if (status.value.state === "active") {
+      for (const hostId of seed?.consumerIds ?? []) {
+        this.workspaceAuthority.ensureHostIdentity("consumer", hostId);
+      }
+      for (const hostId of seed?.sourceIds ?? []) {
+        this.workspaceAuthority.ensureHostIdentity("source", hostId);
+      }
+      for (const hostId of seed?.requirementKeys ?? []) {
+        this.workspaceAuthority.ensureHostIdentity("requirement", hostId);
+      }
+      return;
+    }
     if (status.value.state === "uninitialized") {
       this.workspaceAuthority.execute({type: "initialize"});
       status = this.workspaceAuthority.query({type: "status"});
       if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
+    }
+    for (const hostId of seed?.consumerIds ?? []) {
+      this.workspaceAuthority.ensureHostIdentity("consumer", hostId);
+    }
+    for (const hostId of seed?.sourceIds ?? []) {
+      this.workspaceAuthority.ensureHostIdentity("source", hostId);
+    }
+    for (const hostId of seed?.requirementKeys ?? []) {
+      this.workspaceAuthority.ensureHostIdentity("requirement", hostId);
     }
     if (status.value.state === "legacy") {
       this.workspaceAuthority.execute({
@@ -6733,10 +7529,48 @@ class OverseerImpl implements AgentHooks {
     let source = this.storage.gatekeepers.get(input.sourceGatekeeperId);
     if (!source) throw new Error("The selected Source is no longer available.");
     let gadget = this.getGadgetRecord(input.targetGadgetId);
-    if (gadget.bindings[input.bindingName]) {
+    this.ensureCanonicalAuthorityActive({
+      consumerIds: [input.targetGadgetId],
+      sourceIds: [input.sourceGatekeeperId],
+      requirementKeys: [`${input.targetGadgetId}:${input.bindingName}`],
+    });
+    const canonicalConsumerId = this.workspaceAuthority.resolveLegacyIdentity(
+      "consumer",
+      input.targetGadgetId,
+    ) as ConsumerId | undefined;
+    const currentBinding = canonicalConsumerId
+      ? this.workspaceAuthority.query({
+          type: "bindingByConsumerName",
+          consumerId: canonicalConsumerId,
+          name: input.bindingName,
+        })
+      : undefined;
+    if (gadget.bindings[input.bindingName] &&
+        !(currentBinding?.type === "bindingByConsumerName" && currentBinding.value)) {
       throw new Error(`The target Gadget already has a binding named ${input.bindingName}.`);
     }
-    this.ensureCanonicalAuthorityActive();
+    if (currentBinding?.type === "bindingByConsumerName" && currentBinding.value) {
+      const currentInstance = this.workspaceAuthority.query({
+        type: "contractInstance",
+        id: currentBinding.value.contractInstanceId,
+      });
+      if (currentInstance.type !== "contractInstance" || !currentInstance.value) {
+        throw new Error("Current Binding Contract Instance is unavailable.");
+      }
+      const currentApproval = this.workspaceAuthority.query({
+        type: "artifactApproval",
+        id: currentInstance.value.artifactApprovalId,
+      });
+      if (currentApproval.type !== "artifactApproval" ||
+          currentApproval.value?.evidence !== "complete" ||
+          input.baseline.type !== "bundle" ||
+          input.baseline.bundleHash !== currentApproval.value.reviewBundleHash ||
+          input.baseline.artifactApprovalId !== currentApproval.value.id) {
+        throw new Error("Replacement review must cite the current immutable Artifact baseline.");
+      }
+    } else if (input.baseline.type !== "none") {
+      throw new Error("An initial Binding proposal cannot cite a replacement baseline.");
+    }
     const {artifact, bundle} = await this.loadContractProposalEvidence(input);
     let sourceCode = artifact.modules[artifact.mainModule];
     if (typeof sourceCode !== "string") {
@@ -6815,6 +7649,9 @@ class OverseerImpl implements AgentHooks {
       publicTypes: artifact.publicTypes,
       sourceCode,
       bindingName: input.bindingName,
+      expectedBindingGeneration: currentBinding?.type === "bindingByConsumerName"
+        ? currentBinding.value?.generation ?? 0
+        : 0,
       targetGadgetId: input.targetGadgetId,
       targetGadgetTitle: gadget.title,
       dependencySummary: dependencies,
@@ -7482,6 +8319,9 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   // - If the DO dies *while* the alarm is running, the system will retry the alarm, thus resuming
   //   the agents yet again.
   async alarm() {
+    for (let pass = 0; pass < 4; pass++) {
+      await this.impl.reconcileWorkspaceAuthorityEffects();
+    }
     await this.impl.waitForAllAgentsToComplete();
     await this.impl.deliverReadyExternalMessageResponses();
   }
@@ -8094,20 +8934,6 @@ export class BindingLoopback extends WorkerEntrypoint<Cloudflare.Env, BindingLoo
     let stub: DurableObjectStub<OverseerDurableObject> =
         ns.get(ns.idFromString(ctx.props.overseerId));
 
-    if (ctx.props.target.type === "contract") {
-      return new Proxy(this, {
-        get(target, prop) {
-          if (prop === "then") return undefined;
-          if (typeof prop !== "string") return Reflect.get(target, prop, target);
-          return (...args: unknown[]) => stub.invokeContractMethod(
-              ctx.props.target.id, ctx.props.caller, prop, args);
-        },
-        getPrototypeOf() {
-          return WorkerEntrypoint.prototype;
-        },
-      });
-    }
-
     // @ts-ignore: LSP-only RPC types bug, "type instantiation is excessively deep"
     let session = stub.startBindingSession(ctx.props.target, ctx.props.caller);
 
@@ -8534,10 +9360,185 @@ class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
     );
   }
 
+  async #installStandingBinding(
+    session: AuthoritySessionBinding,
+    command: InstallStandingBindingCommand,
+    requestDigest: string,
+  ): Promise<Extract<AuthorityCommandResult, {type: "standingBindingInstalled"}>> {
+    validateBindingName(command.bindingName);
+    const proposal = this.impl.workspaceAuthority.query({
+      type: "artifactProposal",
+      id: command.proposalId as ArtifactProposalId,
+    });
+    const approval = this.impl.workspaceAuthority.query({
+      type: "artifactApproval",
+      id: command.artifactApprovalId as ArtifactApprovalId,
+    });
+    if (proposal.type !== "artifactProposal" || !proposal.value ||
+        approval.type !== "artifactApproval" || approval.value?.evidence !== "complete" ||
+        approval.value.lifecycle !== "active" || approval.value.decision !== "approved" ||
+        approval.value.proposalId !== proposal.value.id ||
+        approval.value.approvalEpoch !== command.artifactApprovalEpoch ||
+        approval.value.policyHash !== command.evaluatorPolicyHash) {
+      throw new Error("Standing installation requires the exact active Artifact Approval.");
+    }
+    this.impl.getGadgetRecord(command.targetGadgetId);
+    const sourceRecord = this.impl.storage.gatekeepers.get(command.sourceGatekeeperId);
+    if (!sourceRecord) throw new Error("The selected canonical Source is unavailable.");
+    const consumerId = this.impl.workspaceAuthority.resolveLegacyIdentity(
+      "consumer",
+      command.targetGadgetId,
+    ) as ConsumerId | undefined;
+    const sourceId = this.impl.workspaceAuthority.resolveLegacyIdentity(
+      "source",
+      command.sourceGatekeeperId,
+    ) as SourceId | undefined;
+    const requirementId = this.impl.workspaceAuthority.resolveLegacyIdentity(
+      "requirement",
+      `${command.targetGadgetId}:${command.bindingName}`,
+    ) as RequirementId | undefined;
+    if (!consumerId || !sourceId || !requirementId) {
+      throw new Error("Standing Consumer, Source, or Requirement identity is unavailable.");
+    }
+    const priorDecision = this.impl.workspaceAuthority.query({
+      type: "installationDecisionByOperation",
+      operationId: command.operationId,
+    });
+    const current = this.impl.workspaceAuthority.query({
+      type: "bindingByConsumerName",
+      consumerId,
+      name: command.bindingName,
+    });
+    if (current.type !== "bindingByConsumerName" ||
+        (priorDecision.type === "installationDecisionByOperation" && !priorDecision.value) &&
+        (current.value?.generation ?? 0) !== command.expectedBindingGeneration) {
+      throw new Error("Standing Binding generation changed before review completed.");
+    }
+    const consumer = {type: <const>"standing", consumerId, generation: 1};
+    const requirement = {
+      type: <const>"environment",
+      bindingSetId: `gadget:${command.targetGadgetId}:bindings`,
+      bindingSetVersion: 1,
+      requirementId,
+      requirementVersion: 1,
+    };
+    const description = await this.impl.describeCanonicalProviderSource(
+      command.operationId,
+      command.sourceGatekeeperId,
+    );
+    this.#requireLiveSession();
+    if (description.health !== "healthy") {
+      throw new Error("The selected Source is not healthy enough for a new standing installation.");
+    }
+    const preciseProviderRevocation =
+      description.localEnforcementRevocationGranularity === "contract-instance-backing";
+    if (!preciseProviderRevocation || description.providerNativeScope.egress.length > 0 ||
+        description.providerNativeScope.recipients.length > 0) {
+      throw new Error(
+        "Authority Debt exceeds the standing R2 production policy for this Source.",
+      );
+    }
+    const upstreamAuthority = {
+      sourceId,
+      sourceGeneration: description.identity.sourceGeneration,
+      origin: {
+        type: <const>"workspaceAccount",
+        id: description.identity.accountId,
+        generation: description.identity.sourceGeneration,
+      },
+    };
+    const sharedState = command.sharedStateKey
+      ? {type: <const>"shared", key: command.sharedStateKey}
+      : {type: <const>"isolated"};
+    const runtimeWorkpieceId = priorDecision.type === "installationDecisionByOperation" &&
+        priorDecision.value?.runtimeWorkpieceId !== undefined
+      ? priorDecision.value.runtimeWorkpieceId
+      : this.impl.allocateWorkpieceId();
+    const completedOperation = this.impl.workspaceAuthority.getOperation(session, command.operationId);
+    if (completedOperation?.state === "completed" &&
+        completedOperation.result?.type === "standingBindingInstalled") {
+      return completedOperation.result;
+    }
+    const artifact = await new R2ContractArtifactStore(this.impl.env.BLUEPRINT_CONTENT)
+      .get(proposal.value.artifactHash);
+    this.#requireLiveSession();
+    if (!artifact || artifact.runtimeProfileHash !== proposal.value.runtimeProfileHash) {
+      throw new Error("Approved Contract Artifact is unavailable or mismatched.");
+    }
+    const accepted = this.impl.workspaceAuthority.acceptStandingInstallation({
+      session,
+      command,
+      requestDigest,
+      decision: {
+        proposalDigest: requestDigest,
+        decision: "approved",
+        decidedBy: session.principalId,
+        permissionGeneration: session.permissionGeneration,
+        consumer,
+        requirement,
+        intendedBindingName: command.bindingName,
+        expectedBindingGeneration: command.expectedBindingGeneration,
+        artifactApprovalId: approval.value.id,
+        upstreamAuthority,
+        authorityMode: "shared",
+        sharedState,
+        evaluatorPolicyHash: command.evaluatorPolicyHash,
+        runtimeWorkpieceId,
+      },
+      instance: {
+        artifactApprovalId: approval.value.id,
+        artifactHash: artifact.hash,
+        runtimeProfileHash: artifact.runtimeProfileHash,
+        upstreamAuthority,
+        intendedConsumer: consumer,
+        intendedRequirement: requirement,
+        sharedState,
+        runtimeWorkpieceId,
+        sourceGatekeeperId: command.sourceGatekeeperId,
+        ...(current.value ? {predecessorId: current.value.contractInstanceId} : {}),
+      },
+      providerDescription: description,
+    });
+    const prepared = {id: accepted.contractInstanceId};
+    const contract: ContractRecord = {
+      id: runtimeWorkpieceId,
+      canonicalInstanceId: prepared.id,
+      artifactHash: artifact.hash,
+      runtimeProfileHash: artifact.runtimeProfileHash,
+      sourceGatekeeperId: command.sourceGatekeeperId,
+      title: command.title.trim() || "Contract",
+      publicTypes: artifact.publicTypes,
+      createdAt: new Date(),
+      approvedBy: session.principalId,
+      installationRequestId: command.requestId,
+      ...(command.sharedStateKey ? {sharedStateKey: command.sharedStateKey} : {}),
+    };
+    const existingContract = this.impl.storage.contracts.get(runtimeWorkpieceId);
+    if (existingContract && existingContract.canonicalInstanceId !== prepared.id) {
+      throw new Error("Contract runtime locator was reused.");
+    }
+    this.impl.storage.contracts.put(contract);
+    for (let pass = 0; pass < 4; pass++) {
+      await this.impl.reconcileWorkspaceAuthorityEffects();
+    }
+    const reconciledOperation = this.impl.workspaceAuthority.getOperation(
+      session,
+      command.operationId,
+    );
+    if (reconciledOperation?.state === "completed" &&
+        reconciledOperation.result?.type === "standingBindingInstalled") {
+      return reconciledOperation.result;
+    }
+    throw new Error("Standing installation was accepted and is pending reconciliation.");
+  }
+
   async execute(command: AuthorityCommand): Promise<AuthorityCommandResult> {
     const session = this.#requireLiveSession();
     const {requestDigest: _requestDigest, ...payload} = command;
     const requestDigest = await hashAuthorityCommand(payload);
+    if (command.type === "installStandingBinding") {
+      return this.#installStandingBinding(session, command, requestDigest);
+    }
     const proposal = this.impl.workspaceAuthority.query({
       type: "artifactProposal",
       id: command.evidence.proposalId as ArtifactProposalId,
@@ -9000,6 +10001,8 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     let creationSpec: GatekeeperCreationSpec = {
       type: "gatekeeper",
       vendorId,
+      accountId,
+      accountOwnerId: this.clientUser.id.toString(),
       resourceUrl,
       typeUrlPattern,
     };

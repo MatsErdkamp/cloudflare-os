@@ -13,6 +13,101 @@ import {makeMockStorage} from "./mock-storage.js";
 
 type TestGadget = LegacyGadgetAuthorityRecord & {title: string};
 
+function publishAcknowledgedBinding(authority: WorkspaceAuthority, input: any) {
+  const planned = authority.execute({type: "planBindingPublication", ...input});
+  if (planned.type !== "bindingPublicationPlanned") throw new Error("publication not planned");
+  const instance = authority.query({type: "contractInstance", id: input.contractInstanceId});
+  if (instance.type !== "contractInstance" || !instance.value) throw new Error("instance missing");
+  const endpointId = `contract-instance:${instance.value.id}`;
+  const snapshot = {
+    endpointId,
+    instanceId: instance.value.id,
+    instanceGeneration: instance.value.generation,
+    artifactHash: instance.value.artifactHash,
+    runtimeProfileHash: instance.value.runtimeProfileHash,
+    reachabilityId: `binding:${planned.bindingId}`,
+    reachabilityGeneration: planned.generation,
+    authoritySnapshotDigest: `sha256:${"a".repeat(64)}`,
+    compositionLineage: [endpointId],
+    chainDepth: 0,
+    maxChainDepth: 8,
+  };
+  const acknowledged = authority.execute({
+    type: "acknowledgeBindingEndpoint",
+    operationId: input.operationId,
+    planId: planned.planId,
+    snapshot,
+    acknowledgement: {endpointId, reachabilityGeneration: planned.generation},
+  });
+  if (acknowledged.type !== "bindingEndpointAcknowledged") {
+    throw new Error("endpoint not acknowledged");
+  }
+  expect(authority.query({type: "binding", id: planned.bindingId}))
+    .toEqual({type: "binding", value: undefined});
+  if (acknowledged.invalidationIntentId) {
+    const intent = authority.query({type: "invalidationIntentByPlan", planId: planned.planId});
+    if (intent.type !== "invalidationIntentByPlan" || !intent.value) {
+      throw new Error("invalidation intent missing");
+    }
+    expect(authority.query({
+      type: "bindingExecution",
+      consumerId: input.consumer.consumerId,
+      name: input.name,
+    })).toEqual({type: "bindingExecution", value: undefined});
+    expect(authority.query({
+      type: "consumerReadiness",
+      consumerId: input.consumer.consumerId,
+    })).toEqual({
+      type: "consumerReadiness",
+      value: {ready: false, generation: intent.value.bindingGeneration},
+    });
+    authority.execute({
+      type: "acknowledgeBindingInvalidation",
+      operationId: input.operationId,
+      planId: planned.planId,
+      acknowledgement: {
+        endpointId: intent.value.endpointSnapshot.endpointId,
+        reachabilityGeneration: intent.value.bindingGeneration,
+        invalidated: true,
+        cancelledInvocations: 0,
+        cleanupFailures: 0,
+      },
+    });
+  }
+  return authority.execute({
+    type: "commitBindingPublication",
+    operationId: input.operationId,
+    planId: planned.planId,
+  });
+}
+
+function commitTerminalInvalidation(authority: WorkspaceAuthority, input: any) {
+  const planned = authority.execute({type: "beginBindingInvalidation", ...input});
+  if (planned.type !== "bindingInvalidationPlanned") throw new Error("invalidation not planned");
+  const binding = authority.query({type: "binding", id: input.bindingId});
+  if (binding.type !== "binding" || !binding.value?.endpointSnapshot) {
+    throw new Error("binding endpoint missing");
+  }
+  expect(binding.value.status).not.toBe(input.terminalTarget);
+  authority.execute({
+    type: "acknowledgeTerminalBindingInvalidation",
+    operationId: input.operationId,
+    intentId: planned.intentId,
+    acknowledgement: {
+      endpointId: binding.value.endpointSnapshot.endpointId,
+      reachabilityGeneration: binding.value.endpointSnapshot.reachabilityGeneration,
+      invalidated: true,
+      cancelledInvocations: 0,
+      cleanupFailures: 0,
+    },
+  });
+  return authority.execute({
+    type: "commitTerminalBindingInvalidation",
+    operationId: input.operationId,
+    intentId: planned.intentId,
+  });
+}
+
 function recordArtifactDecision(
   authority: WorkspaceAuthority,
   operationId: string,
@@ -47,7 +142,12 @@ function recordArtifactDecision(
 function makeModule({
   legacyPlacement = false,
   legacyTombstone = false,
-}: {legacyPlacement?: boolean; legacyTombstone?: boolean} = {}) {
+  durableStorage = makeMockStorage(),
+}: {
+  legacyPlacement?: boolean;
+  legacyTombstone?: boolean;
+  durableStorage?: ReturnType<typeof makeMockStorage>;
+} = {}) {
   const gadgets = new Map<number, TestGadget>([
     [1, {
       id: 1,
@@ -73,7 +173,7 @@ function makeModule({
   }]] : []);
   const gatekeepers = new Set([20]);
   const bumped: number[][] = [];
-  const module = createWorkspaceAuthorityModule(makeMockStorage(), {
+  const adapter = {
     getGadget(id) {
       return gadgets.get(id);
     },
@@ -120,8 +220,9 @@ function makeModule({
     bumpConsumers(ids) {
       bumped.push([...ids]);
     },
-  });
-  return {module, gadgets, bumped};
+  };
+  const module = createWorkspaceAuthorityModule(durableStorage, adapter);
+  return {module, gadgets, bumped, durableStorage, adapter};
 }
 
 describe("Workspace Authority module", () => {
@@ -447,11 +548,44 @@ describe("Workspace Authority module", () => {
         intendedConsumer: consumer,
         intendedRequirement: requirement,
         sharedState: {type: "isolated"},
+        runtimeWorkpieceId: 10,
+        sourceGatekeeperId: 20,
       },
     });
     if (prepared.type !== "contractInstancePrepared") throw new Error("instance not prepared");
-    const published = module.authority.execute({
-      type: "publishBinding",
+    const providerIdentity = {
+      providerId: "cloudflare-r2",
+      accountId: "account-1",
+      sourceId: "r2-root",
+      sourceGeneration: 1,
+    };
+    module.authority.execute({
+      type: "recordProviderBacking",
+      operationId: "provider-prepare",
+      contractInstanceId: prepared.id,
+      expectedInstanceGeneration: 1,
+      description: {
+        identity: providerIdentity,
+        health: "healthy",
+        providerNativeScope: {
+          resources: ["deployment-r2-bucket"],
+          operations: ["head", "get", "list", "put", "delete"],
+          recipients: [],
+          egress: [],
+        },
+        providerNativeRevocationGranularity: "deployment-resource",
+        localEnforcementRevocationGranularity: "contract-instance-backing",
+      },
+      result: {
+        provider: providerIdentity,
+        contractInstance: {id: prepared.id, generation: 1},
+        backingReference: "opaque-backing",
+        capabilityGeneration: 1,
+        state: "prepared",
+        cleanup: "not-required",
+      },
+    });
+    const published = publishAcknowledgedBinding(module.authority, {
       operationId: "operation-publish",
       contractInstanceId: prepared.id,
       consumer,
@@ -499,8 +633,7 @@ describe("Workspace Authority module", () => {
       }),
     });
 
-    expect(() => module.authority.execute({
-      type: "publishBinding",
+    expect(() => publishAcknowledgedBinding(module.authority, {
       operationId: "stale-publish",
       contractInstanceId: prepared.id,
       consumer,
@@ -620,8 +753,7 @@ describe("Workspace Authority module", () => {
     if (replacementInstance.type !== "contractInstancePrepared") {
       throw new Error("replacement instance not prepared");
     }
-    const replacement = module.authority.execute({
-      type: "publishBinding",
+    const replacement = publishAcknowledgedBinding(module.authority, {
       operationId: "replacement-publish",
       contractInstanceId: replacementInstance.id,
       consumer,
@@ -633,6 +765,10 @@ describe("Workspace Authority module", () => {
     });
     if (replacement.type !== "bindingPublished") throw new Error("replacement not published");
     expect(replacement).toMatchObject({generation: 2});
+    expect(module.authority.query({
+      type: "consumerReadiness",
+      consumerId: consumer.consumerId,
+    })).toEqual({type: "consumerReadiness", value: {ready: true, generation: 2}});
     expect(module.authority.query({type: "binding", id: published.bindingId}))
       .toMatchObject({type: "binding", value: {status: "retracted", generation: 2}});
     expect(module.authority.query({type: "contractInstance", id: prepared.id}))
@@ -650,12 +786,37 @@ describe("Workspace Authority module", () => {
         type: "binding",
         value: {status: "active", generation: 2, predecessorId: published.bindingId},
       });
+    expect(module.authority.query({type: "status"})).toMatchObject({
+      value: {pendingEffects: 1},
+    });
+    const [cleanup] = module.authority.claimDueEffects(1, 16, () => "claim-1");
+    expect(cleanup).toMatchObject({
+      kind: "cleanupProviderBacking",
+      targetId: prepared.id,
+      expectedCapabilityGeneration: 1,
+      deactivationOperationId: `operation-installation:provider-deactivate:${prepared.id}`,
+      state: "claimed",
+      cleanupResponsibility: true,
+    });
+    module.authority.retryEffect(cleanup!.id, "claim-1", 1);
+    expect(module.authority.claimDueEffects(1, 16, () => "too-early")).toEqual([]);
+    const [retriedCleanup] = module.authority.claimDueEffects(
+      Number.MAX_SAFE_INTEGER,
+      16,
+      () => "claim-2",
+    );
+    module.authority.completeEffect(retriedCleanup!.id, "claim-2");
+    expect(module.authority.query({
+      type: "authorityTombstoneBySubject",
+      subjectType: "contractInstance",
+      subjectId: prepared.id,
+    })).toMatchObject({value: {cleanup: "complete"}});
 
-    const suspended = module.authority.execute({
-      type: "suspendBinding",
+    const suspended = commitTerminalInvalidation(module.authority, {
       operationId: "suspend-binding",
       bindingId: replacement.bindingId,
       expectedGeneration: 2,
+      terminalTarget: "suspended",
       reason: "upstream-health-unknown",
     });
     expect(suspended).toMatchObject({type: "bindingSuspended", generation: 3});
@@ -673,11 +834,11 @@ describe("Workspace Authority module", () => {
         expiresAt: 3,
       },
     })).toThrow("stale or inactive Binding");
-    const retracted = module.authority.execute({
-      type: "retractBinding",
+    const retracted = commitTerminalInvalidation(module.authority, {
       operationId: "retract-binding",
       bindingId: replacement.bindingId,
       expectedGeneration: 3,
+      terminalTarget: "retracted",
       reason: "explicit-retraction",
     });
     expect(retracted).toMatchObject({type: "bindingRetracted", generation: 4});
@@ -873,8 +1034,7 @@ describe("Workspace Authority module", () => {
     const publishClock = vi.spyOn(Date, "now")
       .mockReturnValue(dispatchRecord.absoluteExpiry + 1);
     try {
-      expect(() => module.authority.execute({
-        type: "publishBinding",
+      expect(() => publishAcknowledgedBinding(module.authority, {
         operationId: "expired-before-publish",
         contractInstanceId: prepared.id,
         consumer,
@@ -887,8 +1047,7 @@ describe("Workspace Authority module", () => {
     } finally {
       publishClock.mockRestore();
     }
-    const published = module.authority.execute({
-      type: "publishBinding",
+    const published = publishAcknowledgedBinding(module.authority, {
       operationId: "task-binding",
       contractInstanceId: prepared.id,
       consumer,

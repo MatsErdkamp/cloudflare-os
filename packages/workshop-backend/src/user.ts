@@ -1,6 +1,7 @@
 import { RpcStub } from "capnweb";
 import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
+import type {GatekeeperAuthorityProvider} from "@gadgets/workshop-shared/gatekeeper-authority";
 import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
 import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
@@ -51,6 +52,7 @@ export type ProvidedAccountInfo = {
 // usable directly, the way the runtime stub actually behaves.
 type AccountCreatorStub = Required<Pick<GatekeeperVendor, "createAccount">>;
 type SingletonAccountStub = Required<Pick<GatekeeperUser, "getSingletonGatekeeperClass" | "startAppUi">>;
+type AuthorityAccountStub = Required<Pick<GatekeeperUser, "getAuthorityProviderClass">>;
 
 function areCredentialsValid(record: ConnectedAccountRecord): boolean {
   if (record.credentialsExpired) return false;
@@ -1316,6 +1318,17 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     // SingletonAccountStub view (see its definition for why the cast is needed).
     if (!record?.description.singleton) return null;
     return (record.account as unknown as SingletonAccountStub).getSingletonGatekeeperClass();
+  }
+
+  async getAuthorityProviderClass(accountId: number, resourceUrl: string): Promise<
+    DurableObjectClass<GatekeeperAuthorityProvider<any>> | null
+  > {
+    // Reuse the resource-capability chokepoint so deployment disables are enforced before the
+    // account-owned provider capability can be minted as well.
+    await this.getGatekeeperClassFor(accountId, resourceUrl);
+    const record = this.storage.connectedAccounts.get(accountId);
+    if (!record) return null;
+    return (record.account as unknown as AuthorityAccountStub).getAuthorityProviderClass();
   }
 
   // Open the full-page management UI for an account that declares one. `context.isAdmin` is supplied

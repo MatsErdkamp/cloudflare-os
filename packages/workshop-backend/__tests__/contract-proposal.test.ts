@@ -1,4 +1,4 @@
-import {describe, expect, it} from "vitest";
+import {describe, expect, it, vi} from "vitest";
 import {env, RpcStub, RpcTarget} from "cloudflare:workers";
 import {runInDurableObject} from "cloudflare:test";
 import {currentContractArtifact} from "./contract-artifact-fixture";
@@ -101,7 +101,7 @@ function prepareProposalFixture(impl: any): void {
 async function proposalInput(sourceCode: string, publicTypes = `
   import {RpcTarget} from "cloudflare:workers";
   export interface ContractBinding extends RpcTarget { ping(): string; }
-`) {
+`, baseline?: Readonly<{evidence: any; artifactApprovalId: string}>) {
   const artifact = await currentContractArtifact({
     sourceCode,
     publicTypes,
@@ -179,7 +179,17 @@ async function proposalInput(sourceCode: string, publicTypes = `
       origin: {kind: "workspaceChat", reference: "chat:3"},
     },
     policySnapshot: {},
-    baseline: {kind: "none"},
+    baseline: baseline
+      ? {
+          kind: "bundle",
+          bundleHash: baseline.evidence.bundleHash,
+          artifactApprovalReference: baseline.artifactApprovalId,
+        }
+      : {kind: "none"},
+    ...(baseline ? {
+      baselineBundle: baseline.evidence.bundle,
+      baselineBlobs: baseline.evidence.blobs,
+    } : {}),
   }, runnerFactory);
   await Promise.all([
     new R2ContractArtifactStore(env.BLUEPRINT_CONTENT).put(artifact),
@@ -195,7 +205,14 @@ async function proposalInput(sourceCode: string, publicTypes = `
     reviewComparisonHash: evidence.comparisonHash,
     policyHash: evidence.bundle.build.policySnapshot.hash,
     generatorIdentityHash: evidence.comparison.generator.identity,
-    baseline: {type: "none" as const},
+    baseline: baseline
+      ? {
+          type: "bundle" as const,
+          bundleHash: baseline.evidence.bundleHash,
+          artifactApprovalId: baseline.artifactApprovalId,
+        }
+      : {type: "none" as const},
+    testEvidence: evidence,
   };
 }
 
@@ -457,6 +474,292 @@ describe("Contract proposal compilation boundary", () => {
           proposalId: builderProposal.proposalId,
         })).toEqual({type: "artifactApprovalByProposal", value: undefined});
         client[Symbol.dispose]?.();
+      },
+    );
+  });
+
+  it("publishes a separately decided standing Binding only after provider and endpoint acknowledgement", async () => {
+    await runInDurableObject(
+      env.TEST_OVERSEER.getByName("contract-standing-installation"),
+      async (instance: OverseerDurableObject) => {
+        const impl = (instance as any).impl;
+        prepareProposalFixture(impl);
+        const input = await proposalInput(COMPILER_STYLE_MODULE);
+        const proposal = await impl.proposeContract(3, {...input, bindingName: "R2_STORAGE"});
+        const [body] = impl.consumeCapturedConnectionRequests(3);
+        const message: any = {
+          chatId: 3,
+          sequence: impl.nextChatSequence(3),
+          timestamp: impl.getChatTimestamp(),
+          author: {type: "agent", id: "model", name: "Agent"},
+          ...body,
+        };
+        impl.storage.chats.put(message);
+        impl.ownerId = "user-id";
+        await decideArtifact(instance, message, "approved");
+        const approval = impl.workspaceAuthority.query({
+          type: "artifactApprovalByProposal",
+          proposalId: proposal.proposalId,
+        }).value;
+        const providerIdentity = {
+          providerId: "cloudflare-r2",
+          accountId: "account-1",
+          sourceId: "private-root",
+          sourceGeneration: 1,
+        };
+        let prepareCalls = 0;
+        let activateFailuresRemaining = 1;
+        const provider: any = {
+          prepareProviderAuthority: async (request: any) => {
+            prepareCalls++;
+            return {
+              provider: providerIdentity,
+              contractInstance: request.contractInstance,
+              backingReference: "opaque-backing",
+              capabilityGeneration: 1,
+              state: "prepared",
+              cleanup: "not-required",
+            };
+          },
+          activateProviderAuthority: async (request: any) => {
+            if (activateFailuresRemaining-- > 0) throw new Error("provider temporarily unavailable");
+            return {
+              provider: providerIdentity,
+              contractInstance: request.contractInstance,
+              backingReference: "opaque-backing",
+              capabilityGeneration: 1,
+              state: "active",
+              cleanup: "not-required",
+            };
+          },
+          deactivateProviderAuthority: async (request: any) => ({
+            provider: providerIdentity,
+            contractInstance: request.contractInstance,
+            backingReference: "opaque-backing",
+            capabilityGeneration: 2,
+            state: "inactive",
+            cleanup: "not-required",
+          }),
+          destroyProviderAuthority: async (request: any) => ({
+            provider: providerIdentity,
+            contractInstance: request.contractInstance,
+            backingReference: "opaque-backing",
+            capabilityGeneration: 3,
+            state: "destroyed",
+            cleanup: "complete",
+          }),
+        };
+        impl.describeCanonicalProviderSource = async () => ({
+          identity: providerIdentity,
+          health: "healthy",
+          providerNativeScope: {
+            resources: ["deployment-r2-bucket"],
+            operations: ["head", "get", "list", "put", "delete"],
+            recipients: [],
+            egress: [],
+          },
+          providerNativeRevocationGranularity: "deployment-resource",
+          localEnforcementRevocationGranularity: "contract-instance-backing",
+        });
+        impl.getCanonicalProviderFacet = () => provider;
+        const endpoints = new Map<number, {snapshot: any; cancellation: any}>();
+        impl.getContractFacet = (contract: any) => ({
+          install: async (snapshot: any, _observer: any, cancellation: any) => {
+            endpoints.set(contract.id, {snapshot, cancellation: cancellation?.dup?.() ?? cancellation});
+            return {
+              endpointId: snapshot.endpointId,
+              reachabilityGeneration: snapshot.reachabilityGeneration,
+            };
+          },
+          invalidate: async (generation: number) => {
+            const endpoint = endpoints.get(contract.id)!;
+            expect(generation).toBe(endpoint.snapshot.reachabilityGeneration);
+            await endpoint.cancellation?.cancel(endpoint.snapshot);
+            return {
+              endpointId: endpoint.snapshot.endpointId,
+              reachabilityGeneration: endpoint.snapshot.reachabilityGeneration,
+              invalidated: true,
+              cancelledInvocations: 0,
+              cleanupFailures: 0,
+            };
+          },
+        });
+        let authority = await instance.openAuthority(
+          "user-id",
+          new RpcStub<() => void>(() => {}),
+        );
+        const snapshot = await authority.getSessionSnapshot();
+        const operation = await authority.beginOperation({
+          idempotencyKey: "install-standing-r2",
+          requestDigest: await hashAuthorityRequest({proposalId: proposal.proposalId}),
+        });
+        const payload = {
+          type: "installStandingBinding" as const,
+          operationId: operation.id,
+          stepKey: "install-standing-binding",
+          expectedAuthorityEpoch: snapshot.authorityEpoch,
+          expectedPermissionGeneration: snapshot.permissionGeneration,
+          requestId: message.requestId,
+          proposalId: proposal.proposalId,
+          artifactApprovalId: approval.id,
+          artifactApprovalEpoch: approval.approvalEpoch,
+          targetGadgetId: 9,
+          sourceGatekeeperId: 17,
+          bindingName: "R2_STORAGE",
+          expectedBindingGeneration: 0,
+          title: "Reviewed R2 Contract",
+          evaluatorPolicyHash: message.policyHash,
+        };
+        const clock = Date.now();
+        const now = vi.spyOn(Date, "now").mockReturnValue(clock);
+        await expect(authority.execute({
+          ...payload,
+          requestDigest: await hashAuthorityCommand(payload),
+        })).rejects.toThrow("pending reconciliation");
+        authority[Symbol.dispose]?.();
+        now.mockReturnValue(clock + 60_000);
+        await impl.reconcileWorkspaceAuthorityEffects();
+        now.mockRestore();
+        authority = await instance.openAuthority("user-id", new RpcStub<() => void>(() => {}));
+        const recovered = await authority.getOperation(operation.id);
+        if (recovered.result?.type !== "standingBindingInstalled") {
+          throw new Error("standing installation did not recover");
+        }
+        const result = recovered.result;
+        expect(result).toMatchObject({
+          type: "standingBindingInstalled",
+          bindingGeneration: 1,
+        });
+        if (result.type !== "standingBindingInstalled") throw new Error("installation failed");
+        expect(impl.workspaceAuthority.query({
+          type: "authorityDebtByBinding",
+          bindingId: result.bindingId,
+        })).toMatchObject({
+          type: "authorityDebtByBinding",
+          value: {
+            providerNativeScope: {resources: ["deployment-r2-bucket"]},
+            effectiveScope: {resources: [`contract-instance:${result.contractInstanceId}`]},
+            enforcementLayer: "gatekeeper",
+            risk: "medium",
+            productionEligibility: "eligible",
+          },
+        });
+        await expect(authority.execute({
+          ...payload,
+          requestDigest: await hashAuthorityCommand(payload),
+        })).resolves.toEqual(result);
+        expect(prepareCalls).toBe(1);
+        expect(impl.visibleBindings(impl.storage.gadgets.get(9))).toEqual([
+          ["R2_STORAGE", expect.objectContaining({target: expect.any(Number)})],
+        ]);
+        await expect(authority.getOperation(operation.id)).resolves.toMatchObject({
+          state: "completed",
+          result: {type: "standingBindingInstalled", bindingGeneration: 1},
+        });
+
+        const replacementInput = await proposalInput(
+          `${COMPILER_STYLE_MODULE}\n// reviewed replacement`,
+          undefined,
+          {evidence: input.testEvidence, artifactApprovalId: approval.id},
+        );
+        const replacementProposal = await impl.proposeContract(5, {
+          ...replacementInput,
+          bindingName: "R2_STORAGE",
+        });
+        const [replacementBody] = impl.consumeCapturedConnectionRequests(5);
+        const replacementMessage: any = {
+          chatId: 5,
+          sequence: impl.nextChatSequence(5),
+          timestamp: impl.getChatTimestamp(),
+          author: {type: "agent", id: "model", name: "Agent"},
+          ...replacementBody,
+        };
+        impl.storage.chats.put(replacementMessage);
+        await decideArtifact(instance, replacementMessage, "approved");
+        const replacementApproval = impl.workspaceAuthority.query({
+          type: "artifactApprovalByProposal",
+          proposalId: replacementProposal.proposalId,
+        }).value;
+        const replacementOperation = await authority.beginOperation({
+          idempotencyKey: "replace-standing-r2",
+          requestDigest: await hashAuthorityRequest({proposalId: replacementProposal.proposalId}),
+        });
+        const replacementPayload = {
+          ...payload,
+          operationId: replacementOperation.id,
+          requestId: replacementMessage.requestId,
+          proposalId: replacementProposal.proposalId,
+          artifactApprovalId: replacementApproval.id,
+          artifactApprovalEpoch: replacementApproval.approvalEpoch,
+          expectedBindingGeneration: 1,
+        };
+        const replacementResult = await authority.execute({
+          ...replacementPayload,
+          requestDigest: await hashAuthorityCommand(replacementPayload),
+        });
+        expect(replacementResult).toMatchObject({
+          type: "standingBindingInstalled",
+          bindingGeneration: 2,
+        });
+        expect(impl.workspaceAuthority.query({
+          type: "binding",
+          id: result.bindingId,
+        })).toMatchObject({value: {status: "retracted", generation: 2}});
+        expect(impl.workspaceAuthority.query({
+          type: "bindingExecutionByInstance",
+          contractInstanceId: result.contractInstanceId,
+        })).toEqual({type: "bindingExecutionByInstance", value: undefined});
+
+        const blockedProposal = await impl.proposeContract(4, {
+          ...await proposalInput(COMPILER_STYLE_MODULE),
+          bindingName: "R2_BLOCKED",
+        });
+        const [blockedBody] = impl.consumeCapturedConnectionRequests(4);
+        const blockedMessage: any = {
+          chatId: 4,
+          sequence: impl.nextChatSequence(4),
+          timestamp: impl.getChatTimestamp(),
+          author: {type: "agent", id: "model", name: "Agent"},
+          ...blockedBody,
+        };
+        impl.storage.chats.put(blockedMessage);
+        await decideArtifact(instance, blockedMessage, "approved");
+        const blockedApproval = impl.workspaceAuthority.query({
+          type: "artifactApprovalByProposal",
+          proposalId: blockedProposal.proposalId,
+        }).value;
+        impl.describeCanonicalProviderSource = async () => ({
+          identity: providerIdentity,
+          health: "healthy",
+          providerNativeScope: {
+            resources: ["deployment-r2-bucket"],
+            operations: ["head", "get", "list", "put", "delete"],
+            recipients: [],
+            egress: ["unmediated-network"],
+          },
+          providerNativeRevocationGranularity: "deployment-resource",
+          localEnforcementRevocationGranularity: "contract-instance-backing",
+        });
+        const blockedOperation = await authority.beginOperation({
+          idempotencyKey: "install-standing-r2-blocked",
+          requestDigest: await hashAuthorityRequest({proposalId: blockedProposal.proposalId}),
+        });
+        const prepareCallsBeforeBlockedInstall = prepareCalls;
+        const blockedPayload = {
+          ...payload,
+          operationId: blockedOperation.id,
+          requestId: blockedMessage.requestId,
+          proposalId: blockedProposal.proposalId,
+          artifactApprovalId: blockedApproval.id,
+          artifactApprovalEpoch: blockedApproval.approvalEpoch,
+          bindingName: "R2_BLOCKED",
+        };
+        await expect(authority.execute({
+          ...blockedPayload,
+          requestDigest: await hashAuthorityCommand(blockedPayload),
+        })).rejects.toThrow("Authority Debt exceeds");
+        expect(prepareCalls).toBe(prepareCallsBeforeBlockedInstall);
+        authority[Symbol.dispose]?.();
       },
     );
   });

@@ -79,8 +79,36 @@ export interface DecideArtifactProposalCommand extends AuthorityCommandEnvelope 
   readonly decision: "approved" | "rejected";
 }
 
+/** Closed command for one separately reviewed standing Gadget installation. */
+export interface InstallStandingBindingCommand extends AuthorityCommandEnvelope {
+  /** Command discriminant. */
+  readonly type: "installStandingBinding";
+  /** Chat request retained only for projection after the canonical decision commits. */
+  readonly requestId: string;
+  /** Exact accepted Artifact Proposal. */
+  readonly proposalId: string;
+  /** Exact active Artifact Approval and epoch reviewed for installation. */
+  readonly artifactApprovalId: string;
+  /** Exact Artifact Approval epoch reviewed for installation. */
+  readonly artifactApprovalEpoch: number;
+  /** Gadget host identity whose canonical standing Consumer is selected. */
+  readonly targetGadgetId: number;
+  /** Gatekeeper host identity whose canonical Source is selected. */
+  readonly sourceGatekeeperId: number;
+  /** Exact published name and standing requirement key. */
+  readonly bindingName: string;
+  /** Binding generation the reviewed installation expects to replace. */
+  readonly expectedBindingGeneration: number;
+  /** Reviewed display metadata; it never participates in executable Artifact identity. */
+  readonly title: string;
+  /** Exact organization policy snapshot already cited by the Artifact Approval. */
+  readonly evaluatorPolicyHash: string;
+  /** Optional explicitly selected shared state root. */
+  readonly sharedStateKey?: string;
+}
+
 /** Closed command union accepted by the Workspace Authority root. */
-export type AuthorityCommand = DecideArtifactProposalCommand;
+export type AuthorityCommand = DecideArtifactProposalCommand | InstallStandingBindingCommand;
 
 /** Durable result of an Artifact Proposal decision. */
 export interface ArtifactDecisionResult {
@@ -94,8 +122,24 @@ export interface ArtifactDecisionResult {
   readonly decision: "approved" | "rejected";
 }
 
+/** Durable result of one canonical standing Binding publication. */
+export interface StandingBindingInstallationResult {
+  /** Result discriminant. */
+  readonly type: "standingBindingInstalled";
+  /** Canonical records published by the installation. */
+  readonly installationDecisionId: string;
+  /** Fresh canonical Contract Instance prepared for the installation. */
+  readonly contractInstanceId: string;
+  /** Active canonical Binding published by the installation. */
+  readonly bindingId: string;
+  /** Immutable canonical placement Resolution published with the Binding. */
+  readonly bindingResolutionId: string;
+  /** Active Binding generation after the compare-and-swap. */
+  readonly bindingGeneration: number;
+}
+
 /** Closed result union returned by Workspace Authority commands. */
-export type AuthorityCommandResult = ArtifactDecisionResult;
+export type AuthorityCommandResult = ArtifactDecisionResult | StandingBindingInstallationResult;
 
 function canonicalAuthorityJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -117,7 +161,9 @@ function canonicalAuthorityJson(value: unknown): string {
 
 /** Computes the canonical SHA-256 assertion for a normalized authority command payload. */
 export async function hashAuthorityCommand(
-  command: Omit<DecideArtifactProposalCommand, "requestDigest">,
+  command:
+    | Omit<DecideArtifactProposalCommand, "requestDigest">
+    | Omit<InstallStandingBindingCommand, "requestDigest">,
 ): Promise<string> {
   return hashAuthorityRequest(command);
 }
