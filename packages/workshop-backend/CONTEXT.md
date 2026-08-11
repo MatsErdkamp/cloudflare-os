@@ -68,6 +68,14 @@ _Avoid_: Agent Service, Workload, Chat, reusable Consumer
 The immutable, generation-tagged set of exact task Bindings, enforcement endpoints, mediators, deadlines, and egress materialized for one Agent Task.
 _Avoid_: Ambient environment, Chat bindings
 
+**Task Enforcement Mediator**:
+A Workspace-owned adapter that accepts only a current Task Invocation Envelope, invokes one explicitly supported runtime or capability path, and withholds protected results until generation and release acknowledgement succeeds.
+_Avoid_: Ambient tool wrapper, authorization cache, provider proxy
+
+**Task Invocation Envelope**:
+The immutable capability-free tuple authorizing one invocation under an exact Task, lease, Task Environment, Ratchet, Binding, operation, deadline, and cancellation generation.
+_Avoid_: Request metadata, tracing context, reusable token
+
 **Effective Authority Envelope**:
 The normalized immutable value used at Template review, dispatch, environment publication, and Ratchet comparison to describe exact provider/resource and Upstream Authority identities, Artifact Approval epoch, operations, recipients, egress, release classes, sharing, enforcement profile, and maximum expiry.
 _Avoid_: Permission bag, policy summary, provider-native scope

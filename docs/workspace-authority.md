@@ -185,11 +185,12 @@ disposal is resource management and never proof of revocation. Raw transferred a
 protected streams are unsupported. A supported asynchronous shape must mediate each result/chunk and
 prove invalidation acknowledgement; otherwise dispatch or return fails closed.
 
-#35 owns one closed runtime inventory covering Code Mode/Dynamic Workers, host tools, web fetch, MCP,
+ADR 0025/#35 fixes one closed runtime inventory covering Code Mode/Dynamic Workers, host tools, web fetch, MCP,
 browser automation, sandbox/container execution, subprocesses, raw TCP, callbacks, and webhooks. Each
-path is classified exactly as mediated, disabled, unsupported, or future, with named enforcement and
-acknowledgement endpoints. #40's R2 V1 slice enables only Code Mode/Dynamic Workers plus explicitly
-mediated host tools and the R2 Source path. It sets `globalOutbound: null`; web fetch and every other
+path is classified exactly as mediated, disabled, or unsupported, with named enforcement and
+acknowledgement endpoints. #40's R2 V1 slice enables only Code Mode/Dynamic Workers, the
+`executeCode`, metadata-only `describeBinding`, and control-only `giveUp` host tools, and the R2
+Source path. It sets `globalOutbound: null`; web fetch and every other
 uninventoried or uncovered path remain unavailable. Protected results stay in the generation-bound
 buffer until the complete current environment is acknowledged.
 
