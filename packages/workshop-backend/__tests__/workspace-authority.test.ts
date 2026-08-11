@@ -6,10 +6,12 @@ import {
   type WorkspaceAuthority,
 } from "../src/authority/workspace-authority.js";
 import type {
+  AuthorityDebtId,
   TaskDispatchDecisionId,
   TaskTemplateId,
 } from "../src/authority/records.js";
 import {makeMockStorage} from "./mock-storage.js";
+import {createConsumerEnvironmentAuthority} from "../src/authority/consumer-environments.js";
 
 type TestGadget = LegacyGadgetAuthorityRecord & {title: string};
 
@@ -867,7 +869,7 @@ describe("Workspace Authority module", () => {
   });
 
   it("requires one approved durable Task Dispatch Decision for task placement", () => {
-    const {module} = makeModule();
+    const {module, durableStorage} = makeModule();
     module.authority.execute({type: "initialize"});
     const mappedConsumer = module.authority.execute({
       type: "mapLegacyConsumer",
@@ -878,9 +880,14 @@ describe("Workspace Authority module", () => {
       type: "mapLegacyRequirement",
       legacyKey: "task:FILES",
     });
+    const mappedRequirementTwo = module.authority.execute({
+      type: "mapLegacyRequirement",
+      legacyKey: "task:CACHE",
+    });
     if (mappedConsumer.type !== "legacyConsumerMapped" ||
         mappedSource.type !== "legacySourceMapped" ||
-        mappedRequirement.type !== "legacyRequirementMapped") {
+        mappedRequirement.type !== "legacyRequirementMapped" ||
+        mappedRequirementTwo.type !== "legacyRequirementMapped") {
       throw new Error("task authority identities not mapped");
     }
     module.authority.execute({type: "beginBackfill", migrationId: "task-migration"});
@@ -938,6 +945,10 @@ describe("Workspace Authority module", () => {
       taskTemplateVersion: 1,
       requirementId: mappedRequirement.id,
     };
+    const requirementTwo = {
+      ...requirement,
+      requirementId: mappedRequirementTwo.id,
+    };
     const instanceRecord = {
       artifactApprovalId: approval.id,
       artifactHash: `sha256:${"6".repeat(64)}`,
@@ -970,11 +981,25 @@ describe("Workspace Authority module", () => {
       taskTemplateVersion: 1,
       taskTemplateApprovalId: "task-template-approval-1",
       consumer,
-      requirements: [requirement],
+      requirements: [requirement, requirementTwo],
       effectiveAuthorityEnvelopeHash: `sha256:${"8".repeat(64)}`,
       initiatingPrincipal: {id: "principal-1", generation: 1},
       agentServiceWorkloadId: "workload-1",
       agentServiceWorkloadGeneration: 1,
+      agentServiceProfileId: "agent-service-profile-1",
+      agentServiceProfileGeneration: 1,
+      workloadRegistrationId: "registration-1",
+      workloadRegistrationGeneration: 1,
+      eligibilityEvidence: [requirement, requirementTwo].map(candidate => ({
+        requirementId: candidate.requirementId,
+        upstreamAuthority: instanceRecord.upstreamAuthority,
+        providerCapabilityGeneration: 1,
+        verification: {type: "notRequired" as const},
+        evaluatorPolicyHash: `sha256:${"9".repeat(64)}`,
+        authorityDebtId: "task-test-debt" as AuthorityDebtId,
+        authorityDebtRevision: 1,
+        egress: [] as [],
+      })),
       absoluteExpiry: Date.now() + 60_000,
       decision: "approved" as const,
       decidedBy: "dispatcher",
@@ -1031,6 +1056,17 @@ describe("Workspace Authority module", () => {
       },
     });
     if (prepared.type !== "contractInstancePrepared") throw new Error("instance unavailable");
+    const preparedTwo = module.authority.execute({
+      type: "prepareContractInstance",
+      operationId: "task-instance-two",
+      record: {
+        ...instanceRecord,
+        intendedRequirement: requirementTwo,
+        placementDecision: {type: "taskDispatch", decisionId: dispatch.id},
+      },
+    });
+    expect(preparedTwo).toMatchObject({type: "contractInstancePrepared"});
+    if (preparedTwo.type === "contractInstancePrepared") expect(preparedTwo.id).not.toBe(prepared.id);
     const publishClock = vi.spyOn(Date, "now")
       .mockReturnValue(dispatchRecord.absoluteExpiry + 1);
     try {
@@ -1063,6 +1099,329 @@ describe("Workspace Authority module", () => {
         type: "bindingResolution",
         value: {placementDecision: {type: "taskDispatch", decisionId: dispatch.id}},
       });
+
+    const standingConsumer = {
+      type: "standing" as const,
+      consumerId: mappedConsumer.id,
+      generation: 1,
+    };
+    const standingRequirement = {
+      type: "environment" as const,
+      bindingSetId: "agent-service-bindings",
+      bindingSetVersion: 1,
+      requirementId: mappedRequirement.id,
+      requirementVersion: 1,
+    };
+    const installation = module.authority.execute({
+      type: "recordInstallationDecision",
+      operationId: "agent-service-installation",
+      record: {
+        proposalDigest: `sha256:${"b".repeat(64)}`,
+        decision: "approved",
+        decidedBy: "reviewer",
+        consumer: standingConsumer,
+        requirement: standingRequirement,
+        intendedBindingName: "R2_STORAGE",
+        expectedBindingGeneration: 0,
+      },
+    });
+    if (installation.type !== "installationDecisionRecorded") {
+      throw new Error("agent service installation unavailable");
+    }
+    const standingInstance = module.authority.execute({
+      type: "prepareContractInstance",
+      operationId: "agent-service-instance",
+      record: {
+        ...instanceRecord,
+        placementDecision: {type: "installation", decisionId: installation.id},
+        intendedConsumer: standingConsumer,
+        intendedRequirement: standingRequirement,
+        runtimeWorkpieceId: 22,
+        sourceGatekeeperId: 20,
+      },
+    });
+    if (standingInstance.type !== "contractInstancePrepared") {
+      throw new Error("agent service instance unavailable");
+    }
+    const providerIdentity = {
+      providerId: "cloudflare-r2",
+      accountId: "account-1",
+      sourceId: "r2-root",
+      sourceGeneration: 1,
+    };
+    module.authority.execute({
+      type: "recordProviderBacking",
+      operationId: "agent-service-provider",
+      contractInstanceId: standingInstance.id,
+      expectedInstanceGeneration: 1,
+      description: {
+        identity: providerIdentity,
+        health: "healthy",
+        providerNativeScope: {
+          resources: ["deployment-r2-bucket"],
+          operations: ["head", "get", "list", "put", "delete"],
+          recipients: [],
+          egress: [],
+        },
+        providerNativeRevocationGranularity: "deployment-resource",
+        localEnforcementRevocationGranularity: "contract-instance-backing",
+      },
+      result: {
+        provider: providerIdentity,
+        contractInstance: {id: standingInstance.id, generation: 1},
+        backingReference: "agent-service-backing",
+        capabilityGeneration: 1,
+        state: "prepared",
+        cleanup: "not-required",
+      },
+    });
+    const standingBinding = publishAcknowledgedBinding(module.authority, {
+      operationId: "agent-service-binding",
+      contractInstanceId: standingInstance.id,
+      consumer: standingConsumer,
+      requirement: standingRequirement,
+      name: "R2_STORAGE",
+      verification: {type: "notRequired"},
+      expectedBindingGeneration: 0,
+      evaluatorPolicyHash: `sha256:${"9".repeat(64)}`,
+    });
+    if (standingBinding.type !== "bindingPublished") {
+      throw new Error("agent service binding unavailable");
+    }
+    module.authority.execute({
+      type: "recordAuthorityDebt",
+      operationId: "agent-service-authority-debt",
+      record: {
+        bindingId: standingBinding.bindingId,
+        upstreamAuthority: instanceRecord.upstreamAuthority,
+        providerNativeScope: {
+          provider: "cloudflare-r2",
+          resources: ["deployment-r2-bucket"],
+          operations: ["head", "get", "list", "put", "delete"],
+          recipients: [],
+          egress: [],
+        },
+        effectiveScope: {
+          provider: "cloudflare-r2",
+          resources: ["task-approved-prefix"],
+          operations: ["get", "list", "put"],
+          recipients: [],
+          egress: [],
+        },
+        enforcementLayer: "contract",
+        revocationGranularity: "binding-generation",
+        risk: "low",
+        exceptionOwner: "reviewer",
+        productionEligibility: "eligible",
+        remediation: "retain task envelope enforcement",
+        lifecycle: "open",
+      },
+    });
+    const consumerAuthority = createConsumerEnvironmentAuthority(
+      durableStorage,
+      () => { throw new Error("environment not used by task record test"); },
+    );
+    consumerAuthority.putWorkload({
+      id: "workload-1",
+      consumerId: standingConsumer.consumerId,
+      consumerGeneration: 1,
+      projectId: "project-1",
+      environmentId: "environment-1",
+      bindingSet: {id: "agent-service-bindings", version: 1},
+      generation: 1,
+      lifecycle: "active",
+      agentService: {profileId: "agent-service-profile-1", role: "task-runner"},
+    });
+    consumerAuthority.putWorkloadRegistration({
+      id: "registration-1",
+      workloadId: "workload-1",
+      adapterId: "cloudflare-service-binding.v1",
+      issuer: "cloudflare-account:account-1",
+      credentialSubject: "agent-service-subject",
+      credentialGeneration: 1,
+      generation: 1,
+      lifecycle: "active",
+    });
+    expect(module.authority.execute({
+      type: "recordAgentServiceProfile",
+      record: {
+        id: "agent-service-profile-1",
+        workloadId: "workload-1",
+        workloadGeneration: 1,
+        workloadConsumer: standingConsumer,
+        workloadRegistrationId: "registration-1",
+        workloadRegistrationGeneration: 1,
+        role: "task-runner",
+        generation: 1,
+        lifecycle: "active",
+      },
+    })).toMatchObject({type: "agentServiceProfileRecorded", generation: 1});
+    expect(module.authority.execute({
+      type: "recordWorkspacePrincipal",
+      record: {
+        id: "principal-1",
+        kind: "member",
+        generation: 1,
+        lifecycle: "active",
+      },
+    })).toMatchObject({type: "workspacePrincipalRecorded", generation: 1});
+    const template = module.authority.execute({
+      type: "recordTaskTemplateVersion",
+      record: {
+        taskTemplateId,
+        version: 1,
+        requirements: [{
+          requirementId: mappedRequirement.id,
+          name: "R2_STORAGE",
+          required: true,
+          artifactApprovalId: approval.id,
+          artifactApprovalEpoch: 1,
+          standingBinding: {
+            name: "R2_STORAGE",
+            bindingId: standingBinding.bindingId,
+            bindingGeneration: 1,
+            contractInstanceId: standingInstance.id,
+            contractInstanceGeneration: 1,
+          },
+          maximumEffectiveAuthorityEnvelopeHash: `sha256:${"c".repeat(64)}`,
+          evaluatorPolicyHash: `sha256:${"9".repeat(64)}`,
+          sharedState: {type: "isolated"},
+        }],
+        maximumTaskDurationMs: 60_000,
+        principalEligibility: {type: "named", principalIds: ["principal-1"]},
+        runtimeEnforcementProfile: "r2-task-v1",
+        ceilingDigest: `sha256:${"d".repeat(64)}`,
+      },
+    });
+    if (template.type !== "taskTemplateVersionRecorded") {
+      throw new Error("task template unavailable");
+    }
+    const templateApproval = module.authority.execute({
+      type: "recordTaskTemplateApproval",
+      record: {
+        taskTemplateId,
+        taskTemplateVersion: 1,
+        approvalEpoch: 1,
+        ceilingDigest: `sha256:${"d".repeat(64)}`,
+        artifactApprovals: [{id: approval.id, epoch: 1}],
+        decidedBy: "reviewer",
+        permissionGeneration: 1,
+        decidedAt: Date.now(),
+        lifecycle: "active",
+      },
+    });
+    if (templateApproval.type !== "taskTemplateApprovalRecorded") {
+      throw new Error("task template approval unavailable");
+    }
+    const agentService = {
+      workloadId: "workload-1",
+      workloadGeneration: 1,
+      workloadConsumer: standingConsumer,
+      workloadRegistrationId: "registration-1",
+      workloadRegistrationGeneration: 1,
+    };
+    const taskRequestedAt = Date.now();
+    const materialized = module.authority.execute({
+      type: "materializeAgentTaskDispatch",
+      input: {
+        operationId: "materialize-task-1",
+        intentDigest: `sha256:${"e".repeat(64)}`,
+        taskTemplateApprovalId: templateApproval.id,
+        agentServiceProfileId: "agent-service-profile-1",
+        expectedAgentServiceProfileGeneration: 1,
+        agentService,
+        principal: {id: "principal-1", generation: 1},
+        requestedAt: taskRequestedAt,
+      },
+    });
+    if (materialized.type !== "agentTaskDispatched") {
+      throw new Error("task dispatch not materialized");
+    }
+    expect(module.authority.execute({
+      type: "materializeAgentTaskDispatch",
+      input: {
+        operationId: "materialize-task-1",
+        intentDigest: `sha256:${"e".repeat(64)}`,
+        taskTemplateApprovalId: templateApproval.id,
+        agentServiceProfileId: "agent-service-profile-1",
+        expectedAgentServiceProfileGeneration: 1,
+        agentService,
+        principal: {id: "principal-1", generation: 1},
+        requestedAt: taskRequestedAt,
+      },
+    })).toEqual(materialized);
+    expect(module.authority.query({type: "agentTask", id: materialized.taskId}))
+      .toMatchObject({
+        value: {
+          lifecycle: "dispatching",
+          generation: 1,
+          leaseGeneration: 1,
+          ratchetVersion: 1,
+          agentServiceProfileId: "agent-service-profile-1",
+        },
+      });
+    const taskEnvironment = module.authority.query({
+      type: "taskEnvironment",
+      taskId: materialized.taskId,
+      generation: 1,
+    });
+    expect(taskEnvironment).toMatchObject({
+      value: {
+        state: "materializing",
+        bindings: [{
+          name: "R2_STORAGE",
+          required: true,
+          upstreamBinding: {bindingId: standingBinding.bindingId, bindingGeneration: 1},
+        }],
+      },
+    });
+    if (taskEnvironment.type !== "taskEnvironment" || !taskEnvironment.value) {
+      throw new Error("task environment unavailable");
+    }
+    const taskPlacement = taskEnvironment.value.bindings[0]!;
+    expect(module.authority.query({type: "binding", id: taskPlacement.bindingId}))
+      .toMatchObject({value: {status: "preparing", consumer: {type: "agentTask"}}});
+    expect(module.authority.query({type: "bindingResolution", id: taskPlacement.resolutionId}))
+      .toMatchObject({
+        value: {
+          placementDecision: {type: "taskDispatch", decisionId: materialized.dispatchDecisionId},
+          upstreamBinding: {bindingId: standingBinding.bindingId},
+        },
+      });
+    expect(() => module.authority.execute({
+      type: "materializeAgentTaskDispatch",
+      input: {
+        operationId: "materialize-task-unsupported-scope",
+        intentDigest: `sha256:${"f".repeat(64)}`,
+        taskTemplateApprovalId: templateApproval.id,
+        agentServiceProfileId: "agent-service-profile-1",
+        expectedAgentServiceProfileGeneration: 1,
+        agentService,
+        principal: {id: "principal-1", generation: 1},
+        requestedAt: Date.now(),
+        applicationScope: {
+          kind: "workspaceApplication",
+          scopeId: "unsupported-scope",
+          scopeGeneration: 1,
+        },
+      },
+    })).toThrow("no application-scope adapter");
+    expect(module.authority.execute({
+      type: "terminateUnpublishedAgentTask",
+      operationId: "cancel-materializing-task",
+      taskId: materialized.taskId,
+      expectedTaskGeneration: 1,
+      lifecycle: "cancelled",
+    })).toMatchObject({type: "agentTaskTerminated", generation: 2});
+    expect(module.authority.query({type: "agentTask", id: materialized.taskId}))
+      .toMatchObject({value: {lifecycle: "cancelled", generation: 2}});
+    expect(module.authority.query({type: "binding", id: taskPlacement.bindingId}))
+      .toMatchObject({value: {status: "retracted", generation: 2}});
+    expect(module.authority.query({
+      type: "taskEnvironment",
+      taskId: materialized.taskId,
+      generation: 1,
+    })).toMatchObject({value: {state: "invalidated"}});
   });
 
   it("replays a ready-state unbind before cutover instead of preserving removed authority", () => {

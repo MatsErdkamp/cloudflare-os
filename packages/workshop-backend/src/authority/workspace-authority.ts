@@ -22,6 +22,9 @@ import type {
   AuthorityDebtId,
   AuthorityDebtRecord,
   AuthorityLifecycleTombstoneRecord,
+  AgentServiceProfileRecord,
+  AgentTaskId,
+  AgentTaskRecord,
   BindingId,
   BindingPublicationPlanId,
   BindingPublicationPlanRecord,
@@ -47,9 +50,15 @@ import type {
   SourceId,
   TaskDispatchDecisionId,
   TaskDispatchDecisionRecord,
+  TaskEnvironmentRecord,
+  TaskTemplateApprovalId,
+  TaskTemplateApprovalRecord,
+  TaskTemplateVersionRecord,
   RequirementId,
   UpstreamAuthorityReference,
+  WorkspacePrincipalRecord,
 } from "./records";
+import {createConsumerEnvironmentAuthority} from "./consumer-environments";
 import type {
   ContractInvalidationAcknowledgement,
   ContractReachabilitySnapshot,
@@ -204,6 +213,12 @@ type WorkspaceAuthorityEvent = {
     | "artifactApprovalRecorded"
     | "installationDecisionRecorded"
     | "taskDispatchDecisionRecorded"
+    | "agentServiceProfileChanged"
+    | "workspacePrincipalChanged"
+    | "taskTemplateVersionRecorded"
+    | "taskTemplateApprovalRecorded"
+    | "agentTaskDispatched"
+    | "agentTaskChanged"
     | "contractInstancePrepared"
     | "contractInstanceRetracted"
     | "authorityEffectCreated"
@@ -445,6 +460,51 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
       }),
       taskDispatchDecisions: collection<TaskDispatchDecisionRecord>()({
         primaryKey: "id",
+        uniqueIndexes: {
+          byOperation(record: TaskDispatchDecisionRecord) {
+            return record.operationId;
+          },
+        },
+      }),
+      agentServiceProfiles: collection<AgentServiceProfileRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byWorkload(record: AgentServiceProfileRecord) {
+            return record.lifecycle === "retired" ? null : record.workloadId;
+          },
+        },
+      }),
+      workspacePrincipals: collection<WorkspacePrincipalRecord>()({primaryKey: "id"}),
+      taskTemplateVersions: collection<TaskTemplateVersionRecord>()({
+        primaryKey: "id",
+      }),
+      taskTemplateApprovals: collection<TaskTemplateApprovalRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byTemplateEpoch(record: TaskTemplateApprovalRecord) {
+            return compositeKey(
+              record.taskTemplateId,
+              record.taskTemplateVersion,
+              record.approvalEpoch,
+            );
+          },
+        },
+      }),
+      agentTasks: collection<AgentTaskRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byDispatch(record: AgentTaskRecord) {
+            return record.dispatchDecisionId;
+          },
+        },
+      }),
+      taskEnvironments: collection<TaskEnvironmentRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byTaskGeneration(record: TaskEnvironmentRecord) {
+            return compositeKey(record.taskId, record.generation);
+          },
+        },
       }),
       bindingResolutions: collection<BindingResolutionRecord>()({
         primaryKey: "id",
@@ -456,7 +516,11 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
             return record.legacyWorkpieceId ?? null;
           },
           byPlacementDecision(record: ContractInstanceRecord) {
-            return compositeKey(record.placementDecision.type, record.placementDecision.decisionId);
+            return compositeKey(
+              record.placementDecision.type,
+              record.placementDecision.decisionId,
+              record.intendedRequirement?.requirementId ?? "",
+            );
           },
         },
         nonUniqueIndexes: {
@@ -589,6 +653,29 @@ type LiveContractInstanceInput = Omit<
 
 type LiveBindingVerification = Exclude<BindingVerificationReference, {type: "legacyUnknown"}>;
 
+/** Exact, capability-free request to materialize one bounded Agent Task dispatch. */
+export type MaterializeAgentTaskDispatchInput = Readonly<{
+  operationId: string;
+  intentDigest: string;
+  taskTemplateApprovalId: TaskTemplateApprovalId;
+  agentServiceProfileId: string;
+  expectedAgentServiceProfileGeneration: number;
+  agentService: Readonly<{
+    workloadId: string;
+    workloadGeneration: number;
+    workloadConsumer: Extract<ConsumerReference, {type: "standing"}>;
+    workloadRegistrationId: string;
+    workloadRegistrationGeneration: number;
+  }>;
+  principal: Readonly<{id: string; generation: number}>;
+  requestedAt: number;
+  applicationScope?: Readonly<{
+    kind: "workspaceApplication";
+    scopeId: string;
+    scopeGeneration: number;
+  }>;
+}>;
+
 /** A closed mutation accepted by the in-process Workspace Authority module. */
 export type WorkspaceAuthorityCommand =
   | {type: "initialize"}
@@ -609,7 +696,25 @@ export type WorkspaceAuthorityCommand =
   | {
       type: "recordTaskDispatchDecision";
       operationId: string;
-      record: Omit<TaskDispatchDecisionRecord, "id" | "decisionSequence">;
+      record: Omit<TaskDispatchDecisionRecord, "id" | "operationId" | "decisionSequence">;
+    }
+  | {type: "recordAgentServiceProfile"; record: AgentServiceProfileRecord}
+  | {type: "recordWorkspacePrincipal"; record: WorkspacePrincipalRecord}
+  | {
+      type: "recordTaskTemplateVersion";
+      record: Omit<TaskTemplateVersionRecord, "id">;
+    }
+  | {
+      type: "recordTaskTemplateApproval";
+      record: Omit<TaskTemplateApprovalRecord, "id">;
+    }
+  | {type: "materializeAgentTaskDispatch"; input: MaterializeAgentTaskDispatchInput}
+  | {
+      type: "terminateUnpublishedAgentTask";
+      operationId: string;
+      taskId: AgentTaskId;
+      expectedTaskGeneration: number;
+      lifecycle: "completed" | "failed" | "cancelled" | "expired";
     }
   | {
       type: "prepareContractInstance";
@@ -707,6 +812,17 @@ export type WorkspaceAuthorityCommandResult =
     }
   | {type: "installationDecisionRecorded"; id: InstallationDecisionId; sequence: number}
   | {type: "taskDispatchDecisionRecorded"; id: TaskDispatchDecisionId; sequence: number}
+  | {type: "agentServiceProfileRecorded"; id: string; generation: number}
+  | {type: "workspacePrincipalRecorded"; id: string; generation: number}
+  | {type: "taskTemplateVersionRecorded"; id: string}
+  | {type: "taskTemplateApprovalRecorded"; id: TaskTemplateApprovalId}
+  | {
+      type: "agentTaskDispatched";
+      taskId: AgentTaskId;
+      dispatchDecisionId: TaskDispatchDecisionId;
+      environmentId: string;
+    }
+  | {type: "agentTaskTerminated"; taskId: AgentTaskId; generation: number}
   | {type: "contractInstancePrepared"; id: ContractInstanceId; sequence: number}
   | {type: "providerBackingRecorded"; id: ContractInstanceId; capabilityGeneration: number}
   | {
@@ -750,6 +866,12 @@ export type WorkspaceAuthorityQuery =
   | {type: "installationDecision"; id: InstallationDecisionId}
   | {type: "installationDecisionByOperation"; operationId: string}
   | {type: "taskDispatchDecision"; id: TaskDispatchDecisionId}
+  | {type: "agentServiceProfile"; id: string}
+  | {type: "workspacePrincipal"; id: string}
+  | {type: "taskTemplateVersion"; id: string}
+  | {type: "taskTemplateApproval"; id: TaskTemplateApprovalId}
+  | {type: "agentTask"; id: AgentTaskId}
+  | {type: "taskEnvironment"; taskId: AgentTaskId; generation: number}
   | {type: "contractInstance"; id: ContractInstanceId}
   | {type: "binding"; id: BindingId}
   | {type: "bindingByConsumerName"; consumerId: ConsumerId; name: string}
@@ -792,6 +914,12 @@ export type WorkspaceAuthorityQueryResult =
   | {type: "installationDecision"; value?: InstallationDecisionRecord}
   | {type: "installationDecisionByOperation"; value?: InstallationDecisionRecord}
   | {type: "taskDispatchDecision"; value?: TaskDispatchDecisionRecord}
+  | {type: "agentServiceProfile"; value?: AgentServiceProfileRecord}
+  | {type: "workspacePrincipal"; value?: WorkspacePrincipalRecord}
+  | {type: "taskTemplateVersion"; value?: TaskTemplateVersionRecord}
+  | {type: "taskTemplateApproval"; value?: TaskTemplateApprovalRecord}
+  | {type: "agentTask"; value?: AgentTaskRecord}
+  | {type: "taskEnvironment"; value?: TaskEnvironmentRecord}
   | {type: "contractInstance"; value?: ContractInstanceRecord}
   | {type: "binding"; value?: BindingRecord}
   | {type: "bindingByConsumerName"; value?: BindingRecord}
@@ -1601,6 +1729,9 @@ export function createWorkspaceAuthorityModule<
   adapter: LegacyWorkspaceAuthorityAdapter<Gadget>,
 ): WorkspaceAuthorityModule {
   const storage = makeAuthorityStorage(durableStorage);
+  const consumerFacts = createConsumerEnvironmentAuthority(durableStorage, () => {
+    throw new Error("Task fact reads never resolve a capability environment.");
+  });
   const issuedLegacyManagerSourceAccess = new WeakSet<object>();
 
   const authority: WorkspaceAuthority = {
@@ -2079,6 +2210,15 @@ export function createWorkspaceAuthorityModule<
         case "recordTaskDispatchDecision":
           return storage.transaction(() => {
             requireActiveAuthority(storage);
+            const replay = storage.taskDispatchDecisions.byOperation.get(command.operationId);
+            if (replay) {
+              const {id: _id, decisionSequence: _sequence, ...record} = replay;
+              if (!sameAuthorityValue(record, {...command.record, operationId: command.operationId})) {
+                throw new Error("Task Dispatch Operation was reused for another decision.");
+              }
+              return {type: <const>"taskDispatchDecisionRecorded", id: replay.id,
+                sequence: replay.decisionSequence};
+            }
             if (command.record.consumer.type !== "agentTask") {
               throw new Error("Task Dispatch Decision requires an Agent Task Consumer.");
             }
@@ -2090,7 +2230,13 @@ export function createWorkspaceAuthorityModule<
                 command.record.requirements.some(requirement =>
                   requirement.type !== "taskTemplate" ||
                   requirement.taskTemplateId !== command.record.taskTemplateId ||
-                  requirement.taskTemplateVersion !== command.record.taskTemplateVersion)) {
+                  requirement.taskTemplateVersion !== command.record.taskTemplateVersion) ||
+                command.record.eligibilityEvidence.length !== command.record.requirements.length ||
+                command.record.requirements.some(requirement =>
+                  !command.record.eligibilityEvidence.some(evidence =>
+                    evidence.requirementId === requirement.requirementId &&
+                    evidence.providerCapabilityGeneration > 0 &&
+                    evidence.authorityDebtRevision > 0 && evidence.egress.length === 0))) {
               throw new Error("Task Dispatch Decision requirements differ from its Task Template.");
             }
             if (command.record.decision === "approved" &&
@@ -2106,9 +2252,506 @@ export function createWorkspaceAuthorityModule<
             storage.taskDispatchDecisions.put({
               ...structuredClone(command.record),
               id,
+              operationId: command.operationId,
               decisionSequence: sequence,
             });
             return {type: "taskDispatchDecisionRecorded", id, sequence};
+          });
+        case "recordAgentServiceProfile":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const canonical = consumerFacts.getAgentServiceEligibility(command.record.id);
+            if (!canonical || canonical.workloadId !== command.record.workloadId ||
+                canonical.workloadGeneration !== command.record.workloadGeneration ||
+                !sameAuthorityValue(canonical.workloadConsumer, command.record.workloadConsumer) ||
+                canonical.workloadRegistrationId !== command.record.workloadRegistrationId ||
+                canonical.workloadRegistrationGeneration !==
+                  command.record.workloadRegistrationGeneration ||
+                canonical.role !== command.record.role) {
+              throw new Error("Agent Service profile differs from its canonical Workload Registration.");
+            }
+            const current = storage.agentServiceProfiles.get(command.record.id);
+            if (current && command.record.generation < current.generation) {
+              throw new Error("Agent Service profile generation is stale.");
+            }
+            if (current && command.record.generation === current.generation &&
+                !sameAuthorityValue(current, command.record)) {
+              throw new Error("Agent Service profile generation cannot change its authority tuple.");
+            }
+            if (command.record.generation < 1 || command.record.workloadGeneration < 1 ||
+                command.record.workloadRegistrationGeneration < 1 ||
+                command.record.workloadConsumer.generation < 1 ||
+                command.record.role.trim().length === 0) {
+              throw new Error("Agent Service profile is incomplete.");
+            }
+            storage.agentServiceProfiles.put(structuredClone(command.record));
+            appendAuthorityEvent(storage, {
+              type: "agentServiceProfileChanged",
+              subjectId: command.record.id,
+              beforeGeneration: current?.generation,
+              afterGeneration: command.record.generation,
+            });
+            return {
+              type: <const>"agentServiceProfileRecorded",
+              id: command.record.id,
+              generation: command.record.generation,
+            };
+          });
+        case "recordWorkspacePrincipal":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const current = storage.workspacePrincipals.get(command.record.id);
+            if (command.record.generation < 1 ||
+                (current && command.record.generation < current.generation) ||
+                (current && command.record.generation === current.generation &&
+                 !sameAuthorityValue(current, command.record))) {
+              throw new Error("Workspace Principal generation is stale or mutable.");
+            }
+            storage.workspacePrincipals.put(structuredClone(command.record));
+            if (!current || !sameAuthorityValue(current, command.record)) {
+              appendAuthorityEvent(storage, {
+                type: "workspacePrincipalChanged",
+                subjectId: command.record.id,
+                beforeGeneration: current?.generation,
+                afterGeneration: command.record.generation,
+              });
+            }
+            return {type: <const>"workspacePrincipalRecorded", id: command.record.id,
+              generation: command.record.generation};
+          });
+        case "recordTaskTemplateVersion":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const record: TaskTemplateVersionRecord = {
+              ...structuredClone(command.record),
+              id: compositeKey(command.record.taskTemplateId, command.record.version),
+            };
+            if (record.version < 1 || record.maximumTaskDurationMs < 1 ||
+                record.maximumTaskDurationMs > 24 * 60 * 60_000 ||
+                record.requirements.length === 0) {
+              throw new Error("Task Template version is incomplete.");
+            }
+            const names = record.requirements.map(requirement => requirement.name);
+            const requirementIds = record.requirements.map(requirement => requirement.requirementId);
+            if (new Set(names).size !== names.length ||
+                new Set(requirementIds).size !== requirementIds.length ||
+                record.requirements.some(requirement => {
+                  try {
+                    validateBindingName(requirement.name);
+                    requireContentHash(
+                      requirement.maximumEffectiveAuthorityEnvelopeHash,
+                      "Task authority envelope",
+                    );
+                    requireContentHash(requirement.evaluatorPolicyHash, "Task evaluator policy");
+                    return requirement.artifactApprovalEpoch < 1 ||
+                      requirement.standingBinding.bindingGeneration < 1 ||
+                      requirement.standingBinding.contractInstanceGeneration < 1;
+                  } catch {
+                    return true;
+                  }
+                })) {
+              throw new Error("Task Template requirements are invalid or ambiguous.");
+            }
+            const existing = storage.taskTemplateVersions.get(record.id);
+            if (existing && !sameAuthorityValue(existing, record)) {
+              throw new Error("Task Template versions are immutable.");
+            }
+            storage.taskTemplateVersions.put(structuredClone(record));
+            if (!existing) appendAuthorityEvent(storage, {
+              type: "taskTemplateVersionRecorded",
+              subjectId: record.id,
+              afterGeneration: record.version,
+            });
+            return {type: <const>"taskTemplateVersionRecorded", id: record.id};
+          });
+        case "recordTaskTemplateApproval":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const record: TaskTemplateApprovalRecord = {
+              ...structuredClone(command.record),
+              id: issueAuthorityId<"taskTemplateApproval">(),
+            };
+            const version = storage.taskTemplateVersions.get(
+              compositeKey(record.taskTemplateId, record.taskTemplateVersion),
+            );
+            if (!version || version.ceilingDigest !== record.ceilingDigest ||
+                record.approvalEpoch < 1 || record.permissionGeneration < 1) {
+              throw new Error("Task Template Approval differs from its immutable version.");
+            }
+            const expectedApprovals = version.requirements.map(requirement => ({
+              id: requirement.artifactApprovalId,
+              epoch: requirement.artifactApprovalEpoch,
+            })).toSorted((left, right) => String(left.id).localeCompare(String(right.id)));
+            const citedApprovals = [...record.artifactApprovals]
+              .toSorted((left, right) => String(left.id).localeCompare(String(right.id)));
+            if (!sameAuthorityValue(expectedApprovals, citedApprovals) ||
+                citedApprovals.some(cited => {
+                  const approval = storage.artifactApprovals.get(cited.id);
+                  return approval?.lifecycle !== "active" ||
+                    approval.approvalEpoch !== cited.epoch || approval.decision !== "approved";
+                })) {
+              throw new Error("Task Template Approval cites stale Artifact Approval evidence.");
+            }
+            storage.taskTemplateApprovals.put(structuredClone(record));
+            appendAuthorityEvent(storage, {
+              type: "taskTemplateApprovalRecorded",
+              subjectId: record.id,
+              afterGeneration: record.approvalEpoch,
+            });
+            return {type: <const>"taskTemplateApprovalRecorded", id: record.id};
+          });
+        case "materializeAgentTaskDispatch":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const input = command.input;
+            const replay = storage.taskDispatchDecisions.byOperation.get(input.operationId);
+            if (replay) {
+              const task = storage.agentTasks.byDispatch.get(replay.id);
+              const environment = task
+                ? storage.taskEnvironments.byTaskGeneration.get(compositeKey(task.id, 1))
+                : undefined;
+              if (!task || !environment || task.intentDigest !== input.intentDigest ||
+                  task.createdAt !== input.requestedAt ||
+                  task.templateApprovalId !== input.taskTemplateApprovalId ||
+                  task.agentServiceProfileId !== input.agentServiceProfileId ||
+                  task.agentServiceProfileGeneration !== input.expectedAgentServiceProfileGeneration ||
+                  replay.agentServiceWorkloadId !== input.agentService.workloadId ||
+                  replay.agentServiceWorkloadGeneration !== input.agentService.workloadGeneration ||
+                  replay.workloadRegistrationId !== input.agentService.workloadRegistrationId ||
+                  replay.workloadRegistrationGeneration !==
+                    input.agentService.workloadRegistrationGeneration ||
+                  !sameAuthorityValue(task.correlation.principal, input.principal) ||
+                  !sameAuthorityValue(task.correlation.applicationScope, input.applicationScope)) {
+                throw new Error("Agent Task dispatch operation was reused for another request.");
+              }
+              return {type: <const>"agentTaskDispatched", taskId: task.id,
+                dispatchDecisionId: replay.id, environmentId: environment.id};
+            }
+            requireContentHash(input.intentDigest, "Task intent digest");
+            if (input.applicationScope) {
+              throw new Error("The R2 task runtime has no application-scope adapter.");
+            }
+            const profile = storage.agentServiceProfiles.get(input.agentServiceProfileId);
+            const canonicalAgentService = consumerFacts.getAgentServiceEligibility(
+              input.agentServiceProfileId,
+            );
+            if (!profile || profile.lifecycle !== "active" ||
+                profile.generation !== input.expectedAgentServiceProfileGeneration ||
+                profile.workloadId !== input.agentService.workloadId ||
+                profile.workloadGeneration !== input.agentService.workloadGeneration ||
+                !sameAuthorityValue(profile.workloadConsumer, input.agentService.workloadConsumer) ||
+                profile.workloadRegistrationId !== input.agentService.workloadRegistrationId ||
+                profile.workloadRegistrationGeneration !==
+                  input.agentService.workloadRegistrationGeneration ||
+                !canonicalAgentService ||
+                !sameAuthorityValue(canonicalAgentService, {
+                  ...input.agentService,
+                  role: profile.role,
+                })) {
+              throw new Error("Agent Service profile is unavailable or stale.");
+            }
+            const approval = storage.taskTemplateApprovals.get(input.taskTemplateApprovalId);
+            if (!approval || approval.lifecycle !== "active") {
+              throw new Error("Task Template Approval is unavailable or inactive.");
+            }
+            const template = storage.taskTemplateVersions.get(
+              compositeKey(approval.taskTemplateId, approval.taskTemplateVersion),
+            );
+            if (!template || template.ceilingDigest !== approval.ceilingDigest ||
+                template.runtimeEnforcementProfile !== "r2-task-v1") {
+              throw new Error("Task Template version is unavailable or unsupported.");
+            }
+            const principal = storage.workspacePrincipals.get(input.principal.id);
+            if (!principal || principal.lifecycle !== "active" ||
+                principal.generation !== input.principal.generation ||
+                (template.principalEligibility.type === "named" &&
+                 !template.principalEligibility.principalIds.includes(input.principal.id))) {
+              throw new Error("Effective Workspace Principal is ineligible for this Task Template.");
+            }
+            const placed = template.requirements.flatMap(requirement => {
+              const binding = storage.bindings.get(requirement.standingBinding.bindingId);
+              const instance = binding
+                ? storage.contractInstances.get(binding.contractInstanceId)
+                : undefined;
+              const resolution = binding
+                ? storage.bindingResolutions.get(binding.resolutionId)
+                : undefined;
+              const debt = binding ? storage.authorityDebts.byBinding.get(binding.id) : undefined;
+              const artifactApproval = storage.artifactApprovals.get(requirement.artifactApprovalId);
+              const eligible = binding?.status === "active" &&
+                binding.name === requirement.standingBinding.name &&
+                binding.generation === requirement.standingBinding.bindingGeneration &&
+                binding.consumer.type === "standing" &&
+                binding.consumer.consumerId === profile.workloadConsumer.consumerId &&
+                binding.consumer.generation === profile.workloadConsumer.generation &&
+                binding.contractInstanceId === requirement.standingBinding.contractInstanceId &&
+                instance?.lifecycle === "ready" &&
+                instance.generation === requirement.standingBinding.contractInstanceGeneration &&
+                instance.providerBacking !== undefined &&
+                instance.providerBacking.providerNativeScope.egress.length === 0 &&
+                instance.upstreamAuthority.origin.type === "workspaceAccount" &&
+                instance.artifactApprovalId === requirement.artifactApprovalId &&
+                resolution?.artifactApprovalId === requirement.artifactApprovalId &&
+                resolution.artifactApprovalEpoch === requirement.artifactApprovalEpoch &&
+                resolution.evaluatorPolicyHash === requirement.evaluatorPolicyHash &&
+                resolution.verification.type === "notRequired" &&
+                artifactApproval?.lifecycle === "active" &&
+                artifactApproval.approvalEpoch === requirement.artifactApprovalEpoch &&
+                artifactApproval.evidence === "complete" &&
+                artifactApproval.policyHash === requirement.evaluatorPolicyHash &&
+                debt?.productionEligibility === "eligible" && debt.lifecycle !== "remediated";
+              if (!eligible && requirement.required) {
+                throw new Error(`Required Task Binding ${requirement.name} is unavailable or stale.`);
+              }
+              return eligible && binding && instance && resolution && debt
+                ? [{requirement, binding, instance, resolution, debt}]
+                : [];
+            });
+            const taskId = issueAuthorityId<"agentTask">();
+            const consumerId = issueAuthorityId<"consumer">();
+            const taskConsumer = {
+              type: <const>"agentTask",
+              consumerId,
+              taskId,
+              taskGeneration: 1,
+            };
+            const requirementReferences = placed.map(({requirement}) => ({
+              type: <const>"taskTemplate",
+              taskTemplateId: template.taskTemplateId,
+              taskTemplateVersion: template.version,
+              requirementId: requirement.requirementId,
+            }));
+            const dispatchId = issueAuthorityId<"taskDispatchDecision">();
+            const decisionSequence = appendAuthorityEvent(storage, {
+              type: "taskDispatchDecisionRecorded",
+              subjectId: dispatchId,
+              operationId: input.operationId,
+            });
+            const absoluteExpiresAt = Math.min(
+              input.requestedAt + template.maximumTaskDurationMs,
+              input.requestedAt + 24 * 60 * 60_000,
+            );
+            if (input.requestedAt > Date.now() || absoluteExpiresAt <= Date.now()) {
+              throw new Error("Agent Task dispatch deadline is invalid or already expired.");
+            }
+            const effectiveAuthorityDigest = digestText(JSON.stringify(placed.map(({requirement}) => ({
+              requirementId: requirement.requirementId,
+              envelope: requirement.maximumEffectiveAuthorityEnvelopeHash,
+            }))));
+            storage.taskDispatchDecisions.put({
+              id: dispatchId,
+              operationId: input.operationId,
+              taskId,
+              taskGeneration: 1,
+              taskTemplateId: template.taskTemplateId,
+              taskTemplateVersion: template.version,
+              taskTemplateApprovalId: approval.id,
+              consumer: taskConsumer,
+              requirements: requirementReferences,
+              effectiveAuthorityEnvelopeHash: effectiveAuthorityDigest,
+              initiatingPrincipal: structuredClone(input.principal),
+              agentServiceWorkloadId: profile.workloadId,
+              agentServiceWorkloadGeneration: profile.workloadGeneration,
+              agentServiceProfileId: profile.id,
+              agentServiceProfileGeneration: profile.generation,
+              workloadRegistrationId: profile.workloadRegistrationId,
+              workloadRegistrationGeneration: profile.workloadRegistrationGeneration,
+              eligibilityEvidence: placed.map(({requirement, instance, resolution, debt}) => ({
+                requirementId: requirement.requirementId,
+                upstreamAuthority: structuredClone(instance.upstreamAuthority),
+                providerCapabilityGeneration: instance.providerBacking!.capabilityGeneration,
+                verification: structuredClone(resolution.verification),
+                evaluatorPolicyHash: resolution.evaluatorPolicyHash,
+                authorityDebtId: debt.id,
+                authorityDebtRevision: debt.revision,
+                egress: [] as [],
+              })),
+              absoluteExpiry: absoluteExpiresAt,
+              decision: "approved",
+              decidedBy: "system:task-template",
+              decisionSequence,
+            });
+            const environmentBindings = placed.map(({requirement, binding, instance}) => {
+              const requirementReference = requirementReferences.find(reference =>
+                reference.requirementId === requirement.requirementId)!;
+              const contractInstanceId = issueAuthorityId<"contractInstance">();
+              const bindingId = issueAuthorityId<"binding">();
+              const resolutionId = issueAuthorityId<"bindingResolution">();
+              const createdSequence = appendAuthorityEvent(storage, {
+                type: "contractInstancePrepared",
+                subjectId: contractInstanceId,
+                operationId: input.operationId,
+              });
+              storage.contractInstances.put({
+                id: contractInstanceId,
+                sourceGatekeeperId: instance.sourceGatekeeperId,
+                artifactApprovalId: instance.artifactApprovalId,
+                artifactHash: instance.artifactHash,
+                runtimeProfileHash: instance.runtimeProfileHash,
+                upstreamAuthority: structuredClone(instance.upstreamAuthority),
+                placementDecision: {type: "taskDispatch", decisionId: dispatchId},
+                intendedConsumer: taskConsumer,
+                intendedRequirement: requirementReference,
+                sharedState: structuredClone(requirement.sharedState),
+                lifecycle: "prepared",
+                generation: 1,
+                revision: 1,
+                createdSequence,
+              });
+              storage.bindingResolutions.put({
+                id: resolutionId,
+                consumer: taskConsumer,
+                requirement: requirementReference,
+                upstreamAuthority: structuredClone(instance.upstreamAuthority),
+                verification: structuredClone(
+                  storage.bindingResolutions.get(binding.resolutionId)?.verification ??
+                    {type: "notRequired"},
+                ),
+                artifactApprovalId: requirement.artifactApprovalId,
+                artifactApprovalEpoch: requirement.artifactApprovalEpoch,
+                placementDecision: {type: "taskDispatch", decisionId: dispatchId},
+                contractInstanceId,
+                bindingId,
+                sharedState: structuredClone(requirement.sharedState),
+                expectedBindingGeneration: 0,
+                evaluatorPolicyHash: requirement.evaluatorPolicyHash,
+                upstreamBinding: structuredClone(requirement.standingBinding),
+                createdSequence,
+              });
+              storage.bindings.put({
+                id: bindingId,
+                consumer: taskConsumer,
+                name: requirement.name,
+                requirement: requirementReference,
+                contractInstanceId,
+                resolutionId,
+                status: "preparing",
+                generation: 1,
+                revision: 1,
+                installedSequence: createdSequence,
+              });
+              return {
+                name: requirement.name,
+                required: requirement.required,
+                requirementId: requirement.requirementId,
+                resolutionId,
+                contractInstanceId,
+                bindingId,
+                upstreamBinding: structuredClone(requirement.standingBinding),
+              };
+            });
+            const leaseExpiresAt = Math.min(absoluteExpiresAt, input.requestedAt + 15 * 60_000);
+            const correlation = {
+              taskId,
+              taskGeneration: 1,
+              principal: structuredClone(input.principal),
+              actorChain: [
+                {type: <const>"workspacePrincipal", id: principal.id,
+                  generation: principal.generation},
+                {type: <const>"agentServiceWorkload", id: profile.workloadId,
+                  generation: profile.workloadGeneration},
+              ],
+            };
+            const task: AgentTaskRecord = {
+              id: taskId,
+              consumerId,
+              generation: 1,
+              dispatchDecisionId: dispatchId,
+              templateApprovalId: approval.id,
+              agentServiceProfileId: profile.id,
+              agentServiceProfileGeneration: profile.generation,
+              correlation,
+              intentDigest: input.intentDigest,
+              createdAt: input.requestedAt,
+              absoluteExpiresAt,
+              leaseGeneration: 1,
+              leaseExpiresAt,
+              environmentGeneration: 1,
+              ratchetVersion: 1,
+              lifecycle: "dispatching",
+            };
+            const environment: TaskEnvironmentRecord = {
+              id: compositeKey(taskId, 1),
+              taskId,
+              taskGeneration: 1,
+              generation: 1,
+              ratchetVersion: 1,
+              leaseGeneration: 1,
+              leaseExpiresAt,
+              absoluteExpiresAt,
+              correlation,
+              effectiveAuthorityDigest,
+              bindings: environmentBindings,
+              omittedOptionalRequirements: template.requirements.filter(requirement =>
+                !requirement.required && !environmentBindings.some(binding =>
+                  binding.requirementId === requirement.requirementId)).map(requirement => ({
+                    requirementId: requirement.requirementId,
+                    reason: <const>"unavailable",
+                  })),
+              state: "materializing",
+            };
+            storage.agentTasks.put(task);
+            storage.taskEnvironments.put(environment);
+            appendAuthorityEvent(storage, {
+              type: "agentTaskDispatched",
+              subjectId: taskId,
+              operationId: input.operationId,
+              afterGeneration: 1,
+            });
+            return {type: <const>"agentTaskDispatched", taskId,
+              dispatchDecisionId: dispatchId, environmentId: environment.id};
+          });
+        case "terminateUnpublishedAgentTask":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const task = storage.agentTasks.get(command.taskId);
+            if (!task || task.generation !== command.expectedTaskGeneration) {
+              throw new Error("Agent Task generation is unavailable or stale.");
+            }
+            if (task.lifecycle === command.lifecycle) {
+              return {type: <const>"agentTaskTerminated", taskId: task.id,
+                generation: task.generation};
+            }
+            if (task.lifecycle !== "dispatching") {
+              throw new Error("Published Agent Tasks require enforcement-first termination.");
+            }
+            const environment = storage.taskEnvironments.byTaskGeneration.get(
+              compositeKey(task.id, task.environmentGeneration),
+            );
+            if (!environment || environment.state !== "materializing") {
+              throw new Error("Unpublished Task Environment is unavailable.");
+            }
+            for (const placement of environment.bindings) {
+              const binding = storage.bindings.get(placement.bindingId);
+              const instance = storage.contractInstances.get(placement.contractInstanceId);
+              if (!binding || binding.status !== "preparing" || binding.endpointSnapshot ||
+                  !instance || instance.lifecycle !== "prepared" || instance.providerBacking) {
+                throw new Error("Task placement reached enforcement and requires durable invalidation.");
+              }
+              storage.bindings.put({
+                ...binding,
+                status: "retracted",
+                generation: binding.generation + 1,
+                revision: binding.revision + 1,
+              });
+              storage.contractInstances.put({
+                ...instance,
+                lifecycle: "retracted",
+                generation: instance.generation + 1,
+                revision: instance.revision + 1,
+              });
+            }
+            storage.taskEnvironments.put({...environment, state: "invalidated"});
+            const generation = task.generation + 1;
+            storage.agentTasks.put({...task, generation, lifecycle: command.lifecycle});
+            appendAuthorityEvent(storage, {
+              type: "agentTaskChanged",
+              subjectId: task.id,
+              operationId: command.operationId,
+              beforeGeneration: task.generation,
+              afterGeneration: generation,
+            });
+            return {type: <const>"agentTaskTerminated", taskId: task.id, generation};
           });
         case "prepareContractInstance":
           return storage.transaction(() => {
@@ -2140,6 +2783,7 @@ export function createWorkspaceAuthorityModule<
             const placementKey = compositeKey(
               command.record.placementDecision.type,
               command.record.placementDecision.decisionId,
+              command.record.intendedRequirement?.requirementId ?? "",
             );
             const existing = storage.contractInstances.byPlacementDecision.get(placementKey);
             if (existing) {
@@ -2845,6 +3489,50 @@ export function createWorkspaceAuthorityModule<
             type: "taskDispatchDecision",
             value: requireAuthorityState(storage).state === "active"
               ? storage.taskDispatchDecisions.get(query.id)
+              : undefined,
+          };
+        case "agentServiceProfile":
+          return {
+            type: "agentServiceProfile",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.agentServiceProfiles.get(query.id)
+              : undefined,
+          };
+        case "workspacePrincipal":
+          return {
+            type: "workspacePrincipal",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.workspacePrincipals.get(query.id)
+              : undefined,
+          };
+        case "taskTemplateVersion":
+          return {
+            type: "taskTemplateVersion",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.taskTemplateVersions.get(query.id)
+              : undefined,
+          };
+        case "taskTemplateApproval":
+          return {
+            type: "taskTemplateApproval",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.taskTemplateApprovals.get(query.id)
+              : undefined,
+          };
+        case "agentTask":
+          return {
+            type: "agentTask",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.agentTasks.get(query.id)
+              : undefined,
+          };
+        case "taskEnvironment":
+          return {
+            type: "taskEnvironment",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.taskEnvironments.byTaskGeneration.get(
+                  compositeKey(query.taskId, query.generation),
+                )
               : undefined,
           };
         case "contractInstance":

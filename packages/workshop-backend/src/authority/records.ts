@@ -25,6 +25,8 @@ export type ConsumerId = AuthorityId<"consumer">;
 export type SourceId = AuthorityId<"source">;
 export type RequirementId = AuthorityId<"requirement">;
 export type TaskTemplateId = AuthorityId<"taskTemplate">;
+export type TaskTemplateApprovalId = AuthorityId<"taskTemplateApproval">;
+export type AgentTaskId = AuthorityId<"agentTask">;
 export type AuthorityTombstoneId = AuthorityId<"authorityTombstone">;
 export type BindingPublicationPlanId = AuthorityId<"bindingPublicationPlan">;
 export type InvalidationIntentId = AuthorityId<"invalidationIntent">;
@@ -178,6 +180,7 @@ export type InstallationDecisionRecord = Readonly<{
 /** One immutable per-task decision; it is never an Installation or runtime Approval decision. */
 export type TaskDispatchDecisionRecord = Readonly<{
   id: TaskDispatchDecisionId;
+  operationId: string;
   taskId: string;
   taskGeneration: number;
   taskTemplateId: TaskTemplateId;
@@ -189,11 +192,166 @@ export type TaskDispatchDecisionRecord = Readonly<{
   initiatingPrincipal: {readonly id: string; readonly generation: number};
   agentServiceWorkloadId: string;
   agentServiceWorkloadGeneration: number;
+  agentServiceProfileId: string;
+  agentServiceProfileGeneration: number;
+  workloadRegistrationId: string;
+  workloadRegistrationGeneration: number;
+  eligibilityEvidence: readonly Readonly<{
+    requirementId: RequirementId;
+    upstreamAuthority: UpstreamAuthorityReference;
+    providerCapabilityGeneration: number;
+    verification: BindingVerificationReference;
+    evaluatorPolicyHash: string;
+    authorityDebtId: AuthorityDebtId;
+    authorityDebtRevision: number;
+    egress: readonly [];
+  }>[];
   parentTaskId?: string;
   absoluteExpiry: number;
   decision: "approved" | "denied";
   decidedBy: string;
   decisionSequence: number;
+}>;
+
+/** One role/profile attached one-to-one to a registered standing Workload. */
+export type AgentServiceProfileRecord = Readonly<{
+  id: string;
+  workloadId: string;
+  workloadGeneration: number;
+  workloadConsumer: Extract<ConsumerReference, {type: "standing"}>;
+  workloadRegistrationId: string;
+  workloadRegistrationGeneration: number;
+  role: string;
+  generation: number;
+  lifecycle: "active" | "suspended" | "retired";
+}>;
+
+/** Canonical current Workspace human identity eligible to initiate a Task. */
+export type WorkspacePrincipalRecord = Readonly<{
+  id: string;
+  kind: "owner" | "member";
+  generation: number;
+  lifecycle: "active" | "revoked";
+}>;
+
+/** One exact standing Binding admitted as upstream for a Task requirement. */
+export type TaskStandingBindingReference = Readonly<{
+  name: string;
+  bindingId: BindingId;
+  bindingGeneration: number;
+  contractInstanceId: ContractInstanceId;
+  contractInstanceGeneration: number;
+}>;
+
+/** One immutable requirement in a complete Task Template version. */
+export type TaskTemplateRequirementRecord = Readonly<{
+  requirementId: RequirementId;
+  name: string;
+  required: boolean;
+  artifactApprovalId: ArtifactApprovalId;
+  artifactApprovalEpoch: number;
+  standingBinding: TaskStandingBindingReference;
+  maximumEffectiveAuthorityEnvelopeHash: string;
+  evaluatorPolicyHash: string;
+  sharedState: SharedStateChoice;
+}>;
+
+/** One complete immutable version in a Task Template lineage. */
+export type TaskTemplateVersionRecord = Readonly<{
+  id: string;
+  taskTemplateId: TaskTemplateId;
+  version: number;
+  requirements: readonly TaskTemplateRequirementRecord[];
+  maximumTaskDurationMs: number;
+  principalEligibility:
+    | {readonly type: "workspaceMembers"}
+    | {readonly type: "named"; readonly principalIds: readonly string[]};
+  runtimeEnforcementProfile: "r2-task-v1";
+  ceilingDigest: string;
+  supersedesVersion?: number;
+}>;
+
+/** Immutable human approval over one exact Task Template version and ceiling. */
+export type TaskTemplateApprovalRecord = Readonly<{
+  id: TaskTemplateApprovalId;
+  taskTemplateId: TaskTemplateId;
+  taskTemplateVersion: number;
+  approvalEpoch: number;
+  ceilingDigest: string;
+  artifactApprovals: readonly Readonly<{
+    id: ArtifactApprovalId;
+    epoch: number;
+  }>[];
+  decidedBy: string;
+  permissionGeneration: number;
+  decidedAt: number;
+  lifecycle: "active" | "deprecated" | "revoked";
+}>;
+
+/** Immutable identity/generation correlation carried by one Agent Task. */
+export type TaskAuthorityCorrelation = Readonly<{
+  taskId: AgentTaskId;
+  taskGeneration: number;
+  principal: Readonly<{id: string; generation: number}>;
+  applicationScope?: Readonly<{
+    kind: "workspaceApplication";
+    scopeId: string;
+    scopeGeneration: number;
+  }>;
+  actorChain: readonly Readonly<{
+    type: "workspacePrincipal" | "agentServiceWorkload";
+    id: string;
+    generation: number;
+  }>[];
+}>;
+
+/** One bounded execution and its current lease/environment generations. */
+export type AgentTaskRecord = Readonly<{
+  id: AgentTaskId;
+  consumerId: ConsumerId;
+  generation: number;
+  dispatchDecisionId: TaskDispatchDecisionId;
+  templateApprovalId: TaskTemplateApprovalId;
+  agentServiceProfileId: string;
+  agentServiceProfileGeneration: number;
+  correlation: TaskAuthorityCorrelation;
+  intentDigest: string;
+  createdAt: number;
+  absoluteExpiresAt: number;
+  leaseGeneration: number;
+  leaseExpiresAt: number;
+  environmentGeneration: number;
+  ratchetVersion: number;
+  lifecycle: "dispatching" | "running" | "awaitingApproval" | "awaitingChild" |
+    "suspendedLeaseExpired" | "completed" | "failed" | "cancelled" | "expired";
+}>;
+
+/** One immutable manifest of the exact task placements for one environment generation. */
+export type TaskEnvironmentRecord = Readonly<{
+  id: string;
+  taskId: AgentTaskId;
+  taskGeneration: number;
+  generation: number;
+  ratchetVersion: number;
+  leaseGeneration: number;
+  leaseExpiresAt: number;
+  absoluteExpiresAt: number;
+  correlation: TaskAuthorityCorrelation;
+  effectiveAuthorityDigest: string;
+  bindings: readonly Readonly<{
+    name: string;
+    required: boolean;
+    requirementId: RequirementId;
+    resolutionId: BindingResolutionId;
+    contractInstanceId: ContractInstanceId;
+    bindingId: BindingId;
+    upstreamBinding: TaskStandingBindingReference;
+  }>[];
+  omittedOptionalRequirements: readonly Readonly<{
+    requirementId: RequirementId;
+    reason: "unavailable";
+  }>[];
+  state: "materializing" | "ready" | "invalidated";
 }>;
 
 /** The one canonical immutable placement result used by standing and Agent Task authority. */
@@ -211,6 +369,8 @@ export type BindingResolutionRecord = Readonly<{
   sharedState: SharedStateChoice;
   expectedBindingGeneration: number;
   evaluatorPolicyHash: string;
+  /** Exact standing Binding attenuated by a Task placement, when applicable. */
+  upstreamBinding?: TaskStandingBindingReference;
   createdSequence: number;
 }>;
 
@@ -255,7 +415,7 @@ export type BindingRecord = Readonly<{
   requirement: BindingRequirementReference;
   contractInstanceId: ContractInstanceId;
   resolutionId: BindingResolutionId;
-  status: "active" | "suspended" | "retracted";
+  status: "preparing" | "active" | "suspended" | "retracted";
   generation: number;
   revision: number;
   installedSequence: number;

@@ -511,6 +511,33 @@ export class ConsumerEnvironmentAuthority {
     });
   }
 
+  /** Resolves the current canonical Workload/Registration tuple for one Agent Service profile. */
+  getAgentServiceEligibility(profileId: string): Readonly<{
+    workloadId: string;
+    workloadGeneration: number;
+    workloadConsumer: Readonly<{type: "standing"; consumerId: string; generation: number}>;
+    workloadRegistrationId: string;
+    workloadRegistrationGeneration: number;
+    role: string;
+  }> | undefined {
+    const workload = this.#storage.workloads.byAgentService.get(profileId);
+    if (!workload || workload.lifecycle !== "active" || !workload.agentService) return undefined;
+    const registration = this.#storage.workloadRegistrations.byWorkload.get(workload.id);
+    if (!registration || registration.lifecycle !== "active") return undefined;
+    return {
+      workloadId: workload.id,
+      workloadGeneration: workload.generation,
+      workloadConsumer: {
+        type: "standing",
+        consumerId: workload.consumerId,
+        generation: workload.consumerGeneration,
+      },
+      workloadRegistrationId: registration.id,
+      workloadRegistrationGeneration: registration.generation,
+      role: workload.agentService.role,
+    };
+  }
+
   /** Stores one same-account Workload Registration chosen by Workspace Authority. */
   putWorkloadRegistration(record: WorkloadRegistrationRecord): void {
     this.#storage.transaction(() => {
