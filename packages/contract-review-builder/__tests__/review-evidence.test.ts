@@ -55,6 +55,8 @@ function runnerResult(
           networkAttempts: 0,
         },
         dependencyLock: {entries: []},
+        directDependencyRequests: Object.entries(request.inputs.dependencies)
+          .map(([name, version]) => ({name, version})),
         toolchain: {
           components: [
             {name: "@gadgets/contractors", identity: "sha256:" + "1".repeat(64)},
@@ -64,10 +66,17 @@ function runnerResult(
         },
         recipe: {
           name: "contract-current",
+          compatibilityDate: candidate.artifact.runtimeProfile.compatibilityDate,
+          compatibilityFlags: candidate.artifact.runtimeProfile.compatibilityFlags,
           target: "es2022",
           platform: "neutral",
           moduleFormat: "esm",
           externals: ["cloudflare:workers"],
+          publicRoot: "ContractBinding",
+          authoringAbiHash: candidate.artifact.runtimeProfile.authoringAbi.declarationHash,
+          runtimeHarnessHash: candidate.artifact.runtimeProfile.runtimeHarnessHash,
+          runtimeModuleSetHash: candidate.artifact.runtimeProfile.runtimeModuleSetHash,
+          runtimeProfileHash: candidate.artifact.runtimeProfileHash,
         },
       };
       return mutate ? mutate(result) : result;
@@ -101,7 +110,7 @@ describe("Contract review evidence", () => {
         authorship: "developer",
         origin: {kind: "import", digest: "sha256:" + "4".repeat(64)},
       },
-      policySnapshot: {name: "deployment-policy", deniedPackages: []},
+      policySnapshot: {},
       baseline: {kind: "none"},
       comparisonGenerator: {name: "review-comparison", identity: "sha256:" + "5".repeat(64)},
     }, factory());
@@ -121,6 +130,68 @@ describe("Contract review evidence", () => {
     expect(parseContractReviewBundle(evidence.bundleJson)).toEqual(evidence.bundle);
     expect(parseReviewComparison(evidence.comparisonJson))
       .toEqual(evidence.comparison);
+    const originalModules = evidence.comparison.sections.find(section =>
+      section.name === "originalModules")!;
+    expect(originalModules.items).toEqual([
+      expect.objectContaining({
+        key: "contract.ts",
+        kind: "text",
+        change: "added",
+        newHash: evidence.bundle.originalModules[0]!.blob.hash,
+        patch: expect.stringContaining("+  export interface ContractBinding"),
+      }),
+    ]);
+    expect(evidence.comparison.sections.find(section => section.name === "publicInterface")!
+      .items[0]!.exportedSurface?.added).toContainEqual(
+        expect.stringContaining("export interface ContractBinding"),
+      );
+  });
+
+  it("compares a reproduced baseline with exact per-item hashes and text patches", async () => {
+    const provenance = {
+      submittedBy: {identity: "developer", generation: 1},
+      authorship: "developer",
+      origin: {kind: "import" as const, digest: "sha256:" + "c".repeat(64)},
+    };
+    const comparisonGenerator = {
+      name: "comparison",
+      identity: "sha256:" + "d".repeat(64),
+    };
+    const baselineEvidence = await buildContractReviewEvidence({
+      inputs: BUILD_INPUTS,
+      submittedProvenance: provenance,
+      policySnapshot: {},
+      baseline: {kind: "none"},
+      comparisonGenerator,
+    }, factory());
+    const changedInputs = {
+      ...BUILD_INPUTS,
+      modules: {"contract.ts": CONTRACT_SOURCE.replace("read(id: string)", "read(key: string)")},
+    };
+    const changed = await buildContractReviewEvidence({
+      inputs: changedInputs,
+      submittedProvenance: provenance,
+      policySnapshot: {},
+      baseline: {
+        kind: "bundle",
+        bundleHash: baselineEvidence.bundleHash,
+        artifactApprovalReference: "approval:1",
+      },
+      baselineBundle: baselineEvidence.bundle,
+      baselineBlobs: baselineEvidence.blobs,
+      comparisonGenerator,
+    }, factory(
+      runnerResult("candidate", "candidate-changed"),
+      runnerResult("verifier", "verifier-changed"),
+    ));
+    const sourceChange = changed.comparison.sections.find(section =>
+      section.name === "originalModules")!.items[0]!;
+    expect(sourceChange).toMatchObject({change: "modified", kind: "text"});
+    expect(sourceChange.oldHash).not.toBe(sourceChange.newHash);
+    expect(sourceChange.patch).toContain("-  export interface ContractBinding extends RpcTarget { read(id: string)");
+    expect(sourceChange.patch).toContain("+  export interface ContractBinding extends RpcTarget { read(key: string)");
+    expect(changed.comparison.sections.find(section => section.name === "artifactAuthority")!
+      .items.some(item => item.key === "hash" && item.change === "modified")).toBe(true);
   });
 
   it.each([
@@ -154,6 +225,20 @@ describe("Contract review evidence", () => {
       comparisonGenerator: {name: "comparison", identity: "sha256:" + "9".repeat(64)},
     }, factory(runnerResult("candidate", "candidate-environment"), verifier)))
       .rejects.toBeInstanceOf(ReviewEvidenceError);
+  });
+
+  it("fails closed when recorded deployment policy differs from compiler policy", async () => {
+    await expect(buildContractReviewEvidence({
+      inputs: BUILD_INPUTS,
+      submittedProvenance: {
+        submittedBy: {identity: "developer", generation: 1},
+        authorship: "developer",
+        origin: {kind: "import", digest: "sha256:" + "8".repeat(64)},
+      },
+      policySnapshot: {deniedPackages: ["zod"]},
+      baseline: {kind: "none"},
+      comparisonGenerator: {name: "comparison", identity: "sha256:" + "9".repeat(64)},
+    }, factory())).rejects.toThrow("policy snapshot");
   });
 
   it("rejects non-canonical, unknown, oversized, and hash-mismatched manifests", async () => {

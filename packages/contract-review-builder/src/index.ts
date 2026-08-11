@@ -21,6 +21,7 @@ export type {
   ReviewBuildRunnerFactory,
   ReviewBuildRunResult,
   ReviewComparison,
+  ReviewComparisonItem,
   ReviewComparisonSection,
   ReviewDependencyLock,
   ReviewDependencyLockEntry,

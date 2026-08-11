@@ -2,6 +2,7 @@
 export const REVIEW_LIMITS = Object.freeze({
   manifestBytes: 256 * 1024,
   comparisonBytes: 256 * 1024,
+  renderedComparisonPatchBytes: 4 * 1024 * 1024,
   moduleCount: 128,
   pathBytes: 256,
   textBlobBytes: 2 * 1024 * 1024,

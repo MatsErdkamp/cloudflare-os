@@ -1,8 +1,16 @@
 import {spawn} from "node:child_process";
+import {createHash} from "node:crypto";
 import {createRequire} from "node:module";
 import {delimiter, dirname, join, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
-import {existsSync, readFileSync, realpathSync} from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 
 import {ReviewEvidenceError} from "./canonical.js";
 import {REVIEW_LIMITS} from "./limits.js";
@@ -17,7 +25,9 @@ export interface NodeReviewBuildRunnerFactoryOptions {
   readonly producerIdentity: string;
   readonly timeoutMs?: number;
   /** Conformance-only probe which must be rejected by the child permission boundary. */
-  readonly conformanceProbe?: "network" | "undeclaredRead";
+  readonly conformanceProbe?: "network" | "undeclaredRead" | "lockedInputDrift";
+  /** Loopback target used only by the network-isolation conformance test. */
+  readonly conformanceNetworkUrl?: string;
 }
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -38,11 +48,96 @@ const ESBUILD_NATIVE_ROOT = Object.keys(esbuildManifest.optionalDependencies ?? 
 if (!ESBUILD_NATIVE_ROOT) throw new Error("The native esbuild package is unavailable.");
 const ESBUILD_BINARY = realpathSync(resolve(ESBUILD_NATIVE_ROOT, "bin/esbuild"));
 
+function isolatedNodeCommand(nodeArgs: readonly string[]): readonly [string, readonly string[]] {
+  if (process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec")) {
+    return [
+      "/usr/bin/sandbox-exec",
+      ["-p", "(version 1)(allow default)(deny network*)", process.execPath, ...nodeArgs],
+    ];
+  }
+  for (const executable of ["/usr/bin/bwrap", "/bin/bwrap"]) {
+    if (process.platform === "linux" && existsSync(executable)) {
+      return [
+        executable,
+        ["--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+          process.execPath, ...nodeArgs],
+      ];
+    }
+  }
+  throw new ReviewEvidenceError(
+    "ISOLATION_FAILED",
+    "No supported operating-system network isolation boundary is available.",
+  );
+}
+
 interface ResolvedPackageClosureEntry {
   readonly name: string;
   readonly version: string;
   readonly root: string;
   readonly dependencies: readonly string[];
+  readonly packageContentHash: string;
+}
+
+interface LockedToolchainRoot {
+  readonly name: string;
+  readonly root: string;
+  readonly contentRoot?: string;
+  readonly identity: string;
+}
+
+function hashTree(root: string): string {
+  const hash = createHash("sha256");
+  let fileCount = 0;
+  let totalBytes = 0;
+  const visit = (directory: string, prefix: string): void => {
+    const entries = readdirSync(directory, {withFileTypes: true})
+      .toSorted((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (entry.name === "node_modules") continue;
+      const absolute = join(directory, entry.name);
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(absolute, relative);
+      else if (entry.isFile()) {
+        const size = statSync(absolute).size;
+        fileCount += 1;
+        totalBytes += size;
+        if (fileCount > 100_000 || totalBytes > 512 * 1024 * 1024) {
+          throw new ReviewEvidenceError("LIMIT_EXCEEDED", "Package content exceeds the locking limit.");
+        }
+        hash.update(`file\0${relative}\0`);
+        hash.update(readFileSync(absolute));
+        hash.update("\0");
+      } else if (entry.isSymbolicLink()) {
+        hash.update(`link\0${relative}\0${readlinkSync(absolute)}\0`);
+      }
+    }
+  };
+  visit(realpathSync(root), "");
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function packageName(root: string): string {
+  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {name?: unknown};
+  if (typeof manifest.name !== "string") {
+    throw new ReviewEvidenceError("INVALID_INPUT", "Toolchain package has no stable name.");
+  }
+  return manifest.name;
+}
+
+function lockedToolchainRoots(): readonly LockedToolchainRoot[] {
+  const packageRoots: readonly [string, string?][] = [
+    [WORKERS_TYPES_ROOT],
+    [CONTRACTORS_ROOT, resolve(CONTRACTORS_ROOT, "dist")],
+    [ESBUILD_ROOT],
+    [ESBUILD_NATIVE_ROOT!],
+    [TYPESCRIPT_ROOT],
+  ];
+  return packageRoots.map(([root, contentRoot]) => ({
+    name: packageName(root),
+    root,
+    ...(contentRoot ? {contentRoot} : {}),
+    identity: hashTree(contentRoot ?? root),
+  }));
 }
 
 function resolveInstalledPackageRoot(name: string, issuerRoot: string): string {
@@ -80,7 +175,13 @@ function resolvePackageClosure(direct: Readonly<Record<string, string>>): Resolv
       throw new ReviewEvidenceError("LIMIT_EXCEEDED", "Dependency closure exceeds the protocol limit.");
     }
     // Reserve the node before recursion so dependency cycles terminate.
-    entries.set(id, {name, version: manifest.version, root, dependencies: []});
+    entries.set(id, {
+      name,
+      version: manifest.version,
+      root,
+      dependencies: [],
+      packageContentHash: "",
+    });
     const required = Object.keys(manifest.dependencies ?? {}).toSorted();
     const optional = Object.keys(manifest.optionalDependencies ?? {}).toSorted();
     const edges = required.map(dependency => visit(dependency, root));
@@ -96,6 +197,7 @@ function resolvePackageClosure(direct: Readonly<Record<string, string>>): Resolv
       version: manifest.version,
       root,
       dependencies: [...new Set(edges)].toSorted(),
+      packageContentHash: hashTree(root),
     });
     return id;
   };
@@ -120,6 +222,7 @@ class NodeReviewBuildRunner implements ReviewBuildRunner {
       throw new ReviewEvidenceError("ISOLATION_FAILED", "Review runner was already disposed.");
     }
     const packageClosure = resolvePackageClosure(request.inputs.dependencies);
+    const toolchainRoots = lockedToolchainRoots();
     const readableRoots = [
       WORKER_PATH,
       resolve(PACKAGE_ROOT, "package.json"),
@@ -134,13 +237,16 @@ class NodeReviewBuildRunner implements ReviewBuildRunner {
       ESBUILD_BINARY,
       process.execPath,
       ...packageClosure.flatMap(entry => [entry.root, join(entry.root, "node_modules")]),
+      ...toolchainRoots.flatMap(entry => [entry.root, entry.contentRoot].filter(Boolean) as string[]),
     ];
-    const child = spawn(process.execPath, [
+    const nodeArgs = [
       "--permission",
       "--allow-child-process",
       ...readableRoots.map(path => `--allow-fs-read=${path}`),
       WORKER_PATH,
-    ], {
+    ];
+    const [executable, args] = isolatedNodeCommand(nodeArgs);
+    const child = spawn(executable, args, {
       cwd: PACKAGE_ROOT,
       env: {
         ESBUILD_BINARY_PATH: ESBUILD_BINARY,
@@ -167,7 +273,10 @@ class NodeReviewBuildRunner implements ReviewBuildRunner {
       role: this.role,
       producerIdentity: this.options.producerIdentity,
       conformanceProbe: this.options.conformanceProbe,
+      conformanceNetworkUrl: this.options.conformanceNetworkUrl,
       packageClosure,
+      toolchainRoots,
+      nodeIdentity: `sha256:${createHash("sha256").update(readFileSync(process.execPath)).digest("hex")}`,
       inputs: request.inputs,
     }));
     const exitCode = await new Promise<number | null>((resolveExit, reject) => {

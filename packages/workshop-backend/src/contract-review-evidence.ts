@@ -64,6 +64,7 @@ function bundleBlobReferences(bundle: ContractReviewBundle): readonly ReviewBlob
     ...bundle.originalModules.map(module => module.blob),
     bundle.source.declaration,
     bundle.build.dependencyLock,
+    bundle.build.directDependencyRequests,
     bundle.build.toolchain,
     bundle.build.recipe,
     bundle.build.trace,

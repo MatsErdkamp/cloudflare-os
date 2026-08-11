@@ -55,10 +55,17 @@ export interface ReviewToolchainIdentity {
 /** The registered deterministic recipe executed by both trusted runners. */
 export interface ReviewBuildRecipe {
   readonly name: string;
+  readonly compatibilityDate: string;
+  readonly compatibilityFlags: readonly string[];
   readonly target: string;
   readonly platform: string;
   readonly moduleFormat: string;
   readonly externals: readonly string[];
+  readonly publicRoot: "ContractBinding";
+  readonly authoringAbiHash: string;
+  readonly runtimeHarnessHash: string;
+  readonly runtimeModuleSetHash: string;
+  readonly runtimeProfileHash: string;
 }
 
 /** Trusted isolation evidence for one fresh build environment. */
@@ -78,6 +85,10 @@ export interface ReviewBuildRunResult {
   readonly dependencyLock: ReviewDependencyLock;
   readonly toolchain: ReviewToolchainIdentity;
   readonly recipe: ReviewBuildRecipe;
+  readonly directDependencyRequests: readonly Readonly<{
+    readonly name: string;
+    readonly version: string;
+  }>[];
 }
 
 /** A fresh runner which owns no Workspace or provider capability. */
@@ -107,9 +118,14 @@ export type ReviewBaseline =
 export interface BuildContractReviewEvidenceInput {
   readonly inputs: ContractBuildInputs;
   readonly submittedProvenance: ReviewSubmittedProvenance;
-  readonly policySnapshot: unknown;
+  readonly policySnapshot: Readonly<{
+    readonly allowedPackages?: readonly string[];
+    readonly deniedPackages?: readonly string[];
+    readonly maxBundleBytes?: number;
+  }>;
   readonly baseline: ReviewBaseline;
   readonly baselineBundle?: ContractReviewBundle;
+  readonly baselineBlobs?: ReadonlyMap<string, Uint8Array>;
   readonly comparisonGenerator: Readonly<{readonly name: string; readonly identity: string}>;
 }
 
@@ -120,6 +136,7 @@ export interface ReviewBuildAttestation extends ReviewRunnerIsolation {
   readonly publicDeclarationHash: string;
   readonly sourceDeclarationHash: string;
   readonly dependencyLockHash: string;
+  readonly directDependencyRequestsHash: string;
   readonly toolchainHash: string;
   readonly recipeHash: string;
   readonly buildTraceHash: string;
@@ -143,6 +160,7 @@ export interface ContractReviewBundle {
     readonly mainModule: string;
     readonly inputSetHash: string;
     readonly dependencyLock: ReviewBlobReference;
+    readonly directDependencyRequests: ReviewBlobReference;
     readonly toolchain: ReviewBlobReference;
     readonly recipe: ReviewBlobReference;
     readonly trace: ReviewBlobReference;
@@ -169,6 +187,24 @@ export interface ReviewComparisonSection {
   readonly change: "added" | "removed" | "modified" | "unchanged";
   readonly oldHash?: string;
   readonly newHash?: string;
+  readonly items: readonly ReviewComparisonItem[];
+}
+
+/** One exact item-level review change with hashes retained when presentation is truncated. */
+export interface ReviewComparisonItem {
+  readonly key: string;
+  readonly kind: "text" | "field" | "dependency" | "trace" | "toolchain" | "governance" | "attestation";
+  readonly change: "added" | "removed" | "modified" | "unchanged";
+  readonly oldHash?: string;
+  readonly newHash?: string;
+  readonly patch?: string;
+  readonly patchTruncated?: true;
+  readonly exportedSurface?: Readonly<{
+    readonly oldHash?: string;
+    readonly newHash?: string;
+    readonly added: readonly string[];
+    readonly removed: readonly string[];
+  }>;
 }
 
 /** The sole current, unversioned Review Comparison representation. */

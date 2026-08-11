@@ -120,8 +120,26 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
   const publicDeclaration = await blob(blobs, artifact.publicTypes, "text/typescript");
   const sourceDeclaration = await blob(blobs, SOURCE_TYPES, "text/typescript");
   const dependencyLock = await blob(blobs, "{\"entries\":[]}", "application/json");
-  const toolchain = await blob(blobs, "{\"components\":[]}", "application/json");
-  const recipe = await blob(blobs, "{\"name\":\"contract-current\"}", "application/json");
+  const directDependencyRequests = await blob(blobs, "[]", "application/json");
+  const toolchain = await blob(blobs, canonicalReviewJson({components: [
+    {name: "@gadgets/contractors", identity: HASH},
+    {name: "esbuild", identity: HASH},
+    {name: "typescript", identity: HASH},
+  ]}), "application/json");
+  const recipe = await blob(blobs, canonicalReviewJson({
+    name: "contract-current",
+    compatibilityDate: artifact.runtimeProfile.compatibilityDate,
+    compatibilityFlags: artifact.runtimeProfile.compatibilityFlags,
+    target: "es2022",
+    platform: "neutral",
+    moduleFormat: "esm",
+    externals: ["cloudflare:workers"],
+    publicRoot: artifact.publicRootType,
+    authoringAbiHash: artifact.runtimeProfile.authoringAbi.declarationHash,
+    runtimeHarnessHash: artifact.runtimeProfile.runtimeHarnessHash,
+    runtimeModuleSetHash: artifact.runtimeProfile.runtimeModuleSetHash,
+    runtimeProfileHash: artifact.runtimeProfileHash,
+  }), "application/json");
   const trace = await blob(blobs, canonicalReviewJson(candidate.trace), "application/json");
   const policySnapshot = await blob(blobs, "{}", "application/json");
   const bundle: ContractReviewBundle = {
@@ -147,6 +165,7 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
       mainModule: "contract.ts",
       inputSetHash: HASH,
       dependencyLock,
+      directDependencyRequests,
       toolchain,
       recipe,
       trace,
@@ -169,6 +188,7 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
       publicDeclarationHash: publicDeclaration.hash,
       sourceDeclarationHash: sourceDeclaration.hash,
       dependencyLockHash: dependencyLock.hash,
+      directDependencyRequestsHash: directDependencyRequests.hash,
       toolchainHash: toolchain.hash,
       recipeHash: recipe.hash,
       buildTraceHash: trace.hash,
@@ -184,6 +204,7 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
       publicDeclarationHash: publicDeclaration.hash,
       sourceDeclarationHash: sourceDeclaration.hash,
       dependencyLockHash: dependencyLock.hash,
+      directDependencyRequestsHash: directDependencyRequests.hash,
       toolchainHash: toolchain.hash,
       recipeHash: recipe.hash,
       buildTraceHash: trace.hash,
@@ -202,7 +223,7 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
     baseline: {kind: "none"},
     candidateBundleHash: bundleHash,
     generator: {name: "comparison", identity: HASH},
-    sections: sectionNames.map(name => ({name, change: "added", newHash: HASH})),
+    sections: sectionNames.map(name => ({name, change: "added", newHash: HASH, items: []})),
   };
   const comparisonJson = canonicalReviewJson(comparison);
   const comparisonHash = await hashReviewValue(new TextEncoder().encode(comparisonJson));

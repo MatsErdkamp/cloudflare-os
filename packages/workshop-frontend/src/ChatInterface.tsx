@@ -6164,7 +6164,7 @@ function ChatInterface({
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-foreground">Install {msg.title}</span>
+                <span className="font-medium text-foreground">Review {msg.title}</span>
                 <span className={`text-[12px] font-medium ${statusClass}`}>{status}</span>
               </div>
               <p className="mt-1 text-[13px] leading-[18px]">
@@ -6231,7 +6231,7 @@ function ChatInterface({
                 <Button variant="ghost" type="button" disabled={isProc}
                   onClick={() => handleAcceptContract(msg.requestId)}
                   className="cursor-pointer rounded-md bg-primary px-3 py-1 font-medium text-white hover:opacity-90 disabled:opacity-40">
-                  Install
+                  Approve artifact
                 </Button>
               </div>
             )}

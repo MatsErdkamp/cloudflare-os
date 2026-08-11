@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { RpcTarget } from "cloudflare:workers";
 
-import { defineContract } from "../../contractors/src/authoring/define-contract.js";
-import type { ContractContext } from "../../contractors/src/authoring/contract-context.js";
+import {
+  defineContract,
+  type ContractContext,
+} from "../../contractors/src/authoring/index.js";
 
 class SecretCapability extends RpcTarget {
   reveal(): string { return "source authority"; }
@@ -86,14 +88,29 @@ const createEmailContract = defineContract<FakeEmailSource, PublicEmailContract>
 function context(source: FakeEmailSource): ContractContext<FakeEmailSource> {
   return {
     source,
-    policy: {
-      approval: {
-        async manual(_description, operation) { return operation({source}); },
-        async require() {},
-      },
+    approval: {
+      async manual(_description, operation) { return operation({source}); },
+      async require() {},
     },
     storage: {} as DurableObjectStorage,
-    caller: {from: "gadget", gadgetId: 7},
+    invocation: {
+      invocationId: "generativity-invocation",
+      consumerId: "gadget:7",
+      bindingId: "gadget:7:contract:11",
+      contractInstanceId: "contract:11",
+      artifactHash: "sha256:test",
+      runtimeProfileHash: "sha256:test-runtime-profile",
+      methodName: "fixture",
+      startedAt: 1,
+      authoritySnapshotDigest: "sha256:test-authority",
+      generations: {
+        consumer: 1,
+        binding: 1,
+        contractInstance: 1,
+        environment: 1,
+        authority: 1,
+      },
+    },
     contract: {id: "11", artifactHash: "sha256:test"},
     restore() { throw new Error("not used"); },
   };

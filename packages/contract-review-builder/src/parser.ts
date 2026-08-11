@@ -170,11 +170,11 @@ function provenance(value: unknown): ReviewSubmittedProvenance {
 function attestation(value: unknown): ReviewBuildAttestation {
   const item = exact(value, [
     "artifactHash", "buildTraceHash", "dependencyLockHash", "environmentIdentity",
-    "inputSetHash", "mutableState", "network", "networkAttempts", "producerIdentity",
+    "directDependencyRequestsHash", "inputSetHash", "mutableState", "network", "networkAttempts", "producerIdentity",
     "publicDeclarationHash", "recipeHash", "role", "sourceDeclarationHash", "toolchainHash",
   ]);
   for (const key of [
-    "artifactHash", "buildTraceHash", "dependencyLockHash", "inputSetHash",
+    "artifactHash", "buildTraceHash", "dependencyLockHash", "directDependencyRequestsHash", "inputSetHash",
     "publicDeclarationHash", "recipeHash", "sourceDeclarationHash", "toolchainHash",
   ]) {
     if (!isReviewHash(item[key])) {
@@ -214,6 +214,7 @@ function collectBlobReferences(bundle: ContractReviewBundle): ReviewBlobReferenc
     ...bundle.originalModules.map(item => item.blob),
     bundle.source.declaration,
     bundle.build.dependencyLock,
+    bundle.build.directDependencyRequests,
     bundle.build.toolchain,
     bundle.build.recipe,
     bundle.build.trace,
@@ -240,7 +241,7 @@ export function parseContractReviewBundle(
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid Source type hash.");
   }
   const build = exact(root.build, [
-    "dependencyLock", "inputSetHash", "mainModule", "policySnapshot", "recipe", "toolchain", "trace",
+    "dependencyLock", "directDependencyRequests", "inputSetHash", "mainModule", "policySnapshot", "recipe", "toolchain", "trace",
   ]);
   if (!isReviewHash(build.inputSetHash)) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid build input-set hash.");
@@ -266,6 +267,7 @@ export function parseContractReviewBundle(
       mainModule: boundedString(build.mainModule, "main module", REVIEW_LIMITS.pathBytes),
       inputSetHash: build.inputSetHash,
       dependencyLock: blobReference(build.dependencyLock),
+      directDependencyRequests: blobReference(build.directDependencyRequests),
       toolchain: blobReference(build.toolchain),
       recipe: blobReference(build.recipe),
       trace: blobReference(build.trace),
@@ -343,7 +345,7 @@ export async function verifyContractReviewBlobs(
       `sha256:${artifact.sourceTypeHash}` !== bundle.source.declaration.hash) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Declaration evidence mismatches the Artifact.");
   }
-  const parseCanonicalBlob = (reference: ReviewBlobReference): Record<string, unknown> => {
+  const parseCanonicalBlob = (reference: ReviewBlobReference): unknown => {
     const bytes = blobs.get(reference.hash);
     if (!bytes) throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Build evidence is missing.");
     const json = decoder.decode(bytes);
@@ -351,26 +353,102 @@ export async function verifyContractReviewBlobs(
     if (canonicalReviewJson(value) !== json) {
       throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Build evidence is not canonical.");
     }
-    return record(value);
+    return value;
   };
   const lock = exact(parseCanonicalBlob(bundle.build.dependencyLock), ["entries"]);
   if (!Array.isArray(lock.entries) || lock.entries.length > REVIEW_LIMITS.dependencyEntries) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Dependency lock evidence is invalid.");
+  }
+  const directRequests = parseCanonicalBlob(bundle.build.directDependencyRequests);
+  if (!Array.isArray(directRequests) || directRequests.length > REVIEW_LIMITS.dependencyEntries) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Direct dependency request evidence is invalid.");
+  }
+  const parsedRequests = directRequests.map((value) => {
+    const request = exact(value, ["name", "version"]);
+    return {
+      name: boundedString(request.name, "dependency request name"),
+      version: boundedString(request.version, "dependency request version"),
+    };
+  });
+  if (canonicalReviewJson(parsedRequests) !== canonicalReviewJson(
+    artifact.dependencies.map(({name, version}) => ({name, version})),
+  )) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Direct dependency requests mismatch the Artifact.");
   }
   const trace = exact(parseCanonicalBlob(bundle.build.trace), ["artifactHash", "entries"]);
   if (trace.artifactHash !== artifact.hash || !Array.isArray(trace.entries) ||
       trace.entries.length > REVIEW_LIMITS.buildTraceEntries) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Build trace evidence is invalid.");
   }
-  parseCanonicalBlob(bundle.build.toolchain);
-  parseCanonicalBlob(bundle.build.recipe);
-  parseCanonicalBlob(bundle.build.policySnapshot);
+  const toolchain = exact(parseCanonicalBlob(bundle.build.toolchain), ["components"]);
+  if (!Array.isArray(toolchain.components)) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Toolchain evidence is invalid.");
+  }
+  const componentNames = toolchain.components.map(value => {
+    const component = exact(value, ["identity", "name"]);
+    if (!isReviewHash(component.identity)) {
+      throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Toolchain identity is invalid.");
+    }
+    return boundedString(component.name, "toolchain component");
+  });
+  for (const required of ["@gadgets/contractors", "esbuild", "typescript"]) {
+    if (!componentNames.includes(required)) {
+      throw new ReviewEvidenceError("CORRUPT_EVIDENCE", `Toolchain is missing ${required}.`);
+    }
+  }
+  const recipe = exact(parseCanonicalBlob(bundle.build.recipe), [
+    "authoringAbiHash", "compatibilityDate", "compatibilityFlags", "externals", "moduleFormat",
+    "name", "platform", "publicRoot", "runtimeHarnessHash", "runtimeModuleSetHash",
+    "runtimeProfileHash", "target",
+  ]);
+  const expectedRecipe = {
+    name: "contract-current",
+    compatibilityDate: artifact.runtimeProfile.compatibilityDate,
+    compatibilityFlags: artifact.runtimeProfile.compatibilityFlags,
+    target: "es2022",
+    platform: "neutral",
+    moduleFormat: "esm",
+    externals: ["cloudflare:workers"],
+    publicRoot: artifact.publicRootType,
+    authoringAbiHash: artifact.runtimeProfile.authoringAbi.declarationHash,
+    runtimeHarnessHash: artifact.runtimeProfile.runtimeHarnessHash,
+    runtimeModuleSetHash: artifact.runtimeProfile.runtimeModuleSetHash,
+    runtimeProfileHash: artifact.runtimeProfileHash,
+  };
+  if (canonicalReviewJson(recipe) !== canonicalReviewJson(expectedRecipe)) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Build recipe mismatches the Artifact runtime.");
+  }
+  const policyValue = record(parseCanonicalBlob(bundle.build.policySnapshot));
+  const policy = exact(policyValue, [
+    ...(policyValue.allowedPackages === undefined ? [] : ["allowedPackages"]),
+    ...(policyValue.deniedPackages === undefined ? [] : ["deniedPackages"]),
+    ...(policyValue.maxBundleBytes === undefined ? [] : ["maxBundleBytes"]),
+  ]);
+  const allowed = policy.allowedPackages;
+  const denied = policy.deniedPackages;
+  if ((allowed !== undefined && (!Array.isArray(allowed) ||
+      !allowed.every(value => typeof value === "string"))) ||
+      (denied !== undefined && (!Array.isArray(denied) ||
+      !denied.every(value => typeof value === "string"))) ||
+      (policy.maxBundleBytes !== undefined && (!Number.isSafeInteger(policy.maxBundleBytes) ||
+      (policy.maxBundleBytes as number) < 1))) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Deployment policy evidence is invalid.");
+  }
+  const dependencyNames = artifact.dependencies.map(dependency => dependency.name);
+  if (dependencyNames.some(name => (allowed && !(allowed as string[]).includes(name)) ||
+      (denied as string[] | undefined)?.includes(name)) ||
+      (typeof policy.maxBundleBytes === "number" &&
+      Object.values(artifact.modules).reduce((sum, module) => sum + reviewUtf8Bytes(module), 0) >
+      policy.maxBundleBytes)) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Artifact violates its recorded deployment policy.");
+  }
   for (const attestation of bundle.attestations) {
     if (attestation.artifactHash !== artifact.hash ||
         attestation.inputSetHash !== bundle.build.inputSetHash ||
         attestation.publicDeclarationHash !== bundle.artifact.publicDeclaration.hash ||
         attestation.sourceDeclarationHash !== bundle.source.declaration.hash ||
         attestation.dependencyLockHash !== bundle.build.dependencyLock.hash ||
+        attestation.directDependencyRequestsHash !== bundle.build.directDependencyRequests.hash ||
         attestation.toolchainHash !== bundle.build.toolchain.hash ||
         attestation.recipeHash !== bundle.build.recipe.hash ||
         attestation.buildTraceHash !== bundle.build.trace.hash) {
@@ -394,19 +472,65 @@ export function parseReviewComparison(json: string): ReviewComparison {
   if (!Array.isArray(root.sections) || root.sections.length !== SECTION_NAMES.length) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid Review Comparison sections.");
   }
+  let patchBytes = 0;
   const sections = root.sections.map((value, index): ReviewComparisonSection => {
     const item = record(value);
-    const keys = ["change", "name", ...(item.oldHash === undefined ? [] : ["oldHash"]),
+    const keys = ["change", "items", "name", ...(item.oldHash === undefined ? [] : ["oldHash"]),
       ...(item.newHash === undefined ? [] : ["newHash"])];
     exact(item, keys);
     if (item.name !== SECTION_NAMES[index] ||
         !["added", "removed", "modified", "unchanged"].includes(item.change as string) ||
         (item.oldHash !== undefined && !isReviewHash(item.oldHash)) ||
-        (item.newHash !== undefined && !isReviewHash(item.newHash))) {
+        (item.newHash !== undefined && !isReviewHash(item.newHash)) || !Array.isArray(item.items)) {
       throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid comparison section.");
     }
-    return item as unknown as ReviewComparisonSection;
+    const items = item.items.map(value => {
+      const comparisonItem = record(value);
+      exact(comparisonItem, [
+        "change", "key", "kind",
+        ...(comparisonItem.oldHash === undefined ? [] : ["oldHash"]),
+        ...(comparisonItem.newHash === undefined ? [] : ["newHash"]),
+        ...(comparisonItem.patch === undefined ? [] : ["patch"]),
+        ...(comparisonItem.patchTruncated === undefined ? [] : ["patchTruncated"]),
+        ...(comparisonItem.exportedSurface === undefined ? [] : ["exportedSurface"]),
+      ]);
+      if (!["text", "field", "dependency", "trace", "toolchain", "governance", "attestation"]
+        .includes(comparisonItem.kind as string) ||
+          !["added", "removed", "modified", "unchanged"]
+            .includes(comparisonItem.change as string) ||
+          (comparisonItem.oldHash !== undefined && !isReviewHash(comparisonItem.oldHash)) ||
+          (comparisonItem.newHash !== undefined && !isReviewHash(comparisonItem.newHash)) ||
+          (comparisonItem.patchTruncated !== undefined && comparisonItem.patchTruncated !== true)) {
+        throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid comparison item.");
+      }
+      boundedString(comparisonItem.key, "comparison item key", REVIEW_LIMITS.pathBytes * 4);
+      if (comparisonItem.patch !== undefined) {
+        if (typeof comparisonItem.patch !== "string") {
+          throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid comparison patch.");
+        }
+        patchBytes += reviewUtf8Bytes(comparisonItem.patch);
+      }
+      if (comparisonItem.exportedSurface !== undefined) {
+        const surface = exact(comparisonItem.exportedSurface, [
+          "added", "removed",
+          ...(record(comparisonItem.exportedSurface).oldHash === undefined ? [] : ["oldHash"]),
+          ...(record(comparisonItem.exportedSurface).newHash === undefined ? [] : ["newHash"]),
+        ]);
+        if (!Array.isArray(surface.added) || !Array.isArray(surface.removed) ||
+            !surface.added.every(value => typeof value === "string") ||
+            !surface.removed.every(value => typeof value === "string") ||
+            (surface.oldHash !== undefined && !isReviewHash(surface.oldHash)) ||
+            (surface.newHash !== undefined && !isReviewHash(surface.newHash))) {
+          throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid exported-surface comparison.");
+        }
+      }
+      return comparisonItem;
+    });
+    return {...item, items} as unknown as ReviewComparisonSection;
   });
+  if (patchBytes > REVIEW_LIMITS.renderedComparisonPatchBytes) {
+    throw new ReviewEvidenceError("LIMIT_EXCEEDED", "Rendered comparison patches exceed the limit.");
+  }
   return freezeReviewValue({
     baseline: baseline(root.baseline),
     candidateBundleHash: root.candidateBundleHash,

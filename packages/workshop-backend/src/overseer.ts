@@ -8420,6 +8420,12 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     return profilePromise;
   }
 
+  #requireArtifactDecisionAuthority(): void {
+    if (!this.isOwner || this.impl.ownerId === undefined) {
+      throw new Error("Authority unavailable.");
+    }
+  }
+
   async getMetadata(): Promise<GadgetMetadata> {
     let result: GadgetMetadata = {
       id: this.impl.ctx.id.toString(),
@@ -9183,6 +9189,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async acceptContractRequest(requestId: string): Promise<void> {
+    this.#requireArtifactDecisionAuthority();
     let msg = this.#findContractRequest(requestId);
     if (msg.state === "approved" || msg.state === "accepted") return;
     if (msg.state !== "pending") {
@@ -9248,6 +9255,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
               evidence: "complete",
               decision: "approved",
               decidedBy: `${profile.type}:${profile.id}`,
+              permissionGeneration: 1,
               lifecycle: "active",
             },
           });
@@ -9295,6 +9303,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async denyContractRequest(requestId: string): Promise<void> {
+    this.#requireArtifactDecisionAuthority();
     let msg = this.#findContractRequest(requestId);
     if (msg.state !== "pending") {
       throw new Error(`Contract request is not pending: ${requestId}`);
@@ -9338,6 +9347,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
           evidence: "complete",
           decision: "rejected",
           decidedBy: `${profile.type}:${profile.id}`,
+          permissionGeneration: 1,
           lifecycle: "revoked",
         },
       });

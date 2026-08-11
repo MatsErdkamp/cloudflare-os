@@ -1531,10 +1531,10 @@ export interface Overseer extends RpcTarget {
   // the turn stays ended so the user can decide what to tell the agent to do instead.
   denyConnectionRequest(requestId: string): Promise<void>;
 
-  /** Accept a pending Contract proposal after human review and install its exact artifact. */
+  /** Record an owner-authorized Artifact Approval after review; this does not install it. */
   acceptContractRequest(requestId: string): Promise<void>;
 
-  /** Deny a pending Contract proposal without installing authority. */
+  /** Record an owner-authorized Artifact rejection without creating runtime authority. */
   denyContractRequest(requestId: string): Promise<void>;
 
   /** List durable Contract approval operations, including provider child action IDs. */

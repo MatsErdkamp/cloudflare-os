@@ -88,6 +88,13 @@ function validateRun(role: "candidate" | "verifier", result: ReviewBuildRunResul
   }
   validateDependencyLock(result.dependencyLock);
   validateToolchain(result.toolchain);
+  assertSortedUnique(
+    result.directDependencyRequests.map(request => request.name),
+    "Direct dependency requests",
+  );
+  if (result.directDependencyRequests.some(request => !request.name || !request.version)) {
+    throw new ReviewEvidenceError("INVALID_INPUT", "Direct dependency request is invalid.");
+  }
 }
 
 async function addBlob(
@@ -110,6 +117,7 @@ async function attestation(
   result: ReviewBuildRunResult,
   inputSetHash: string,
   dependencyLockHash: string,
+  directDependencyRequestsHash: string,
   toolchainHash: string,
   recipeHash: string,
   buildTraceHash: string,
@@ -123,6 +131,7 @@ async function attestation(
     publicDeclarationHash,
     sourceDeclarationHash,
     dependencyLockHash,
+    directDependencyRequestsHash,
     toolchainHash,
     recipeHash,
     buildTraceHash,
@@ -140,6 +149,13 @@ export async function buildContractReviewEvidence(
   input: BuildContractReviewEvidenceInput,
   runnerFactory: ReviewBuildRunnerFactory,
 ): Promise<BuiltContractReviewEvidence> {
+  if (canonicalReviewJson(input.policySnapshot) !==
+      canonicalReviewJson(input.inputs.organizationPolicy ?? {})) {
+    throw new ReviewEvidenceError(
+      "INVALID_INPUT",
+      "Deployment policy snapshot does not match the policy evaluated by the compiler.",
+    );
+  }
   const candidateRunner = runnerFactory.create({
     role: "candidate",
     network: "disabled",
@@ -163,6 +179,14 @@ export async function buildContractReviewEvidence(
   }
   validateRun("candidate", candidateRun);
   validateRun("verifier", verifierRun);
+  for (const [role, run] of [["candidate", candidateRun], ["verifier", verifierRun]] as const) {
+    if (canonicalReviewJson(run.candidate.inputs) !== canonicalReviewJson(input.inputs)) {
+      throw new ReviewEvidenceError(
+        "NON_REPRODUCIBLE",
+        `${role} runner did not compile the exact declared input set.`,
+      );
+    }
+  }
   if (candidateRun.isolation.environmentIdentity === verifierRun.isolation.environmentIdentity) {
     throw new ReviewEvidenceError("ISOLATION_FAILED", "Candidate and verifier shared mutable build state.");
   }
@@ -174,6 +198,8 @@ export async function buildContractReviewEvidence(
   const compared = [
     ["Artifact", candidateRun.candidate.artifact, verifierRun.candidate.artifact],
     ["dependency lock", candidateRun.dependencyLock, verifierRun.dependencyLock],
+    ["direct dependency requests", candidateRun.directDependencyRequests,
+      verifierRun.directDependencyRequests],
     ["toolchain", candidateRun.toolchain, verifierRun.toolchain],
     ["recipe", candidateRun.recipe, verifierRun.recipe],
     ["build trace", candidateRun.candidate.trace, verifierRun.candidate.trace],
@@ -213,6 +239,11 @@ export async function buildContractReviewEvidence(
     canonicalReviewJson(candidateRun.dependencyLock),
     "application/json",
   );
+  const directDependencyRequests = await addBlob(
+    blobs,
+    canonicalReviewJson(candidateRun.directDependencyRequests),
+    "application/json",
+  );
   const toolchain = await addBlob(
     blobs,
     canonicalReviewJson(candidateRun.toolchain),
@@ -234,6 +265,7 @@ export async function buildContractReviewEvidence(
     candidateRun,
     inputSetHash,
     dependencyLock.hash,
+    directDependencyRequests.hash,
     toolchain.hash,
     recipe.hash,
     trace.hash,
@@ -244,6 +276,7 @@ export async function buildContractReviewEvidence(
     verifierRun,
     inputSetHash,
     dependencyLock.hash,
+    directDependencyRequests.hash,
     toolchain.hash,
     recipe.hash,
     trace.hash,
@@ -267,6 +300,7 @@ export async function buildContractReviewEvidence(
       mainModule: input.inputs.mainModule,
       inputSetHash,
       dependencyLock,
+      directDependencyRequests,
       toolchain,
       recipe,
       trace,
@@ -282,11 +316,16 @@ export async function buildContractReviewEvidence(
   const bundleHash = await hashReviewValue(encoder.encode(bundleJson));
   const parsedBundle = parseContractReviewBundle(bundleJson);
   await verifyContractReviewBlobs(parsedBundle, blobs);
+  if (input.baselineBundle && input.baselineBlobs) {
+    await verifyContractReviewBlobs(input.baselineBundle, input.baselineBlobs);
+  }
 
   const comparison = await createReviewComparison(
     input.baseline,
     input.baselineBundle,
+    input.baselineBlobs,
     parsedBundle,
+    blobs,
     bundleHash,
     input.comparisonGenerator,
   );

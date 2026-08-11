@@ -1,8 +1,11 @@
-import {hashReviewValue, ReviewEvidenceError} from "./canonical.js";
+import {canonicalReviewJson, hashReviewValue, ReviewEvidenceError} from "./canonical.js";
+import {REVIEW_LIMITS} from "./limits.js";
 import type {
   ContractReviewBundle,
   ReviewBaseline,
+  ReviewBlobReference,
   ReviewComparison,
+  ReviewComparisonItem,
   ReviewComparisonSection,
 } from "./types.js";
 
@@ -17,19 +20,250 @@ const SECTION_NAMES = [
   "originAndAuthorship",
   "reproducibility",
 ] as const;
+type SectionName = typeof SECTION_NAMES[number];
+type Change = ReviewComparisonItem["change"];
+type ItemKind = ReviewComparisonItem["kind"];
 
-function sectionValue(bundle: ContractReviewBundle, name: typeof SECTION_NAMES[number]): unknown {
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+// The manifest itself is capped at 256 KiB, so rendered patches use the smaller bound in practice.
+const PATCH_MANIFEST_BUDGET = Math.min(REVIEW_LIMITS.renderedComparisonPatchBytes, 128 * 1024);
+
+function requireBlob(
+  blobs: ReadonlyMap<string, Uint8Array>,
+  reference: ReviewBlobReference,
+): Uint8Array {
+  const value = blobs.get(reference.hash);
+  if (!value || value.byteLength !== reference.bytes) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", `Comparison blob ${reference.hash} is missing.`);
+  }
+  return value;
+}
+
+function textBlob(blobs: ReadonlyMap<string, Uint8Array>, reference: ReviewBlobReference): string {
+  return decoder.decode(requireBlob(blobs, reference));
+}
+
+function jsonBlob(blobs: ReadonlyMap<string, Uint8Array>, reference: ReviewBlobReference): unknown {
+  const text = textBlob(blobs, reference);
+  const value = JSON.parse(text) as unknown;
+  if (canonicalReviewJson(value) !== text) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Comparison JSON blob is not canonical.");
+  }
+  return value;
+}
+
+function change(oldHash: string | undefined, newHash: string | undefined): Change {
+  if (oldHash === undefined) return "added";
+  if (newHash === undefined) return "removed";
+  return oldHash === newHash ? "unchanged" : "modified";
+}
+
+function exactPatch(oldText: string | undefined, newText: string | undefined): string {
+  const oldLines = oldText === undefined ? [] : oldText.split("\n");
+  const newLines = newText === undefined ? [] : newText.split("\n");
+  return [
+    "--- old",
+    "+++ new",
+    ...oldLines.map(line => `-${line}`),
+    ...newLines.map(line => `+${line}`),
+  ].join("\n");
+}
+
+function truncatePatch(patch: string, remainingBytes: number): {patch?: string; truncated?: true} {
+  if (remainingBytes <= 0) return {truncated: true};
+  if (encoder.encode(patch).byteLength <= remainingBytes) return {patch};
+  let low = 0;
+  let high = patch.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (encoder.encode(patch.slice(0, middle)).byteLength <= remainingBytes) low = middle;
+    else high = middle - 1;
+  }
+  return {patch: patch.slice(0, low), truncated: true};
+}
+
+function exportedSurface(text: string): readonly string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let braces = 0;
+  let parentheses = 0;
+  let brackets = 0;
+  let quote: "\"" | "'" | "`" | undefined;
+  let lineComment = false;
+  let blockComment = false;
+  const finish = (end: number) => {
+    const statement = text.slice(start, end).trim();
+    if (statement) statements.push(statement);
+    start = end;
+  };
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    const next = text[index + 1];
+    if (lineComment) {
+      if (character === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (character === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "/" && next === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "\"" || character === "'" || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "{") braces += 1;
+    else if (character === "}") braces -= 1;
+    else if (character === "(") parentheses += 1;
+    else if (character === ")") parentheses -= 1;
+    else if (character === "[") brackets += 1;
+    else if (character === "]") brackets -= 1;
+    const topLevel = braces === 0 && parentheses === 0 && brackets === 0;
+    if (topLevel && (character === ";" || character === "}")) finish(index + 1);
+  }
+  finish(text.length);
+  const declaration = /^(?:export\s+)?(?:declare\s+)?(?:interface|type|class|enum|namespace|module|function|const)\b|^export\s*\{/;
+  const candidates = statements.filter(statement => declaration.test(statement));
+  const hasExplicitExports = candidates.some(statement => /^export\b/.test(statement));
+  return candidates.filter(statement => !hasExplicitExports || /^export\b/.test(statement)).toSorted();
+}
+
+async function textComparisonItem(
+  key: string,
+  oldReference: ReviewBlobReference | undefined,
+  newReference: ReviewBlobReference | undefined,
+  oldBlobs: ReadonlyMap<string, Uint8Array> | undefined,
+  newBlobs: ReadonlyMap<string, Uint8Array>,
+  includeSurface: boolean,
+  patchBudget: {remaining: number},
+): Promise<ReviewComparisonItem> {
+  const oldText = oldReference && oldBlobs ? textBlob(oldBlobs, oldReference) : undefined;
+  const newText = newReference ? textBlob(newBlobs, newReference) : undefined;
+  const fullPatch = exactPatch(oldText, newText);
+  const rendered = truncatePatch(fullPatch, patchBudget.remaining);
+  if (rendered.patch) patchBudget.remaining -= encoder.encode(rendered.patch).byteLength;
+  const oldSurface = includeSurface && oldText !== undefined ? exportedSurface(oldText) : undefined;
+  const newSurface = includeSurface && newText !== undefined ? exportedSurface(newText) : undefined;
+  return {
+    key,
+    kind: "text",
+    change: change(oldReference?.hash, newReference?.hash),
+    ...(oldReference ? {oldHash: oldReference.hash} : {}),
+    ...(newReference ? {newHash: newReference.hash} : {}),
+    ...(rendered.patch === undefined ? {} : {patch: rendered.patch}),
+    ...(rendered.truncated ? {patchTruncated: true as const} : {}),
+    ...(includeSurface ? {exportedSurface: {
+      ...(oldSurface ? {oldHash: await hashReviewValue(oldSurface)} : {}),
+      ...(newSurface ? {newHash: await hashReviewValue(newSurface)} : {}),
+      added: newSurface?.filter(item => !oldSurface?.includes(item)) ?? [],
+      removed: oldSurface?.filter(item => !newSurface?.includes(item)) ?? [],
+    }} : {}),
+  };
+}
+
+function flatten(value: unknown, prefix = ""): ReadonlyMap<string, unknown> {
+  const result = new Map<string, unknown>();
+  const visit = (item: unknown, path: string): void => {
+    if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+      const entries = Object.entries(item as Record<string, unknown>).toSorted(([left], [right]) =>
+        left.localeCompare(right));
+      if (entries.length > 0) {
+        for (const [key, nested] of entries) visit(nested, path ? `${path}.${key}` : key);
+        return;
+      }
+    }
+    result.set(path || prefix || "value", item);
+  };
+  visit(value, prefix);
+  return result;
+}
+
+async function valueItems(
+  kind: ItemKind,
+  oldValues: ReadonlyMap<string, unknown>,
+  newValues: ReadonlyMap<string, unknown>,
+): Promise<ReviewComparisonItem[]> {
+  const keys = [...new Set([...oldValues.keys(), ...newValues.keys()])].toSorted();
+  return Promise.all(keys.map(async key => {
+    const oldValue = oldValues.get(key);
+    const newValue = newValues.get(key);
+    const oldHash = oldValues.has(key) ? await hashReviewValue(oldValue) : undefined;
+    const newHash = newValues.has(key) ? await hashReviewValue(newValue) : undefined;
+    return {
+      key,
+      kind,
+      change: change(oldHash, newHash),
+      ...(oldHash ? {oldHash} : {}),
+      ...(newHash ? {newHash} : {}),
+    };
+  }));
+}
+
+function moduleMap(bundle: ContractReviewBundle | undefined, emitted: boolean) {
+  const modules = emitted ? bundle?.artifact.emittedModules : bundle?.originalModules;
+  return new Map(modules?.map(module => [module.path, module.blob]) ?? []);
+}
+
+function dependencyValues(
+  bundle: ContractReviewBundle | undefined,
+  blobs: ReadonlyMap<string, Uint8Array> | undefined,
+): ReadonlyMap<string, unknown> {
+  if (!bundle || !blobs) return new Map();
+  const direct = jsonBlob(blobs, bundle.build.directDependencyRequests) as readonly Record<string, unknown>[];
+  const lock = jsonBlob(blobs, bundle.build.dependencyLock) as {entries: readonly Record<string, unknown>[]};
+  const trace = jsonBlob(blobs, bundle.build.trace) as {entries: readonly Record<string, unknown>[]};
+  return new Map([
+    ...direct.map(item => [`direct:${String(item.name)}`, item] as const),
+    ...lock.entries.map(item => [`lock:${String(item.name)}@${String(item.version)}`, item] as const),
+    ...trace.entries.map(item => [`trace:${String(item.kind)}:${String(item.path)}`, item] as const),
+  ]);
+}
+
+function buildValues(
+  bundle: ContractReviewBundle | undefined,
+  blobs: ReadonlyMap<string, Uint8Array> | undefined,
+): ReadonlyMap<string, unknown> {
+  if (!bundle || !blobs) return new Map();
+  return new Map([
+    ...flatten(jsonBlob(blobs, bundle.build.toolchain), "toolchain"),
+    ...flatten(jsonBlob(blobs, bundle.build.recipe), "recipe"),
+    ...flatten(jsonBlob(blobs, bundle.build.policySnapshot), "governance"),
+  ]);
+}
+
+function sectionValue(bundle: ContractReviewBundle, name: SectionName): unknown {
   switch (name) {
     case "originalModules": return bundle.originalModules;
     case "emittedExecutable": return bundle.artifact.emittedModules;
     case "artifactAuthority": return {hash: bundle.artifact.hash, blob: bundle.artifact.authority};
     case "publicInterface": return bundle.artifact.publicDeclaration;
     case "sourceDeclaration": return bundle.source;
-    case "dependencies": return bundle.build.dependencyLock;
+    case "dependencies": return {
+      direct: bundle.build.directDependencyRequests,
+      lock: bundle.build.dependencyLock,
+      trace: bundle.build.trace,
+    };
     case "toolchainAndRecipe": return {
       toolchain: bundle.build.toolchain,
       recipe: bundle.build.recipe,
-      trace: bundle.build.trace,
       policySnapshot: bundle.build.policySnapshot,
     };
     case "originAndAuthorship": return bundle.provenance;
@@ -37,34 +271,100 @@ function sectionValue(bundle: ContractReviewBundle, name: typeof SECTION_NAMES[n
   }
 }
 
-/** Generates a deterministic exact-hash comparison without making an approval claim. */
+async function sectionItems(
+  name: SectionName,
+  baselineBundle: ContractReviewBundle | undefined,
+  baselineBlobs: ReadonlyMap<string, Uint8Array> | undefined,
+  candidateBundle: ContractReviewBundle,
+  candidateBlobs: ReadonlyMap<string, Uint8Array>,
+  patchBudget: {remaining: number},
+): Promise<ReviewComparisonItem[]> {
+  if (name === "originalModules" || name === "emittedExecutable") {
+    const oldModules = moduleMap(baselineBundle, name === "emittedExecutable");
+    const newModules = moduleMap(candidateBundle, name === "emittedExecutable");
+    const paths = [...new Set([...oldModules.keys(), ...newModules.keys()])].toSorted();
+    return Promise.all(paths.map(path => textComparisonItem(
+      path, oldModules.get(path), newModules.get(path), baselineBlobs, candidateBlobs,
+      false, patchBudget,
+    )));
+  }
+  if (name === "publicInterface" || name === "sourceDeclaration") {
+    const oldReference = name === "publicInterface"
+      ? baselineBundle?.artifact.publicDeclaration : baselineBundle?.source.declaration;
+    const newReference = name === "publicInterface"
+      ? candidateBundle.artifact.publicDeclaration : candidateBundle.source.declaration;
+    return [await textComparisonItem(
+      name, oldReference, newReference, baselineBlobs, candidateBlobs, true, patchBudget,
+    )];
+  }
+  if (name === "artifactAuthority") {
+    const oldValue = baselineBundle && baselineBlobs
+      ? jsonBlob(baselineBlobs, baselineBundle.artifact.authority) : undefined;
+    return valueItems(
+      "field",
+      oldValue === undefined ? new Map() : flatten(oldValue),
+      flatten(jsonBlob(candidateBlobs, candidateBundle.artifact.authority)),
+    );
+  }
+  if (name === "dependencies") {
+    return valueItems(
+      "dependency",
+      dependencyValues(baselineBundle, baselineBlobs),
+      dependencyValues(candidateBundle, candidateBlobs),
+    );
+  }
+  if (name === "toolchainAndRecipe") {
+    return valueItems(
+      "toolchain",
+      buildValues(baselineBundle, baselineBlobs),
+      buildValues(candidateBundle, candidateBlobs),
+    );
+  }
+  if (name === "originAndAuthorship") {
+    return valueItems(
+      "governance",
+      baselineBundle ? flatten(baselineBundle.provenance) : new Map(),
+      flatten(candidateBundle.provenance),
+    );
+  }
+  return valueItems(
+    "attestation",
+    baselineBundle ? flatten(baselineBundle.attestations) : new Map(),
+    flatten(candidateBundle.attestations),
+  );
+}
+
+/** Generates a deterministic itemized comparison without making an approval claim. */
 export async function createReviewComparison(
   baseline: ReviewBaseline,
   baselineBundle: ContractReviewBundle | undefined,
+  baselineBlobs: ReadonlyMap<string, Uint8Array> | undefined,
   candidateBundle: ContractReviewBundle,
+  candidateBlobs: ReadonlyMap<string, Uint8Array>,
   candidateBundleHash: string,
   generator: Readonly<{readonly name: string; readonly identity: string}>,
 ): Promise<ReviewComparison> {
   if (baseline.kind === "bundle") {
-    if (!baselineBundle || await hashReviewValue(baselineBundle) !== baseline.bundleHash) {
-      throw new ReviewEvidenceError("INVALID_INPUT", "Comparison baseline bundle is missing or mismatched.");
+    if (!baselineBundle || !baselineBlobs || await hashReviewValue(baselineBundle) !== baseline.bundleHash) {
+      throw new ReviewEvidenceError("INVALID_INPUT", "Comparison baseline evidence is missing or mismatched.");
     }
-  } else if (baselineBundle !== undefined) {
-    throw new ReviewEvidenceError("INVALID_INPUT", "A full-addition comparison cannot include a baseline bundle.");
+  } else if (baselineBundle !== undefined || baselineBlobs !== undefined) {
+    throw new ReviewEvidenceError("INVALID_INPUT", "A full-addition comparison cannot include baseline evidence.");
   }
   const sections: ReviewComparisonSection[] = [];
+  const patchBudget = {remaining: PATCH_MANIFEST_BUDGET};
   for (const name of SECTION_NAMES) {
     const newHash = await hashReviewValue(sectionValue(candidateBundle, name));
-    if (!baselineBundle) {
-      sections.push({name, change: "added", newHash});
-      continue;
-    }
-    const oldHash = await hashReviewValue(sectionValue(baselineBundle, name));
+    const oldHash = baselineBundle
+      ? await hashReviewValue(sectionValue(baselineBundle, name)) : undefined;
     sections.push({
       name,
-      change: oldHash === newHash ? "unchanged" : "modified",
-      oldHash,
+      change: change(oldHash, newHash),
+      ...(oldHash ? {oldHash} : {}),
       newHash,
+      items: await sectionItems(
+        name, baselineBundle, baselineBlobs, candidateBundle, candidateBlobs, patchBudget,
+      ),
     });
   }
   return {baseline, candidateBundleHash, generator, sections};

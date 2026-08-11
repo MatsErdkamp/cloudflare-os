@@ -90,17 +90,25 @@ async function proposalInput(sourceCode: string, publicTypes = `
               networkAttempts: 0,
             },
             dependencyLock: {entries: []},
+            directDependencyRequests: [],
             toolchain: {components: [
               {name: "@gadgets/contractors", identity: identity("1")},
               {name: "esbuild", identity: identity("2")},
               {name: "typescript", identity: identity("3")},
             ]},
             recipe: {
-              name: "test-contract-review",
+              name: "contract-current",
+              compatibilityDate: artifact.runtimeProfile.compatibilityDate,
+              compatibilityFlags: artifact.runtimeProfile.compatibilityFlags,
               target: "es2022",
               platform: "neutral",
               moduleFormat: "esm",
               externals: ["cloudflare:workers"],
+              publicRoot: "ContractBinding",
+              authoringAbiHash: artifact.runtimeProfile.authoringAbi.declarationHash,
+              runtimeHarnessHash: artifact.runtimeProfile.runtimeHarnessHash,
+              runtimeModuleSetHash: artifact.runtimeProfile.runtimeModuleSetHash,
+              runtimeProfileHash: artifact.runtimeProfileHash,
             },
           };
         },
@@ -115,7 +123,7 @@ async function proposalInput(sourceCode: string, publicTypes = `
       authorship: "test fixture",
       origin: {kind: "workspaceChat", reference: "chat:3"},
     },
-    policySnapshot: {name: "test-policy"},
+    policySnapshot: {},
     baseline: {kind: "none"},
     comparisonGenerator: {name: "test-comparison", identity: identity("4")},
   }, runnerFactory);
@@ -306,6 +314,28 @@ describe("Contract proposal compilation boundary", () => {
           expect.objectContaining({state: "approved", sourceCode: expect.stringContaining("display snapshot")}),
           expect.objectContaining({state: "approved", sourceCode: expect.stringContaining("display snapshot")}),
         ]);
+
+        const builderProposal = await impl.proposeContract(3, {
+          ...input,
+          bindingName: "BUILDER_CANNOT_APPROVE",
+        });
+        const [builderBody] = impl.consumeCapturedConnectionRequests(3);
+        impl.storage.chats.put({
+          chatId: 3,
+          sequence: impl.nextChatSequence(3),
+          timestamp: impl.getChatTimestamp(),
+          author: {type: "agent", id: "model", name: "Agent"},
+          ...builderBody,
+        });
+        (client as any).isOwner = false;
+        await expect(client.acceptContractRequest(builderProposal.requestId))
+          .rejects.toThrow("Authority unavailable");
+        await expect(client.denyContractRequest(builderProposal.requestId))
+          .rejects.toThrow("Authority unavailable");
+        expect(impl.workspaceAuthority.query({
+          type: "artifactApprovalByProposal",
+          proposalId: builderProposal.proposalId,
+        })).toEqual({type: "artifactApprovalByProposal", value: undefined});
         client[Symbol.dispose]?.();
       },
     );

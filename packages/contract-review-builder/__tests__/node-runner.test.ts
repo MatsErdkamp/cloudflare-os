@@ -1,4 +1,5 @@
 import {describe, expect, it} from "vitest";
+import {createServer} from "node:http";
 
 import type {ContractBuildInputs} from "@gadgets/contractors/artifact";
 
@@ -53,10 +54,44 @@ describe("Node review runner", () => {
       item.network === "disabled" && item.mutableState === "fresh")).toBe(true);
   }, 120_000);
 
-  it.each(["network", "undeclaredRead"] as const)("blocks the %s conformance probe", async probe => {
+  it("blocks a connection to a known-reachable local server", async () => {
+    const server = createServer((_request, response) => response.end("reachable"));
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address.");
     const runner = createNodeReviewBuildRunnerFactory({
       producerIdentity: "local-trusted-runner",
-      conformanceProbe: probe,
+      conformanceProbe: "network",
+      conformanceNetworkUrl: `http://127.0.0.1:${address.port}`,
+    }).create({role: "candidate", network: "disabled", mutableState: "fresh"});
+    try {
+      await expect(runner.build({inputs: INPUTS})).rejects.toThrow("failed closed");
+    } finally {
+      runner[Symbol.dispose]();
+      await new Promise<void>((resolve, reject) => server.close(error =>
+        error ? reject(error) : resolve()));
+    }
+  }, 30_000);
+
+  it("blocks an undeclared filesystem read", async () => {
+    const runner = createNodeReviewBuildRunnerFactory({
+      producerIdentity: "local-trusted-runner",
+      conformanceProbe: "undeclaredRead",
+    }).create({role: "candidate", network: "disabled", mutableState: "fresh"});
+    try {
+      await expect(runner.build({inputs: INPUTS})).rejects.toThrow("failed closed");
+    } finally {
+      runner[Symbol.dispose]();
+    }
+  }, 30_000);
+
+  it("rejects a locked toolchain input that changes before compiler import", async () => {
+    const runner = createNodeReviewBuildRunnerFactory({
+      producerIdentity: "local-trusted-runner",
+      conformanceProbe: "lockedInputDrift",
     }).create({role: "candidate", network: "disabled", mutableState: "fresh"});
     try {
       await expect(runner.build({inputs: INPUTS})).rejects.toThrow("failed closed");
