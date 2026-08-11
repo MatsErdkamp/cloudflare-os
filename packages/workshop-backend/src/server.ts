@@ -4,6 +4,7 @@ import type { JWTPayload } from "jose";
 import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES } from '@gadgets/workshop-shared/api';
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import type {AuthorityApi} from "@gadgets/workshop-shared/authority-api";
+import type {DevelopmentApi} from "@gadgets/workshop-shared/consumer-api";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
 import { getAuthVendorBinding } from "./auth/auth-vendors.js";
@@ -20,7 +21,7 @@ import { getAiGatewayConfig } from "./ai-gateway.js";
 import { AdminSettings, AdminApiImpl } from "./admin-settings.js";
 import { BlueprintKvRecord, buildBlueprintArchiveStream, sanitizeBlueprintOutput, listFeaturedBlueprintsFromKv, parseBlueprintArchive, randomBlueprintId, readBlueprintContent, readBlueprintKvRecord } from "./blueprint-archive.js";
 import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
-import { OverseerDurableObject, BindingLoopback, ContractCapabilityLoopback, ManagerSourceLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback } from "./overseer";
+import { OverseerDurableObject, BindingLoopback, CloudflareWorkloadEntrypoint, ContractCapabilityLoopback, ManagerSourceLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback } from "./overseer";
 import { ExternalMessageGateway } from "./external-message-gateway";
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { recordAnalytics } from "./analytics";
@@ -54,7 +55,7 @@ export { AdminSettings };
 export { UserDurableObject, GatekeeperConnectCallbackImpl };
 
 // Re-export entrypoint types from overseer.ts.
-export { OverseerDurableObject, BindingLoopback, ContractCapabilityLoopback, ManagerSourceLoopback, GatekeeperHookLoopback,
+export { OverseerDurableObject, BindingLoopback, CloudflareWorkloadEntrypoint, ContractCapabilityLoopback, ManagerSourceLoopback, GatekeeperHookLoopback,
     CodeModeTailLoopback, AgentSpawnerGatekeeper, GadgetTailLoopback,
     AgentSelfLoopback, TransientStubLoopback };
 
@@ -228,6 +229,24 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     started = true;
     // @ts-expect-error Cap'n Web and native Workers RPC stubs are wire-compatible.
     return result;
+  }
+
+  async openDevelopment(workspaceId: string): Promise<RpcStub<DevelopmentApi>> {
+    let overseerId;
+    try {
+      overseerId = this.overseers.idFromString(workspaceId);
+    } catch {
+      throw new Error("Development unavailable.");
+    }
+    const profile = await this.user.whoami();
+    try {
+      const result = await this.overseers.get(overseerId)
+        .openDevelopment(this.user.id.toString(), profile.id);
+      // @ts-expect-error Cap'n Web and native Workers RPC stubs are wire-compatible.
+      return result;
+    } catch {
+      throw new Error("Development unavailable.");
+    }
   }
 
   async #openGadgetInternal(id: string, shareKey?: string,

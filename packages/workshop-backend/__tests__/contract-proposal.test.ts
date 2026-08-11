@@ -548,6 +548,7 @@ describe("Contract proposal compilation boundary", () => {
             state: "destroyed",
             cleanup: "complete",
           }),
+          startProviderAuthoritySession: async () => new RpcStub(new class extends RpcTarget {}()),
         };
         impl.describeCanonicalProviderSource = async () => ({
           identity: providerIdentity,
@@ -583,6 +584,9 @@ describe("Contract proposal compilation boundary", () => {
               cleanupFailures: 0,
             };
           },
+          startSession: async () => new RpcStub(new class extends RpcTarget {
+            ping(): string { return "pong"; }
+          }()),
         });
         let authority = await instance.openAuthority(
           "user-id",
@@ -656,6 +660,380 @@ describe("Contract proposal compilation boundary", () => {
           state: "completed",
           result: {type: "standingBindingInstalled", bindingGeneration: 1},
         });
+
+        const originalInstance = impl.workspaceAuthority.query({
+          type: "contractInstance",
+          id: result.contractInstanceId,
+        }).value;
+        const originalRuntimeContract = impl.storage.contracts.get(
+          originalInstance.runtimeWorkpieceId,
+        );
+        const materializeConsumer = (
+          hostId: string,
+          bindingSetId: string,
+          operationPrefix: string,
+        ) => {
+          const consumerId = impl.workspaceAuthority.ensureHostIdentity("consumer", hostId);
+          const consumer = {type: "standing", consumerId, generation: 1};
+          const requirementId = impl.workspaceAuthority.ensureHostIdentity(
+            "requirement",
+            `${hostId}:R2_STORAGE`,
+          );
+          const requirement = {
+            type: "environment",
+            bindingSetId,
+            bindingSetVersion: 1,
+            requirementId,
+            requirementVersion: 1,
+          };
+          const decision = impl.workspaceAuthority.execute({
+            type: "recordInstallationDecision",
+            operationId: `${operationPrefix}:decision`,
+            record: {
+              proposalDigest: `sha256:${"d".repeat(64)}`,
+              decision: "approved",
+              decidedBy: "user-id",
+              consumer,
+              requirement,
+              intendedBindingName: "R2_STORAGE",
+              expectedBindingGeneration: 0,
+              artifactApprovalId: approval.id,
+              upstreamAuthority: originalInstance.upstreamAuthority,
+              authorityMode: "shared",
+              sharedState: {type: "isolated"},
+              evaluatorPolicyHash: message.policyHash,
+            },
+          });
+          const runtimeWorkpieceId = impl.allocateWorkpieceId();
+          const prepared = impl.workspaceAuthority.execute({
+            type: "prepareContractInstance",
+            operationId: `${operationPrefix}:prepare`,
+            record: {
+              artifactApprovalId: approval.id,
+              artifactHash: originalInstance.artifactHash,
+              runtimeProfileHash: originalInstance.runtimeProfileHash,
+              upstreamAuthority: originalInstance.upstreamAuthority,
+              placementDecision: {type: "installation", decisionId: decision.id},
+              intendedConsumer: consumer,
+              intendedRequirement: requirement,
+              sharedState: {type: "isolated"},
+              runtimeWorkpieceId,
+              sourceGatekeeperId: 17,
+            },
+          });
+          impl.storage.contracts.put({
+            ...originalRuntimeContract,
+            id: runtimeWorkpieceId,
+            canonicalInstanceId: prepared.id,
+          });
+          impl.workspaceAuthority.execute({
+            type: "recordProviderBacking",
+            operationId: `${operationPrefix}:provider`,
+            contractInstanceId: prepared.id,
+            expectedInstanceGeneration: 1,
+            description: {
+              identity: providerIdentity,
+              health: "healthy",
+              providerNativeScope: {
+                resources: ["deployment-r2-bucket"],
+                operations: ["head", "get", "list", "put", "delete"],
+                recipients: [],
+                egress: [],
+              },
+              providerNativeRevocationGranularity: "deployment-resource",
+              localEnforcementRevocationGranularity: "contract-instance-backing",
+            },
+            result: {
+              provider: providerIdentity,
+              contractInstance: {id: prepared.id, generation: 1},
+              backingReference: `${operationPrefix}:backing`,
+              capabilityGeneration: 1,
+              state: "prepared",
+              cleanup: "not-required",
+            },
+          });
+          const plan = impl.workspaceAuthority.execute({
+            type: "planBindingPublication",
+            operationId: `${operationPrefix}:publication`,
+            contractInstanceId: prepared.id,
+            consumer,
+            requirement,
+            name: "R2_STORAGE",
+            verification: {type: "notRequired"},
+            expectedBindingGeneration: 0,
+            evaluatorPolicyHash: message.policyHash,
+          });
+          const endpointId = `contract-instance:${prepared.id}`;
+          const endpointSnapshot = {
+            endpointId,
+            instanceId: prepared.id,
+            instanceGeneration: 1,
+            artifactHash: originalInstance.artifactHash,
+            runtimeProfileHash: originalInstance.runtimeProfileHash,
+            reachabilityId: `binding:${plan.bindingId}`,
+            reachabilityGeneration: 1,
+            authoritySnapshotDigest: `sha256:${"e".repeat(64)}`,
+            compositionLineage: [endpointId],
+            chainDepth: 0,
+            maxChainDepth: 8,
+          };
+          endpoints.set(runtimeWorkpieceId, {snapshot: endpointSnapshot, cancellation: undefined});
+          impl.workspaceAuthority.execute({
+            type: "acknowledgeBindingEndpoint",
+            operationId: `${operationPrefix}:publication`,
+            planId: plan.planId,
+            snapshot: endpointSnapshot,
+            acknowledgement: {endpointId, reachabilityGeneration: 1},
+          });
+          impl.workspaceAuthority.execute({
+            type: "commitBindingPublication",
+            operationId: `${operationPrefix}:publication`,
+            planId: plan.planId,
+          });
+          return consumerId;
+        };
+
+        const consumerId = materializeConsumer(
+          "development-session:1",
+          "binding-set:development:1",
+          "development-consumer",
+        );
+        impl.consumerEnvironments.putDevelopmentGrant({
+          id: "development-grant-1",
+          principalId: "user-id",
+          generation: 1,
+          projectId: "project-1",
+          environmentId: "environment-1",
+          bindingSet: {id: "binding-set:development:1", version: 1},
+          consumerId,
+          consumerGeneration: 1,
+          lifecycle: "active",
+        });
+        const development = await instance.openDevelopment("user-id", "owner-profile");
+        const developmentSession = await development.startSession({
+          operationId: "development-session-1",
+          grantId: "development-grant-1",
+          expectedGrantGeneration: 1,
+          expectedBindingSet: {id: "binding-set:development:1", version: 1},
+        });
+        const developmentStatus = await developmentSession.getStatus();
+        expect(developmentStatus).toMatchObject({ready: true, leaseGeneration: 1});
+        const developmentEnvironment = await developmentSession.openEnvironment(
+          developmentStatus.environmentGeneration,
+        );
+        const developmentBindings = await developmentEnvironment.getBindings();
+        expect(developmentBindings.types).toEqual([
+          expect.objectContaining({name: "R2_STORAGE", artifactApprovalId: approval.id}),
+        ]);
+        await expect((developmentBindings.bindings.R2_STORAGE as any).ping())
+          .resolves.toBe("pong");
+        const renewedStatus = await developmentSession.renew({
+          operationId: "development-renew-1",
+          expectedConsumerGeneration: 1,
+          expectedLeaseGeneration: 1,
+        });
+        await expect(developmentEnvironment.getBindings()).rejects.toThrow("stale");
+        developmentBindings.bindings.R2_STORAGE?.[Symbol.dispose]?.();
+        developmentEnvironment[Symbol.dispose]?.();
+        developmentSession[Symbol.dispose]?.();
+        const resumedSession = await development.resumeSession({
+          sessionId: developmentStatus.id,
+          expectedConsumerGeneration: 1,
+        });
+        const resumedEnvironment = await resumedSession.openEnvironment(
+          renewedStatus.environmentGeneration,
+        );
+        const resumedBindings = await resumedEnvironment.getBindings();
+        await expect((resumedBindings.bindings.R2_STORAGE as any).ping())
+          .resolves.toBe("pong");
+        await resumedSession.disconnect({
+          operationId: "development-disconnect-1",
+          expectedConsumerGeneration: 1,
+        });
+        await expect(resumedEnvironment.getBindings()).rejects.toThrow("stale");
+        resumedBindings.bindings.R2_STORAGE?.[Symbol.dispose]?.();
+        resumedEnvironment[Symbol.dispose]?.();
+        resumedSession[Symbol.dispose]?.();
+
+        const expiringConsumerId = materializeConsumer(
+          "development-session:expiry",
+          "binding-set:development:expiry",
+          "development-expiry-consumer",
+        );
+        impl.consumerEnvironments.putDevelopmentGrant({
+          id: "development-grant-expiry",
+          principalId: "user-id",
+          generation: 1,
+          projectId: "project-1",
+          environmentId: "environment-1",
+          bindingSet: {id: "binding-set:development:expiry", version: 1},
+          consumerId: expiringConsumerId,
+          consumerGeneration: 1,
+          lifecycle: "active",
+        });
+        const expiringSession = await development.startSession({
+          operationId: "development-session-expiry",
+          grantId: "development-grant-expiry",
+          expectedGrantGeneration: 1,
+          expectedBindingSet: {id: "binding-set:development:expiry", version: 1},
+        });
+        const expiringStatus = await expiringSession.getStatus();
+        const expiringEnvironment = await expiringSession.openEnvironment(
+          expiringStatus.environmentGeneration,
+        );
+        const expiringBindings = await expiringEnvironment.getBindings();
+        await expect((expiringBindings.bindings.R2_STORAGE as any).ping())
+          .resolves.toBe("pong");
+        const expiryClock = vi.spyOn(Date, "now").mockReturnValue(expiringStatus.expiresAt + 1);
+        await impl.expireDueDevelopmentSessions();
+        expiryClock.mockRestore();
+        await expect(expiringEnvironment.getBindings()).rejects.toThrow("stale");
+        expiringBindings.bindings.R2_STORAGE?.[Symbol.dispose]?.();
+        expiringEnvironment[Symbol.dispose]?.();
+        expiringSession[Symbol.dispose]?.();
+        development[Symbol.dispose]?.();
+
+        const workloadConsumerId = materializeConsumer(
+          "workload:1",
+          "binding-set:workload:1",
+          "workload-consumer",
+        );
+        impl.consumerEnvironments.putWorkload({
+          id: "workload-1",
+          consumerId: workloadConsumerId,
+          consumerGeneration: 1,
+          projectId: "project-1",
+          environmentId: "environment-1",
+          bindingSet: {id: "binding-set:workload:1", version: 1},
+          generation: 1,
+          lifecycle: "active",
+          agentService: {profileId: "manager-agent", role: "manager"},
+        });
+        impl.consumerEnvironments.putWorkloadRegistration({
+          id: "workload-registration-1",
+          workloadId: "workload-1",
+          adapterId: "cloudflare-service-binding.v1",
+          issuer: "cloudflare-account:account-1",
+          credentialSubject: "workload-subject-1",
+          credentialGeneration: 1,
+          generation: 1,
+          lifecycle: "active",
+        });
+        const workloadAttachment = await instance.attachWorkload({
+          registrationId: "workload-registration-1",
+          adapterId: "cloudflare-service-binding.v1",
+          issuer: "cloudflare-account:account-1",
+          subject: "workload-subject-1",
+          credentialGeneration: 1,
+          authenticatedAt: Date.now(),
+          expiresAt: Date.now() + 15 * 60_000,
+        });
+        const workloadStatus = await workloadAttachment.getStatus();
+        expect(workloadStatus).toMatchObject({ready: true, workloadGeneration: 1});
+        const workloadEnvironment = await workloadAttachment.openEnvironment(
+          workloadStatus.environmentGeneration,
+        );
+        const workloadBindings = await workloadEnvironment.getBindings();
+        await expect((workloadBindings.bindings.R2_STORAGE as any).ping())
+          .resolves.toBe("pong");
+        impl.consumerEnvironments.rotateWorkloadCredential({
+          operationId: "workload-rotation-1",
+          registrationId: "workload-registration-1",
+          expectedGeneration: 1,
+          credentialSubject: "workload-subject-2",
+          credentialGeneration: 2,
+        });
+        await expect(workloadEnvironment.getBindings()).resolves.toMatchObject({
+          generation: workloadStatus.environmentGeneration,
+        });
+        impl.consumerEnvironments.finalizeWorkloadCredentialRotation({
+          operationId: "workload-rotation-finalize-1",
+          registrationId: "workload-registration-1",
+          expectedGeneration: 1,
+          expectedCredentialGeneration: 2,
+        });
+        await expect(workloadEnvironment.getBindings()).rejects.toThrow("stale");
+        workloadBindings.bindings.R2_STORAGE?.[Symbol.dispose]?.();
+        workloadEnvironment[Symbol.dispose]?.();
+        workloadAttachment[Symbol.dispose]?.();
+        const rotatedAttachment = await instance.attachWorkload({
+          registrationId: "workload-registration-1",
+          adapterId: "cloudflare-service-binding.v1",
+          issuer: "cloudflare-account:account-1",
+          subject: "workload-subject-2",
+          credentialGeneration: 2,
+          authenticatedAt: Date.now(),
+          expiresAt: Date.now() + 15 * 60_000,
+        });
+        const rotatedStatus = await rotatedAttachment.getStatus();
+        const rotatedEnvironment = await rotatedAttachment.openEnvironment(
+          rotatedStatus.environmentGeneration,
+        );
+        const rotatedBindings = await rotatedEnvironment.getBindings();
+        await expect((rotatedBindings.bindings.R2_STORAGE as any).ping())
+          .resolves.toBe("pong");
+        await impl.transitionWorkloadConsumer({
+          operationId: "workload-retire-1",
+          workloadId: "workload-1",
+          expectedGeneration: 1,
+          lifecycle: "retired",
+        });
+        await expect(rotatedEnvironment.getBindings()).rejects.toThrow("stale");
+        rotatedBindings.bindings.R2_STORAGE?.[Symbol.dispose]?.();
+        rotatedEnvironment[Symbol.dispose]?.();
+        rotatedAttachment[Symbol.dispose]?.();
+
+        const suspendedConsumerId = materializeConsumer(
+          "workload:suspended",
+          "binding-set:workload:suspended",
+          "workload-suspended-consumer",
+        );
+        impl.consumerEnvironments.putWorkload({
+          id: "workload-suspended",
+          consumerId: suspendedConsumerId,
+          consumerGeneration: 1,
+          projectId: "project-1",
+          environmentId: "environment-1",
+          bindingSet: {id: "binding-set:workload:suspended", version: 1},
+          generation: 1,
+          lifecycle: "active",
+        });
+        impl.consumerEnvironments.putWorkloadRegistration({
+          id: "workload-registration-suspended",
+          workloadId: "workload-suspended",
+          adapterId: "cloudflare-service-binding.v1",
+          issuer: "cloudflare-account:account-1",
+          credentialSubject: "workload-subject-suspended",
+          credentialGeneration: 1,
+          generation: 1,
+          lifecycle: "active",
+        });
+        const suspendedAttachment = await instance.attachWorkload({
+          registrationId: "workload-registration-suspended",
+          adapterId: "cloudflare-service-binding.v1",
+          issuer: "cloudflare-account:account-1",
+          subject: "workload-subject-suspended",
+          credentialGeneration: 1,
+          authenticatedAt: Date.now(),
+          expiresAt: Date.now() + 15 * 60_000,
+        });
+        const suspendedStatus = await suspendedAttachment.getStatus();
+        const suspendedEnvironment = await suspendedAttachment.openEnvironment(
+          suspendedStatus.environmentGeneration,
+        );
+        const suspendedBindings = await suspendedEnvironment.getBindings();
+        await expect((suspendedBindings.bindings.R2_STORAGE as any).ping())
+          .resolves.toBe("pong");
+        await impl.transitionWorkloadConsumer({
+          operationId: "workload-suspend-1",
+          workloadId: "workload-suspended",
+          expectedGeneration: 1,
+          lifecycle: "suspended",
+        });
+        await expect(suspendedEnvironment.getBindings()).rejects.toThrow("stale");
+        suspendedBindings.bindings.R2_STORAGE?.[Symbol.dispose]?.();
+        suspendedEnvironment[Symbol.dispose]?.();
+        suspendedAttachment[Symbol.dispose]?.();
 
         const replacementInput = await proposalInput(
           `${COMPILER_STYLE_MODULE}\n// reviewed replacement`,

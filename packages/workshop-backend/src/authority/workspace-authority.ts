@@ -219,6 +219,10 @@ type WorkspaceAuthorityEvent = {
     | "authorityDebtRecorded"
     | "authorityManagerGrantChanged"
     | "hostAuthorityIdentityIssued"
+    | "developmentGrantChanged"
+    | "developmentSessionChanged"
+    | "workloadChanged"
+    | "workloadRegistrationChanged"
     | "migrationBaseline";
   revision: number;
   subjectId?: string;
@@ -757,6 +761,7 @@ export type WorkspaceAuthorityQuery =
   | {type: "bindingExecution"; consumerId: ConsumerId; name: string}
   | {type: "bindingExecutionByInstance"; contractInstanceId: ContractInstanceId}
   | {type: "consumerReadiness"; consumerId: ConsumerId}
+  | {type: "consumerEnvironment"; consumerId: ConsumerId}
   | {type: "runtimeApprovalRequest"; id: RuntimeApprovalRequestId}
   | {type: "runtimeApprovalDecision"; id: RuntimeApprovalDecisionId}
   | {type: "authorityDebt"; id: AuthorityDebtId}
@@ -798,6 +803,18 @@ export type WorkspaceAuthorityQueryResult =
   | {type: "bindingExecution"; value?: Readonly<{binding: BindingRecord; instance: ContractInstanceRecord}>}
   | {type: "bindingExecutionByInstance"; value?: Readonly<{binding: BindingRecord; instance: ContractInstanceRecord}>}
   | {type: "consumerReadiness"; value: Readonly<{ready: boolean; generation: number}>}
+  | {
+      type: "consumerEnvironment";
+      value: Readonly<{
+        ready: boolean;
+        generation: number;
+        bindings: readonly Readonly<{
+          binding: BindingRecord;
+          instance: ContractInstanceRecord;
+          resolution: BindingResolutionRecord;
+        }>[];
+      }>;
+    }
   | {type: "runtimeApprovalRequest"; value?: RuntimeApprovalRequestRecord}
   | {type: "runtimeApprovalDecision"; value?: RuntimeApprovalDecisionRecord}
   | {type: "authorityDebt"; value?: AuthorityDebtRecord}
@@ -877,6 +894,14 @@ export interface WorkspaceAuthority {
     kind: "consumer" | "source" | "requirement",
     hostId: WorkpieceId | string,
   ): string;
+  recordConsumerLifecycleEvent(event: Readonly<{
+    type: "developmentGrantChanged" | "developmentSessionChanged" |
+      "workloadChanged" | "workloadRegistrationChanged";
+    subjectId: string;
+    operationId?: string;
+    beforeGeneration?: number;
+    afterGeneration?: number;
+  }>): void;
   openSession(principalId: string, isOwner: boolean): AuthoritySessionBinding | undefined;
   beginOperation(
     session: AuthoritySessionBinding,
@@ -2945,6 +2970,42 @@ export function createWorkspaceAuthorityModule<
           });
           return {type: "consumerReadiness", value: {ready, generation}};
         }
+        case "consumerEnvironment": {
+          if (requireAuthorityState(storage).state !== "active") {
+            return {type: "consumerEnvironment", value: {
+              ready: false, generation: 0, bindings: [],
+            }};
+          }
+          const required = [...storage.installationDecisions.list()].filter(decision =>
+            decision.decision === "approved" &&
+            decision.consumer?.consumerId === query.consumerId &&
+            decision.requirement !== undefined &&
+            decision.intendedBindingName !== undefined,
+          );
+          const candidates = [...storage.bindings.byConsumer.get(query.consumerId)]
+            .filter(binding => binding.status !== "retracted")
+            .toSorted((left, right) => left.name.localeCompare(right.name));
+          const generation = candidates.reduce(
+            (highest, binding) => Math.max(highest, binding.generation),
+            0,
+          );
+          const bindings = candidates.flatMap(binding => {
+            if (binding.status !== "active" ||
+                [...storage.invalidationIntents.byBinding.get(binding.id)]
+                  .some(intent => intent.state !== "committed")) return [];
+            const instance = storage.contractInstances.get(binding.contractInstanceId);
+            const resolution = storage.bindingResolutions.get(binding.resolutionId);
+            return instance?.lifecycle === "ready" && resolution
+              ? [{binding, instance, resolution}]
+              : [];
+          });
+          const ready = required.length > 0 && required.every(decision =>
+            bindings.some(candidate =>
+              candidate.binding.name === decision.intendedBindingName &&
+              sameAuthorityValue(candidate.binding.requirement, decision.requirement)),
+          );
+          return {type: "consumerEnvironment", value: {ready, generation, bindings}};
+        }
         case "runtimeApprovalRequest":
           return {
             type: "runtimeApprovalRequest",
@@ -3507,6 +3568,12 @@ export function createWorkspaceAuthorityModule<
         });
         storage.hostAuthorityIdentities.put({key, kind, hostId, canonicalId, createdSequence});
         return canonicalId;
+      });
+    },
+    recordConsumerLifecycleEvent(event) {
+      storage.transaction(() => {
+        requireActiveAuthority(storage);
+        appendAuthorityEvent(storage, structuredClone(event));
       });
     },
   };

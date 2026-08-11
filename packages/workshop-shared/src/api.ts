@@ -27,7 +27,9 @@ import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { AccountDescription, ActionKind, ActionDescription, AvatarImage, GatekeeperUiFrame, ObservationDescription, ResourceDescription, ResourceConfiguratorFrame, SupportedResource, VendorDescription, HookDescription } from "./gatekeeper.js";
 import type { UiFeatureFlags } from "./feature-flags.js";
 import type {AuthorityApi} from "./authority-api.js";
+import type {DevelopmentApi} from "./consumer-api.js";
 export type {AuthorityApi} from "./authority-api.js";
+export type * from "./consumer-api.js";
 
 export const SERVICE_SALT = new Uint8Array([
   0xd9, 0x4e, 0x54, 0x1d, 0x29, 0xc1, 0x03, 0x74, 0x73, 0x7e, 0xb3, 0xe3, 0x34, 0x6d, 0x8f, 0x21
@@ -291,6 +293,8 @@ function isOpenGadgetErrorCode(value: unknown): value is OpenGadgetErrorCode {
 export interface AuthenticatedApi extends RpcTarget {
   /** Opens authority administration for an owner or live `manageAuthority` manager. */
   openAuthority(workspaceId: string): Promise<RpcStub<AuthorityApi>>;
+  /** Opens the build-permission Development Session capability for one workspace. */
+  openDevelopment(workspaceId: string): Promise<RpcStub<DevelopmentApi>>;
   // Get profile info for the user who is logged in.
   whoami(): Promise<AiChatAuthorInfo>;
 

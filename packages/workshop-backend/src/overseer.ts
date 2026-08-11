@@ -3,6 +3,22 @@ import { validateRpc } from "capnweb-validate";
 import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, ContractOperationSummary } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import type {
+  AttachWorkload,
+  ConsumerBindingEnvironment,
+  DevelopmentApi,
+  DevelopmentEnvironment,
+  DevelopmentSession,
+  DevelopmentSessionStatus,
+  DisconnectDevelopmentSession,
+  RenewDevelopmentLease,
+  ResumeDevelopmentSession,
+  StartDevelopmentSession,
+  WorkloadAttachment,
+  WorkloadConnector,
+  WorkloadEnvironment,
+  WorkloadStatus,
+} from "@gadgets/workshop-shared/consumer-api";
+import type {
   GatekeeperAuthorityProvider,
   ProviderActionEvidence,
   ProviderActionStager,
@@ -103,6 +119,10 @@ import {
   type StandingInstallationEffect,
   type WorkspaceAuthority,
 } from "./authority/workspace-authority";
+import {
+  createConsumerEnvironmentAuthority,
+  type ConsumerEnvironmentAuthority,
+} from "./authority/consumer-environments";
 import type {
   ArtifactApprovalId,
   ArtifactProposalId,
@@ -1288,6 +1308,7 @@ class OverseerImpl implements AgentHooks {
   readonly logger: ReturnType<typeof createWorkshopLogger>;
   readonly workspaceAuthority: WorkspaceAuthority;
   readonly legacyWorkspaceAuthority: LegacyWorkspaceAuthorityCompatibility;
+  readonly consumerEnvironments: ConsumerEnvironmentAuthority;
 
   // Identifies this DO instance. Sent to chat subscribers so they can detect a full server
   // restart (see AiChatSubscriber.streamGeneration). A timestamp suffices since a DO won't
@@ -1523,6 +1544,8 @@ class OverseerImpl implements AgentHooks {
     }
     const authorityEffectDueAt = this.workspaceAuthority.nextEffectDueAt();
     if (authorityEffectDueAt !== undefined) dueTimes.push(authorityEffectDueAt);
+    const developmentExpiryAt = this.consumerEnvironments.nextDevelopmentExpiryAt();
+    if (developmentExpiryAt !== undefined) dueTimes.push(developmentExpiryAt);
 
     if (dueTimes.length > 0) {
       this.ctx.storage.setAlarm(Math.max(Date.now() + 1, Math.min(...dueTimes)));
@@ -1637,6 +1660,48 @@ class OverseerImpl implements AgentHooks {
     this.workspaceAuthority = authorityModule.authority;
     this.legacyWorkspaceAuthority = authorityModule.compatibility;
     this.workspaceAuthority.execute({type: "initialize"});
+    this.consumerEnvironments = createConsumerEnvironmentAuthority(ctx.storage, consumerId => {
+      const canonical = this.workspaceAuthority.query({
+        type: "consumerEnvironment",
+        consumerId: consumerId as ConsumerId,
+      });
+      if (canonical.type !== "consumerEnvironment") {
+        throw new Error("Canonical Consumer environment is unavailable.");
+      }
+      const environmentRequirements = canonical.value.bindings.map(candidate =>
+        candidate.binding.requirement).filter(requirement => requirement.type === "environment");
+      const first = environmentRequirements[0];
+      const oneBindingSet = first !== undefined && environmentRequirements.every(requirement =>
+        requirement.bindingSetId === first.bindingSetId &&
+        requirement.bindingSetVersion === first.bindingSetVersion);
+      const bindings = canonical.value.bindings.flatMap(candidate => {
+        const runtimeId = candidate.instance.runtimeWorkpieceId;
+        const contract = runtimeId === undefined ? undefined : this.storage.contracts.get(runtimeId);
+        return contract
+          ? [{
+              name: candidate.binding.name,
+              required: true,
+              bindingId: candidate.binding.id,
+              bindingGeneration: candidate.binding.generation,
+              contractInstanceId: candidate.instance.id,
+              contractInstanceGeneration: candidate.instance.generation,
+              artifactApprovalId: candidate.resolution.artifactApprovalId,
+              artifactApprovalEpoch: candidate.resolution.artifactApprovalEpoch,
+              publicTypes: contract.publicTypes,
+            }]
+          : [];
+      });
+      return {
+        ready: canonical.value.ready && oneBindingSet &&
+          bindings.length === canonical.value.bindings.length,
+        generation: canonical.value.generation,
+        bindingSet: {
+          id: first?.bindingSetId ?? "unassigned",
+          version: first?.bindingSetVersion ?? 0,
+        },
+        bindings,
+      };
+    }, event => this.workspaceAuthority.recordConsumerLifecycleEvent(event));
     this.defaultGadgetId = this.storage.defaultGadgetId.get();
 
     this.#autoApprovalDrainer = new AutoApprovalDrainer(
@@ -3400,6 +3465,7 @@ class OverseerImpl implements AgentHooks {
       case "gadget": return `gadget:${this.resolveGadgetId(caller.gadgetId)}`;
       case "user": return caller.chatId === undefined ? "workspace-user" : `user-chat:${caller.chatId}`;
       case "hook": return "workspace-hook";
+      case "canonicalConsumer": return caller.consumerId;
     }
   }
 
@@ -3911,6 +3977,161 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
+  async invokeConsumerBindingMethod(
+      snapshot: ReturnType<ConsumerEnvironmentAuthority["openDevelopmentEnvironment"]>,
+      bindingName: string,
+      methodName: string,
+      args: unknown[]): Promise<unknown> {
+    if (!this.consumerEnvironments.validateEnvironmentSnapshot(snapshot)) {
+      throw new Error("Canonical Consumer environment generation is stale.");
+    }
+    const cited = snapshot.bindings.find(binding => binding.name === bindingName);
+    if (!cited) throw new Error("Canonical Consumer Binding is unavailable.");
+    const execution = this.workspaceAuthority.query({
+      type: "bindingExecution",
+      consumerId: snapshot.consumerId as ConsumerId,
+      name: bindingName,
+    });
+    if (execution.type !== "bindingExecution" || !execution.value ||
+        execution.value.binding.id !== cited.bindingId ||
+        execution.value.binding.generation !== cited.bindingGeneration ||
+        execution.value.instance.id !== cited.contractInstanceId ||
+        execution.value.instance.generation !== cited.contractInstanceGeneration ||
+        execution.value.instance.runtimeWorkpieceId === undefined) {
+      throw new Error("Canonical Consumer Binding generation is stale.");
+    }
+    return this.invokeContractMethod(
+      execution.value.instance.runtimeWorkpieceId,
+      {from: "canonicalConsumer", consumerId: snapshot.consumerId},
+      methodName,
+      args,
+    );
+  }
+
+  async disconnectDevelopmentConsumer(input: Readonly<{
+    operationId: string;
+    sessionId: string;
+    principalId: string;
+    expectedConsumerGeneration: number;
+  }>): Promise<void> {
+    const consumer = this.consumerEnvironments.getDevelopmentConsumer(
+      input.sessionId,
+      input.principalId,
+    );
+    if (consumer.consumerGeneration !== input.expectedConsumerGeneration) {
+      throw new Error("Development Session generation is stale.");
+    }
+    await this.invalidateCanonicalConsumerBindings(
+      consumer.consumerId,
+      input.operationId,
+      "retracted",
+      "development-session-disconnected",
+    );
+    this.consumerEnvironments.disconnectDevelopmentSession(input);
+  }
+
+  async expireDueDevelopmentSessions(): Promise<void> {
+    for (const session of this.consumerEnvironments.getDueDevelopmentSessions(Date.now())) {
+      const operationId = `development-expiry:${session.sessionId}:${session.consumerGeneration}`;
+      await this.invalidateCanonicalConsumerBindings(
+        session.consumerId,
+        operationId,
+        "retracted",
+        "development-session-expired",
+      );
+      this.consumerEnvironments.expireDevelopmentSession({
+        operationId,
+        sessionId: session.sessionId,
+        expectedConsumerGeneration: session.consumerGeneration,
+      });
+    }
+    this.#scheduleNextWorkspaceAlarm();
+  }
+
+  async requireDevelopmentPermission(userId: string, profileId: string): Promise<void> {
+    if (!this.ownerId) throw new Error("Development unavailable.");
+    if (userId === this.ownerId) return;
+    if (this.storage.prohibitAllSharing.get() ||
+        (await this.getSharingManager()).getEffectiveRole(profileId) !== "build") {
+      throw new Error("Development unavailable.");
+    }
+  }
+
+  startDevelopmentSession(
+    input: Parameters<ConsumerEnvironmentAuthority["startDevelopmentSession"]>[0],
+  ): ReturnType<ConsumerEnvironmentAuthority["startDevelopmentSession"]> {
+    const session = this.consumerEnvironments.startDevelopmentSession(input);
+    this.#scheduleNextWorkspaceAlarm();
+    return session;
+  }
+
+  renewDevelopmentSession(
+    input: Parameters<ConsumerEnvironmentAuthority["renewDevelopmentSession"]>[0],
+  ): ReturnType<ConsumerEnvironmentAuthority["renewDevelopmentSession"]> {
+    const session = this.consumerEnvironments.renewDevelopmentSession(input);
+    this.#scheduleNextWorkspaceAlarm();
+    return session;
+  }
+
+  async transitionWorkloadConsumer(input: Readonly<{
+    operationId: string;
+    workloadId: string;
+    expectedGeneration: number;
+    lifecycle: "suspended" | "retired";
+  }>): Promise<void> {
+    const workload = this.consumerEnvironments.getWorkloadConsumer(input.workloadId);
+    if (workload.workloadGeneration !== input.expectedGeneration ||
+        workload.lifecycle !== "active") {
+      throw new Error("Workload generation is stale.");
+    }
+    await this.invalidateCanonicalConsumerBindings(
+      workload.consumerId,
+      input.operationId,
+      input.lifecycle === "retired" ? "retracted" : "suspended",
+      input.lifecycle === "retired" ? "workload-retired" : "workload-suspended",
+    );
+    this.consumerEnvironments.transitionWorkload(
+      input.workloadId,
+      input.expectedGeneration,
+      input.lifecycle,
+    );
+  }
+
+  async invalidateCanonicalConsumerBindings(
+    consumerId: string,
+    operationId: string,
+    terminalTarget: "suspended" | "retracted",
+    reason: string,
+  ): Promise<void> {
+    const environment = this.workspaceAuthority.query({
+      type: "consumerEnvironment",
+      consumerId: consumerId as ConsumerId,
+    });
+    if (environment.type !== "consumerEnvironment") {
+      throw new Error("Canonical Consumer environment is unavailable.");
+    }
+    for (const {binding} of environment.value.bindings) {
+      this.workspaceAuthority.execute({
+        type: "beginBindingInvalidation",
+        operationId: `${operationId}:${binding.id}:${binding.generation}`,
+        bindingId: binding.id,
+        expectedGeneration: binding.generation,
+        terminalTarget,
+        reason,
+      });
+    }
+    for (let pass = 0; pass < 4; pass++) {
+      await this.reconcileWorkspaceAuthorityEffects();
+    }
+    const after = this.workspaceAuthority.query({
+      type: "consumerEnvironment",
+      consumerId: consumerId as ConsumerId,
+    });
+    if (after.type !== "consumerEnvironment" || after.value.bindings.length !== 0) {
+      throw new Error("Canonical Consumer invalidation is pending reconciliation.");
+    }
+  }
+
   async invokeRestoredContractMethod(
       contractId: WorkpieceId, restoration: ContractRestorationReference,
       caller: GatekeeperCaller,
@@ -4263,7 +4484,7 @@ class OverseerImpl implements AgentHooks {
     try {
       if (caller.from === "agent") {
         this.#getOrCreateCapturedActions(caller.chatId).actions.push(actionId);
-      } else if (caller.from !== "hook" && caller.chatId !== undefined && this.ownerId) {
+      } else if ("chatId" in caller && caller.chatId !== undefined && this.ownerId) {
         let owner = this.users.get(this.users.idFromString(this.ownerId));
         let userMeta = await owner.getChatContext(null);
 
@@ -8319,6 +8540,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   // - If the DO dies *while* the alarm is running, the system will retry the alarm, thus resuming
   //   the agents yet again.
   async alarm() {
+    await this.impl.expireDueDevelopmentSessions();
     for (let pass = 0; pass < 4; pass++) {
       await this.impl.reconcileWorkspaceAuthorityEffects();
     }
@@ -8359,6 +8581,37 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     const session = this.impl.workspaceAuthority.openSession(userId, userId === this.impl.ownerId);
     if (!session) throw new Error("Authority unavailable.");
     return new AuthorityApiImpl(this.impl, session, notifyClosed.dup());
+  }
+
+  /** Opens the build-only Development Session capability without authority-management methods. */
+  async openDevelopment(userId: string, profileId: string): Promise<DevelopmentApi> {
+    await this.impl.requireDevelopmentPermission(userId, profileId);
+    return new DevelopmentApiImpl(this.impl, userId, profileId);
+  }
+
+  /** Converts trusted private-entrypoint evidence into a bounded Workload attachment. */
+  async attachWorkload(input: Readonly<{
+    registrationId: string;
+    adapterId: "cloudflare-service-binding.v1";
+    issuer: string;
+    subject: string;
+    credentialGeneration: number;
+    authenticatedAt: number;
+    expiresAt: number;
+  }>): Promise<WorkloadAttachment> {
+    const attachment = this.impl.consumerEnvironments.attachWorkload({
+      registrationId: input.registrationId,
+      evidence: {
+        adapterId: input.adapterId,
+        issuer: input.issuer,
+        subject: input.subject,
+        credentialGeneration: input.credentialGeneration,
+        authenticatedAt: input.authenticatedAt,
+        expiresAt: input.expiresAt,
+        auditFingerprint: "platform-binding",
+      },
+    });
+    return new WorkloadAttachmentImpl(this.impl, attachment);
   }
 
   // `notifyClosed` should be invoked when the return `Overseer` stub is disposed, which is used
@@ -8692,6 +8945,14 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return this.impl.invokeContractMethod(contractId, caller, methodName, args);
   }
 
+  async invokeConsumerBindingMethod(
+      snapshot: ReturnType<ConsumerEnvironmentAuthority["openDevelopmentEnvironment"]>,
+      bindingName: string,
+      methodName: string,
+      args: unknown[]): Promise<unknown> {
+    return this.impl.invokeConsumerBindingMethod(snapshot, bindingName, methodName, args);
+  }
+
   async invokeRestoredContractMethod(
       contractId: WorkpieceId, restoration: ContractRestorationReference,
       caller: GatekeeperCaller,
@@ -8855,6 +9116,222 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   }
 }
 
+function developmentStatus(
+  impl: OverseerImpl,
+  sessionId: string,
+  principalId: string,
+): DevelopmentSessionStatus {
+  return impl.consumerEnvironments.getDevelopmentSessionStatus(sessionId, principalId);
+}
+
+@validateRpc()
+class DevelopmentApiImpl extends NativeRpcTarget implements DevelopmentApi {
+  constructor(
+    readonly impl: OverseerImpl,
+    readonly principalId: string,
+    readonly profileId: string,
+  ) {
+    super();
+  }
+
+  async startSession(request: StartDevelopmentSession): Promise<NativeRpcStub<DevelopmentSession>> {
+    await this.impl.requireDevelopmentPermission(this.principalId, this.profileId);
+    const session = this.impl.startDevelopmentSession({
+      ...request,
+      principalId: this.principalId,
+    });
+    return new DevelopmentSessionImpl(
+      this.impl,
+      this.principalId,
+      this.profileId,
+      session.id,
+    ) as unknown as NativeRpcStub<DevelopmentSession>;
+  }
+
+  async resumeSession(
+    request: ResumeDevelopmentSession,
+  ): Promise<NativeRpcStub<DevelopmentSession>> {
+    await this.impl.requireDevelopmentPermission(this.principalId, this.profileId);
+    const session = this.impl.consumerEnvironments.resumeDevelopmentSession({
+      ...request,
+      principalId: this.principalId,
+    });
+    return new DevelopmentSessionImpl(
+      this.impl,
+      this.principalId,
+      this.profileId,
+      session.id,
+    ) as unknown as NativeRpcStub<DevelopmentSession>;
+  }
+
+  async getSessionStatus(sessionId: string): Promise<DevelopmentSessionStatus> {
+    await this.impl.requireDevelopmentPermission(this.principalId, this.profileId);
+    return developmentStatus(this.impl, sessionId, this.principalId);
+  }
+}
+
+@validateRpc()
+class DevelopmentSessionImpl extends NativeRpcTarget implements DevelopmentSession {
+  constructor(
+    readonly impl: OverseerImpl,
+    readonly principalId: string,
+    readonly profileId: string,
+    readonly sessionId: string,
+  ) {
+    super();
+  }
+
+  async getStatus(): Promise<DevelopmentSessionStatus> {
+    await this.impl.requireDevelopmentPermission(this.principalId, this.profileId);
+    return developmentStatus(this.impl, this.sessionId, this.principalId);
+  }
+
+  async openEnvironment(
+    expectedEnvironmentGeneration: number,
+  ): Promise<NativeRpcStub<DevelopmentEnvironment>> {
+    await this.impl.requireDevelopmentPermission(this.principalId, this.profileId);
+    const snapshot = this.impl.consumerEnvironments.openDevelopmentEnvironment(
+      this.sessionId,
+      this.principalId,
+      expectedEnvironmentGeneration,
+    );
+    return new ConsumerEnvironmentImpl(
+      this.impl,
+      snapshot,
+      () => this.impl.requireDevelopmentPermission(this.principalId, this.profileId),
+    ) as unknown as NativeRpcStub<DevelopmentEnvironment>;
+  }
+
+  async renew(request: RenewDevelopmentLease): Promise<DevelopmentSessionStatus> {
+    await this.impl.requireDevelopmentPermission(this.principalId, this.profileId);
+    this.impl.renewDevelopmentSession({
+      ...request,
+      sessionId: this.sessionId,
+      principalId: this.principalId,
+    });
+    return developmentStatus(this.impl, this.sessionId, this.principalId);
+  }
+
+  async disconnect(request: DisconnectDevelopmentSession): Promise<void> {
+    await this.impl.requireDevelopmentPermission(this.principalId, this.profileId);
+    await this.impl.disconnectDevelopmentConsumer({
+      ...request,
+      sessionId: this.sessionId,
+      principalId: this.principalId,
+    });
+  }
+}
+
+@validateRpc()
+class WorkloadAttachmentImpl extends NativeRpcTarget implements WorkloadAttachment {
+  constructor(
+    readonly impl: OverseerImpl,
+    readonly attachment: ReturnType<ConsumerEnvironmentAuthority["attachWorkload"]>,
+  ) {
+    super();
+  }
+
+  async getStatus(): Promise<WorkloadStatus> {
+    return this.impl.consumerEnvironments.getWorkloadStatus(this.attachment);
+  }
+
+  async openEnvironment(
+    expectedEnvironmentGeneration: number,
+  ): Promise<NativeRpcStub<WorkloadEnvironment>> {
+    const snapshot = this.impl.consumerEnvironments.openWorkloadEnvironment(
+      this.attachment,
+      expectedEnvironmentGeneration,
+    );
+    return new ConsumerEnvironmentImpl(
+      this.impl,
+      snapshot,
+    ) as unknown as NativeRpcStub<WorkloadEnvironment>;
+  }
+}
+
+@validateRpc()
+class ConsumerEnvironmentImpl extends NativeRpcTarget implements
+    DevelopmentEnvironment, WorkloadEnvironment {
+  readonly revocation = {active: true};
+
+  constructor(
+    readonly impl: OverseerImpl,
+    readonly snapshot: ReturnType<ConsumerEnvironmentAuthority["openDevelopmentEnvironment"]>,
+    readonly requireLive: () => Promise<void> = async () => {},
+  ) {
+    super();
+  }
+
+  async getBindings(): Promise<ConsumerBindingEnvironment> {
+    await this.requireLive();
+    if (!this.revocation.active ||
+        !this.impl.consumerEnvironments.validateEnvironmentSnapshot(this.snapshot)) {
+      throw new Error("Development environment generation is stale.");
+    }
+    const bindings: Record<string, NativeRpcStub<NativeRpcTarget>> = {};
+    for (const binding of this.snapshot.bindings) {
+      bindings[binding.name] = new NativeRpcStub(new CanonicalConsumerBindingTarget(
+        this.impl,
+        structuredClone(this.snapshot),
+        binding.name,
+        this.revocation,
+        this.requireLive,
+      ));
+    }
+    return {
+      generation: this.snapshot.environmentGeneration,
+      bindingSet: structuredClone(this.snapshot.bindingSet),
+      types: this.snapshot.bindings.map(binding => ({
+        name: binding.name,
+        required: binding.required,
+        artifactApprovalId: binding.artifactApprovalId,
+        artifactApprovalEpoch: binding.artifactApprovalEpoch,
+        publicTypes: binding.publicTypes,
+      })),
+      bindings,
+    };
+  }
+
+  [Symbol.dispose](): void {
+    this.revocation.active = false;
+  }
+}
+
+class CanonicalConsumerBindingTarget extends NativeRpcTarget {
+  constructor(
+    readonly impl: OverseerImpl,
+    readonly snapshot: ReturnType<ConsumerEnvironmentAuthority["openDevelopmentEnvironment"]>,
+    readonly bindingName: string,
+    readonly revocation: {active: boolean},
+    readonly requireLive: () => Promise<void>,
+  ) {
+    super();
+    return new Proxy(this, {
+      get(target, property) {
+        if (property === "then") return undefined;
+        if (typeof property !== "string") return Reflect.get(target, property, target);
+        return async (...args: unknown[]) => {
+          if (!target.revocation.active) {
+            throw new Error("Canonical Consumer environment was disposed.");
+          }
+          await target.requireLive();
+          return target.impl.invokeConsumerBindingMethod(
+            target.snapshot,
+            target.bindingName,
+            property,
+            args,
+          );
+        };
+      },
+      getPrototypeOf() {
+        return NativeRpcTarget.prototype;
+      },
+    });
+  }
+
+  dummyMethodToWorkAroundValidatorBug() {}
+}
+
 type GatekeeperCaller = {
   from: "agent";
   chatId: number;
@@ -8871,6 +9348,9 @@ type GatekeeperCaller = {
   chatId?: number;
 } | {
   from: "hook";
+} | {
+  from: "canonicalConsumer";
+  consumerId: string;
 };
 
 type BindingLoopbackProps = {
@@ -8952,6 +9432,59 @@ export class BindingLoopback extends WorkerEntrypoint<Cloudflare.Env, BindingLoo
   // We need to declare a method otherwise the validator won't even report this class as existing
   // and so the loopback binding won't be created.
   dummyMethodToWorkAroundValidatorBug() {}
+}
+
+type CloudflareWorkloadEntrypointProps = Readonly<{
+  protocol: "cloudflare-service-binding.v1";
+  workspaceId: string;
+  registrationId: string;
+  credentialSubject: string;
+  credentialGeneration: number;
+}>;
+
+/** Private same-account Workload authenticator; caller arguments cannot select authority. */
+export class CloudflareWorkloadEntrypoint extends
+    WorkerEntrypoint<Cloudflare.Env, CloudflareWorkloadEntrypointProps> implements
+    WorkloadConnector {
+  async attach(request: AttachWorkload): Promise<NativeRpcStub<WorkloadAttachment>> {
+    const requestKeys = Object.keys(request).toSorted();
+    if (request.protocol !== "cloudflare-service-binding.v1" ||
+        requestKeys.some(key => key !== "protocol" && key !== "correlationId")) {
+      throw new Error("Workload attachment denied.");
+    }
+    const props = this.ctx.props;
+    const expectedKeys = [
+      "credentialGeneration",
+      "credentialSubject",
+      "protocol",
+      "registrationId",
+      "workspaceId",
+    ];
+    if (JSON.stringify(Object.keys(props).toSorted()) !== JSON.stringify(expectedKeys) ||
+        props.protocol !== "cloudflare-service-binding.v1" ||
+        !props.workspaceId || !props.registrationId || !props.credentialSubject ||
+        !Number.isSafeInteger(props.credentialGeneration) || props.credentialGeneration < 1 ||
+        !this.env.WORKLOAD_ACCOUNT_ISSUER) {
+      throw new Error("Workload attachment denied.");
+    }
+    let overseerId: DurableObjectId;
+    try {
+      overseerId = this.ctx.exports.OverseerDurableObject.idFromString(props.workspaceId);
+    } catch {
+      throw new Error("Workload attachment denied.");
+    }
+    const now = Date.now();
+    const attachment = this.ctx.exports.OverseerDurableObject.get(overseerId).attachWorkload({
+      registrationId: props.registrationId,
+      adapterId: "cloudflare-service-binding.v1",
+      issuer: this.env.WORKLOAD_ACCOUNT_ISSUER,
+      subject: props.credentialSubject,
+      credentialGeneration: props.credentialGeneration,
+      authenticatedAt: now,
+      expiresAt: now + 15 * 60 * 1_000,
+    });
+    return attachment as unknown as NativeRpcStub<WorkloadAttachment>;
+  }
 }
 
 type ManagerSourceLoopbackProps = {
