@@ -161,7 +161,8 @@ function fingerprint(binding: RatchetBindingAuthority): string {
   });
 }
 
-function assertNarrower(
+/** Proves that one fresh replacement is a strict, lineage-compatible authority subset. */
+export function assertNarrowerRatchetAuthority(
   parent: RatchetBindingAuthority,
   replacement: RatchetBindingAuthority,
   nextExpiresAt: number,
@@ -303,7 +304,7 @@ export class TrustRatchet {
       if (change.type === "retract") removed.add(fingerprint(parent));
       if (change.type === "retain") nextBindings.push(parent);
       if (change.type === "replace") {
-        assertNarrower(parent, change.replacement, input.nextExpiresAt);
+        assertNarrowerRatchetAuthority(parent, change.replacement, input.nextExpiresAt);
         if (removed.has(fingerprint(change.replacement))) {
           throw new Error("Trust Ratchet cannot restore permanently removed authority.");
         }

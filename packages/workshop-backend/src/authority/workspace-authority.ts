@@ -29,6 +29,8 @@ import type {
   AgentTaskId,
   AgentTaskCancellationRecord,
   AgentTaskOperationalRecord,
+  AgentTaskRatchetReceiptRecord,
+  AgentTaskTerminalIntentRecord,
   AgentTaskRecord,
   BindingId,
   BindingPublicationPlanId,
@@ -74,6 +76,10 @@ import type {
   ProviderAuthorityIdentity,
   ProviderAuthorityLifecycleResult,
 } from "@gadgets/workshop-shared/gatekeeper-authority";
+import {
+  assertNarrowerRatchetAuthority,
+  type RatchetBindingAuthority,
+} from "./trust-ratchet";
 
 const LEGACY_MANAGER_SOURCE_SAMPLE_LIMIT = 16;
 const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
@@ -515,6 +521,14 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
       agentTaskCancellationReceipts:
         collection<AgentTaskCancellationReceipt>()({primaryKey: "key"}),
       agentTaskOperationalState: collection<AgentTaskOperationalRecord>()({primaryKey: "taskId"}),
+      agentTaskTerminalIntents: collection<AgentTaskTerminalIntentRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {byOperation(record: AgentTaskTerminalIntentRecord) {
+          return record.operationId;
+        }},
+      }),
+      agentTaskRatchetReceipts:
+        collection<AgentTaskRatchetReceiptRecord>()({primaryKey: "operationId"}),
       taskEnvironments: collection<TaskEnvironmentRecord>()({
         primaryKey: "id",
         uniqueIndexes: {
@@ -537,6 +551,7 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
               record.placementDecision.type,
               record.placementDecision.decisionId,
               record.intendedRequirement?.requirementId ?? "",
+              record.ratchetLineageKey ?? "",
             );
           },
         },
@@ -728,6 +743,75 @@ export type WorkspaceAuthorityCommand =
   | {type: "materializeAgentTaskDispatch"; input: MaterializeAgentTaskDispatchInput}
   | {type: "recordAgentTaskOperationalState"; record: AgentTaskOperationalRecord}
   | {
+      type: "publishMaterializedAgentTask";
+      operationId: string;
+      taskId: AgentTaskId;
+      expectedTaskGeneration: number;
+      expectedEnvironmentGeneration: number;
+      endpoints: readonly Readonly<{
+        bindingId: BindingId;
+        contractInstanceId: ContractInstanceId;
+        snapshot: ContractReachabilitySnapshot;
+        acknowledgement: Readonly<{
+          endpointId: string;
+          reachabilityGeneration: number;
+          taskGeneration: number;
+          leaseGeneration: number;
+          environmentGeneration: number;
+          ratchetVersion: number;
+          cancellationId: string;
+          cancellationGeneration: number;
+          networkGeneration: number;
+          bindingId: BindingId;
+          bindingGeneration: number;
+          contractInstanceId: ContractInstanceId;
+          contractInstanceGeneration: number;
+        }>;
+      }>[];
+    }
+  | {
+      type: "commitR2TaskRatchetReplacement";
+      operationId: string;
+      taskId: AgentTaskId;
+      expectedTaskGeneration: number;
+      expectedEnvironmentGeneration: number;
+      expectedRatchetVersion: number;
+      predecessorBindingId: BindingId;
+      replacementBindingId: BindingId;
+      replacementResolutionId: BindingResolutionId;
+      replacementContractInstanceId: ContractInstanceId;
+      nextLeaseExpiresAt: number;
+      predecessorAuthority: RatchetBindingAuthority;
+      replacementAuthority: RatchetBindingAuthority;
+      providerDescription: ProviderAuthorityDescription;
+      providerResult: ProviderAuthorityLifecycleResult;
+      endpointSnapshot: ContractReachabilitySnapshot;
+      endpointAcknowledgement: Readonly<{
+        endpointId: string;
+        reachabilityGeneration: number;
+        taskGeneration: number;
+        leaseGeneration: number;
+        environmentGeneration: number;
+        ratchetVersion: number;
+        cancellationId: string;
+        cancellationGeneration: number;
+        networkGeneration: number;
+      }>;
+      predecessorInvalidation: ContractInvalidationAcknowledgement;
+    }
+  | {
+      type: "beginPublishedAgentTaskTermination";
+      operationId: string;
+      taskId: AgentTaskId;
+      expectedTaskGeneration: number;
+      expectedEnvironmentGeneration: number;
+      expectedRatchetVersion: number;
+      outcome: "completed" | "cancelled" | "failed" | "expired";
+    }
+  | {type: "acknowledgePublishedAgentTaskDestruction"; intentId: string;
+      endpointAcknowledgements: readonly ContractInvalidationAcknowledgement[]}
+  | {type: "commitDestroyedAgentTask"; intentId: string}
+  | {
       type: "terminateUnpublishedAgentTask";
       operationId: string;
       taskId: AgentTaskId;
@@ -835,6 +919,12 @@ export type WorkspaceAuthorityCommandResult =
   | {type: "taskTemplateVersionRecorded"; id: string}
   | {type: "taskTemplateApprovalRecorded"; id: TaskTemplateApprovalId}
   | {type: "agentTaskOperationalStateRecorded"; taskId: AgentTaskId; revision: number}
+  | {type: "materializedAgentTaskPublished"; taskId: AgentTaskId; environmentGeneration: number}
+  | {type: "r2TaskRatchetCommitted"; taskId: AgentTaskId; environmentGeneration: number;
+      ratchetVersion: number; networkGeneration: number}
+  | {type: "publishedAgentTaskTerminated"; taskId: AgentTaskId; generation: number}
+  | {type: "publishedAgentTaskTerminationBegun"; intentId: string}
+  | {type: "publishedAgentTaskDestructionAcknowledged"; intentId: string}
   | {
       type: "agentTaskDispatched";
       taskId: AgentTaskId;
@@ -2209,6 +2299,10 @@ export function createWorkspaceAuthorityModule<
               sourceActivities: structuredClone(operational?.sourceActivityRefs ?? []),
               agentActivities: structuredClone(operational?.agentActivityRefs ?? []),
             },
+            authorityDebtRefs: environment.bindings.flatMap(placement => {
+              const debt = storage.authorityDebts.byBinding.get(placement.bindingId);
+              return debt ? [`authority-debt:${debt.id}`] : [];
+            }),
           } satisfies AgentTaskAuthorityView;
         });
       });
@@ -2691,6 +2785,424 @@ export function createWorkspaceAuthorityModule<
             return {type: <const>"agentTaskOperationalStateRecorded", taskId: record.taskId,
               revision: record.revision};
           });
+        case "publishMaterializedAgentTask":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const task = storage.agentTasks.get(command.taskId);
+            const environment = task && storage.taskEnvironments.byTaskGeneration.get(
+              compositeKey(task.id, task.environmentGeneration),
+            );
+            if (!task || !environment || task.generation !== command.expectedTaskGeneration ||
+                environment.generation !== command.expectedEnvironmentGeneration ||
+                task.lifecycle !== "dispatching" || environment.state !== "materializing" ||
+                command.endpoints.length !== environment.bindings.length) {
+              throw new Error("Materialized Agent Task is unavailable or stale.");
+            }
+            for (const placement of environment.bindings) {
+              const endpoint = command.endpoints.find(candidate =>
+                candidate.bindingId === placement.bindingId &&
+                candidate.contractInstanceId === placement.contractInstanceId);
+              const binding = storage.bindings.get(placement.bindingId);
+              const instance = storage.contractInstances.get(placement.contractInstanceId);
+              if (!endpoint || !binding || binding.status !== "preparing" ||
+                  !instance?.providerBacking || instance.lifecycle !== "prepared") {
+                throw new Error("Agent Task endpoint preparation is incomplete.");
+              }
+              const snapshot = validateContractReachabilitySnapshot(endpoint.snapshot);
+              if (snapshot.instanceId !== instance.id ||
+                  snapshot.instanceGeneration !== instance.generation ||
+                  snapshot.artifactHash !== instance.artifactHash ||
+                  snapshot.runtimeProfileHash !== instance.runtimeProfileHash ||
+                  snapshot.reachabilityId !== `binding:${binding.id}` ||
+                  snapshot.reachabilityGeneration !== binding.generation ||
+                  endpoint.acknowledgement.endpointId !== snapshot.endpointId ||
+                  endpoint.acknowledgement.reachabilityGeneration !==
+                    snapshot.reachabilityGeneration ||
+                  endpoint.acknowledgement.taskGeneration !== task.generation ||
+                  endpoint.acknowledgement.leaseGeneration !== task.leaseGeneration ||
+                  endpoint.acknowledgement.environmentGeneration !== environment.generation ||
+                  endpoint.acknowledgement.ratchetVersion !== environment.ratchetVersion ||
+                  endpoint.acknowledgement.cancellationId !== environment.cancellationId ||
+                  endpoint.acknowledgement.cancellationGeneration !==
+                    environment.cancellationGeneration ||
+                  endpoint.acknowledgement.networkGeneration !== environment.networkGeneration ||
+                  endpoint.acknowledgement.bindingId !== binding.id ||
+                  endpoint.acknowledgement.bindingGeneration !== binding.generation ||
+                  endpoint.acknowledgement.contractInstanceId !== instance.id ||
+                  endpoint.acknowledgement.contractInstanceGeneration !== instance.generation) {
+                throw new Error("Agent Task endpoint acknowledgement is stale or ambiguous.");
+              }
+            }
+            for (const placement of environment.bindings) {
+              const endpoint = command.endpoints.find(candidate =>
+                candidate.bindingId === placement.bindingId)!;
+              const binding = storage.bindings.get(placement.bindingId)!;
+              const instance = storage.contractInstances.get(placement.contractInstanceId)!;
+              storage.contractInstances.put({...instance, lifecycle: "ready",
+                revision: instance.revision + 1});
+              storage.bindings.put({...binding, status: "active",
+                endpointSnapshot: structuredClone(endpoint.snapshot), revision: binding.revision + 1});
+            }
+            storage.taskEnvironments.put({...environment, state: "ready"});
+            storage.agentTasks.put({...task, lifecycle: "running"});
+            appendAuthorityEvent(storage, {
+              type: "agentTaskChanged",
+              subjectId: task.id,
+              operationId: command.operationId,
+              beforeGeneration: task.generation,
+              afterGeneration: task.generation,
+            });
+            return {type: <const>"materializedAgentTaskPublished", taskId: task.id,
+              environmentGeneration: environment.generation};
+          });
+        case "commitR2TaskRatchetReplacement":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const requestDigest = digestText(JSON.stringify(command));
+            const receipt = storage.agentTaskRatchetReceipts.get(command.operationId);
+            if (receipt) {
+              if (receipt.requestDigest !== requestDigest) {
+                throw new Error("R2 Task Ratchet Operation was reused.");
+              }
+              return {type: <const>"r2TaskRatchetCommitted", taskId: receipt.taskId,
+                environmentGeneration: receipt.environmentGeneration,
+                ratchetVersion: receipt.ratchetVersion,
+                networkGeneration: receipt.networkGeneration};
+            }
+            const task = storage.agentTasks.get(command.taskId);
+            const environment = task && storage.taskEnvironments.byTaskGeneration.get(
+              compositeKey(task.id, task.environmentGeneration),
+            );
+            const predecessor = storage.bindings.get(command.predecessorBindingId);
+            const predecessorInstance = predecessor &&
+              storage.contractInstances.get(predecessor.contractInstanceId);
+            const predecessorResolution = predecessor &&
+              storage.bindingResolutions.get(predecessor.resolutionId);
+            const placement = environment?.bindings.find(binding =>
+              binding.bindingId === command.predecessorBindingId);
+            if (!task || !environment || !predecessor || !predecessor.endpointSnapshot ||
+                !predecessorInstance?.providerBacking || !predecessorResolution || !placement ||
+                task.lifecycle !== "running" || environment.state !== "ready" ||
+                task.generation !== command.expectedTaskGeneration ||
+                environment.generation !== command.expectedEnvironmentGeneration ||
+                environment.ratchetVersion !== command.expectedRatchetVersion ||
+                command.nextLeaseExpiresAt > environment.leaseExpiresAt ||
+                command.replacementBindingId === predecessor.id ||
+                command.replacementResolutionId === predecessor.resolutionId ||
+                command.replacementContractInstanceId === predecessorInstance.id ||
+                storage.bindings.get(command.replacementBindingId) !== undefined ||
+                storage.bindingResolutions.get(command.replacementResolutionId) !== undefined ||
+                storage.contractInstances.get(command.replacementContractInstanceId) !== undefined ||
+                command.predecessorInvalidation.endpointId !==
+                  predecessor.endpointSnapshot.endpointId ||
+                command.predecessorInvalidation.reachabilityGeneration !==
+                  predecessor.endpointSnapshot.reachabilityGeneration ||
+                !command.predecessorInvalidation.invalidated ||
+                command.predecessorInvalidation.cleanupFailures !== 0) {
+              throw new Error("R2 Task Ratchet predecessor is stale or not invalidated.");
+            }
+            const parentAuthority = command.predecessorAuthority;
+            const replacementAuthority = command.replacementAuthority;
+            if (parentAuthority.name !== predecessor.name ||
+                parentAuthority.requirementId !== placement.requirementId ||
+                parentAuthority.bindingId !== predecessor.id ||
+                parentAuthority.bindingGeneration !== predecessor.generation ||
+                parentAuthority.contractInstanceId !== predecessorInstance.id ||
+                parentAuthority.contractInstanceGeneration !== predecessorInstance.generation ||
+                replacementAuthority.name !== predecessor.name ||
+                replacementAuthority.requirementId !== placement.requirementId ||
+                replacementAuthority.bindingId !== command.replacementBindingId ||
+                replacementAuthority.bindingGeneration !== 1 ||
+                replacementAuthority.contractInstanceId !== command.replacementContractInstanceId ||
+                replacementAuthority.contractInstanceGeneration !== 1) {
+              throw new Error("R2 Task Ratchet authority lineage is stale.");
+            }
+            const canonicalParentAuthority: RatchetBindingAuthority = {
+              name: predecessor.name,
+              requirementId: placement.requirementId,
+              bindingId: predecessor.id,
+              bindingGeneration: predecessor.generation,
+              contractInstanceId: predecessorInstance.id,
+              contractInstanceGeneration: predecessorInstance.generation,
+              authority: structuredClone(placement.authority),
+            };
+            if (!sameAuthorityValue(parentAuthority, canonicalParentAuthority)) {
+              throw new Error("R2 Task Ratchet parent authority is not canonical.");
+            }
+            assertNarrowerRatchetAuthority(
+              canonicalParentAuthority,
+              replacementAuthority,
+              command.nextLeaseExpiresAt,
+            );
+            const nextAuthorityDigest = digestText(JSON.stringify(replacementAuthority.authority));
+            const nextEnvironmentGeneration = environment.generation + 1;
+            const nextRatchetVersion = environment.ratchetVersion + 1;
+            const nextNetworkGeneration = environment.networkGeneration + 1;
+            const providerResult = command.providerResult;
+            if (command.providerDescription.health !== "healthy" ||
+                !sameAuthorityValue(command.providerDescription.identity, providerResult.provider) ||
+                providerResult.contractInstance.id !== command.replacementContractInstanceId ||
+                providerResult.contractInstance.generation !== 1 || providerResult.state !== "prepared" ||
+                providerResult.cleanup !== "not-required" ||
+                !sameAuthorityValue(providerResult.provider, predecessorInstance.providerBacking.provider)) {
+              throw new Error("R2 Task Ratchet provider preparation is stale or changed authority.");
+            }
+            const snapshot = validateContractReachabilitySnapshot(command.endpointSnapshot);
+            const acknowledgement = command.endpointAcknowledgement;
+            if (snapshot.instanceId !== command.replacementContractInstanceId ||
+                snapshot.instanceGeneration !== 1 ||
+                snapshot.artifactHash !== predecessorInstance.artifactHash ||
+                snapshot.runtimeProfileHash !== predecessorInstance.runtimeProfileHash ||
+                snapshot.reachabilityId !== `binding:${command.replacementBindingId}` ||
+                snapshot.reachabilityGeneration !== 1 ||
+                acknowledgement.endpointId !== snapshot.endpointId ||
+                acknowledgement.reachabilityGeneration !== snapshot.reachabilityGeneration ||
+                acknowledgement.taskGeneration !== task.generation ||
+                acknowledgement.leaseGeneration !== task.leaseGeneration ||
+                acknowledgement.environmentGeneration !== nextEnvironmentGeneration ||
+                acknowledgement.ratchetVersion !== nextRatchetVersion ||
+                acknowledgement.cancellationId !== environment.cancellationId ||
+                acknowledgement.cancellationGeneration !== environment.cancellationGeneration ||
+                acknowledgement.networkGeneration !== nextNetworkGeneration) {
+              throw new Error("R2 Task Ratchet replacement acknowledgement is stale.");
+            }
+            const providerBacking = {
+              provider: structuredClone(providerResult.provider),
+              backingReference: providerResult.backingReference,
+              capabilityGeneration: providerResult.capabilityGeneration,
+              providerNativeScope: structuredClone(
+                command.providerDescription.providerNativeScope,
+              ),
+              providerNativeRevocationGranularity:
+                command.providerDescription.providerNativeRevocationGranularity,
+              localEnforcementRevocationGranularity:
+                command.providerDescription.localEnforcementRevocationGranularity,
+            };
+            storage.contractInstances.put({
+              ...predecessorInstance,
+              id: command.replacementContractInstanceId,
+              providerBacking,
+              lifecycle: "ready",
+              generation: 1,
+              revision: 1,
+              predecessorId: predecessorInstance.id,
+              ratchetLineageKey: command.operationId,
+              createdSequence: appendAuthorityEvent(storage, {
+                type: "contractInstancePrepared",
+                subjectId: command.replacementContractInstanceId,
+                operationId: command.operationId,
+              }),
+            });
+            storage.bindingResolutions.put({
+              ...predecessorResolution,
+              id: command.replacementResolutionId,
+              contractInstanceId: command.replacementContractInstanceId,
+              bindingId: command.replacementBindingId,
+              expectedBindingGeneration: 0,
+              createdSequence: appendAuthorityEvent(storage, {
+                type: "bindingPublicationPlanned",
+                subjectId: command.replacementBindingId,
+                operationId: command.operationId,
+              }),
+            });
+            storage.bindings.put({...predecessor, status: "retracted",
+              generation: predecessor.generation + 1, revision: predecessor.revision + 1});
+            storage.bindings.put({
+              ...predecessor,
+              id: command.replacementBindingId,
+              contractInstanceId: command.replacementContractInstanceId,
+              resolutionId: command.replacementResolutionId,
+              status: "active",
+              generation: 1,
+              revision: 1,
+              predecessorId: predecessor.id,
+              endpointSnapshot: structuredClone(snapshot),
+            });
+            const predecessorDebt = storage.authorityDebts.byBinding.get(predecessor.id);
+            if (!predecessorDebt) {
+              throw new Error("R2 Task Ratchet authority debt lineage is missing.");
+            }
+            const replacementDebtId = issueAuthorityId<"authorityDebt">();
+            appendAuthorityEvent(storage, {
+              type: "authorityDebtRecorded",
+              subjectId: replacementDebtId,
+              operationId: command.operationId,
+            });
+            storage.authorityDebts.put({...structuredClone(predecessorDebt),
+              id: replacementDebtId, bindingId: command.replacementBindingId, revision: 1});
+            storage.contractInstances.put({...predecessorInstance, lifecycle: "retracted",
+              generation: predecessorInstance.generation + 1,
+              revision: predecessorInstance.revision + 1});
+            storage.taskEnvironments.put({...environment, state: "invalidated"});
+            const nextEnvironment: TaskEnvironmentRecord = {
+              ...environment,
+              id: compositeKey(task.id, nextEnvironmentGeneration),
+              generation: nextEnvironmentGeneration,
+              ratchetVersion: nextRatchetVersion,
+              networkGeneration: nextNetworkGeneration,
+              leaseExpiresAt: command.nextLeaseExpiresAt,
+              effectiveAuthorityDigest: nextAuthorityDigest,
+              bindings: environment.bindings.map(binding => binding.bindingId === predecessor.id
+                ? {...binding,
+                    bindingId: command.replacementBindingId,
+                    resolutionId: command.replacementResolutionId,
+                    contractInstanceId: command.replacementContractInstanceId,
+                    authority: structuredClone(replacementAuthority.authority)}
+                : binding),
+              state: "ready",
+            };
+            storage.taskEnvironments.put(nextEnvironment);
+            storage.agentTasks.put({...task, environmentGeneration: nextEnvironmentGeneration,
+              ratchetVersion: nextRatchetVersion, leaseExpiresAt: command.nextLeaseExpiresAt});
+            appendAuthorityEvent(storage, {
+              type: "agentTaskChanged",
+              subjectId: task.id,
+              operationId: command.operationId,
+              beforeGeneration: environment.generation,
+              afterGeneration: nextEnvironmentGeneration,
+            });
+            storage.agentTaskRatchetReceipts.put({
+              operationId: command.operationId,
+              requestDigest,
+              taskId: task.id,
+              environmentGeneration: nextEnvironmentGeneration,
+              ratchetVersion: nextRatchetVersion,
+              networkGeneration: nextNetworkGeneration,
+            });
+            return {type: <const>"r2TaskRatchetCommitted", taskId: task.id,
+              environmentGeneration: nextEnvironmentGeneration,
+              ratchetVersion: nextRatchetVersion,
+              networkGeneration: nextNetworkGeneration};
+          });
+        case "beginPublishedAgentTaskTermination":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const task = storage.agentTasks.get(command.taskId);
+            const environment = task && storage.taskEnvironments.byTaskGeneration.get(
+              compositeKey(task.id, task.environmentGeneration),
+            );
+            if (!task || !environment || task.lifecycle !== "running" ||
+                task.generation !== command.expectedTaskGeneration ||
+                environment.generation !== command.expectedEnvironmentGeneration ||
+                environment.ratchetVersion !== command.expectedRatchetVersion) {
+              throw new Error("Published Agent Task termination target is stale.");
+            }
+            const existing = storage.agentTaskTerminalIntents.byOperation.get(command.operationId);
+            if (existing) {
+              if (existing.taskId !== command.taskId ||
+                  existing.expectedTaskGeneration !== command.expectedTaskGeneration ||
+                  existing.expectedEnvironmentGeneration !== command.expectedEnvironmentGeneration ||
+                  existing.expectedRatchetVersion !== command.expectedRatchetVersion ||
+                  existing.outcome !== command.outcome) {
+                throw new Error("Agent Task terminal Operation was reused.");
+              }
+              return {type: <const>"publishedAgentTaskTerminationBegun", intentId: existing.id};
+            }
+            const intentId = crypto.randomUUID();
+            storage.agentTaskTerminalIntents.put({
+              id: intentId,
+              operationId: command.operationId,
+              taskId: command.taskId,
+              expectedTaskGeneration: command.expectedTaskGeneration,
+              expectedEnvironmentGeneration: command.expectedEnvironmentGeneration,
+              expectedRatchetVersion: command.expectedRatchetVersion,
+              outcome: command.outcome,
+              state: "planned",
+              endpointAcknowledgements: [],
+            });
+            return {type: <const>"publishedAgentTaskTerminationBegun", intentId};
+          });
+        case "acknowledgePublishedAgentTaskDestruction":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const intent = storage.agentTaskTerminalIntents.get(command.intentId);
+            const task = intent && storage.agentTasks.get(intent.taskId);
+            const environment = task && storage.taskEnvironments.byTaskGeneration.get(
+              compositeKey(task.id, task.environmentGeneration),
+            );
+            if (!intent || !task || !environment || intent.state === "committed" ||
+                task.generation !== intent.expectedTaskGeneration ||
+                environment.generation !== intent.expectedEnvironmentGeneration ||
+                environment.ratchetVersion !== intent.expectedRatchetVersion ||
+                command.endpointAcknowledgements.length !== environment.bindings.length) {
+              throw new Error("Agent Task terminal intent is unavailable or stale.");
+            }
+            for (const placement of environment.bindings) {
+              const binding = storage.bindings.get(placement.bindingId);
+              const acknowledgement = binding?.endpointSnapshot &&
+                command.endpointAcknowledgements.find(candidate =>
+                  candidate.endpointId === binding.endpointSnapshot!.endpointId &&
+                  candidate.reachabilityGeneration ===
+                    binding.endpointSnapshot!.reachabilityGeneration);
+              if (!binding?.endpointSnapshot || !acknowledgement?.invalidated ||
+                  acknowledgement.cleanupFailures !== 0) {
+                throw new Error("Agent Task endpoint invalidation acknowledgement is incomplete.");
+              }
+            }
+            if (intent.state === "invalidated" &&
+                !sameAuthorityValue(intent.endpointAcknowledgements,
+                  command.endpointAcknowledgements)) {
+              throw new Error("Agent Task invalidation acknowledgement changed across retry.");
+            }
+            storage.agentTaskTerminalIntents.put({...intent, state: "invalidated",
+              endpointAcknowledgements: structuredClone(command.endpointAcknowledgements)});
+            return {type: <const>"publishedAgentTaskDestructionAcknowledged", intentId: intent.id};
+          });
+        case "commitDestroyedAgentTask":
+          return storage.transaction(() => {
+            requireActiveAuthority(storage);
+            const intent = storage.agentTaskTerminalIntents.get(command.intentId);
+            const task = intent && storage.agentTasks.get(intent.taskId);
+            const environment = task && storage.taskEnvironments.byTaskGeneration.get(
+              compositeKey(task.id, task.environmentGeneration),
+            );
+            if (intent?.state === "committed" && task &&
+                task.generation === intent.expectedTaskGeneration + 1 &&
+                task.lifecycle === intent.outcome) {
+              return {type: <const>"publishedAgentTaskTerminated", taskId: task.id,
+                generation: task.generation};
+            }
+            if (!intent || !task || !environment || intent.state !== "invalidated" ||
+                task.lifecycle !== "running" || task.generation !== intent.expectedTaskGeneration ||
+                environment.generation !== intent.expectedEnvironmentGeneration ||
+                environment.ratchetVersion !== intent.expectedRatchetVersion) {
+              throw new Error("Agent Task destruction is not acknowledged for commit.");
+            }
+            for (const placement of environment.bindings) {
+              const binding = storage.bindings.get(placement.bindingId);
+              const instance = storage.contractInstances.get(placement.contractInstanceId);
+              if (!binding || !instance) {
+                throw new Error("Agent Task cleanup lineage is incomplete.");
+              }
+              storage.bindings.put({...binding, status: "retracted",
+                generation: binding.generation + 1, revision: binding.revision + 1});
+              storage.contractInstances.put({...instance, lifecycle: "retracted",
+                generation: instance.generation + 1, revision: instance.revision + 1});
+            }
+            storage.taskEnvironments.put({...environment, state: "invalidated"});
+            const generation = task.generation + 1;
+            storage.agentTasks.put({...task, generation, lifecycle: intent.outcome});
+            if (intent.outcome === "cancelled") {
+              const cancellation = storage.agentTaskCancellations.get(task.id);
+              if (!cancellation || cancellation.state !== "requested" ||
+                  cancellation.expectedTaskGeneration !== intent.expectedTaskGeneration ||
+                  cancellation.expectedEnvironmentGeneration !==
+                    intent.expectedEnvironmentGeneration ||
+                  cancellation.expectedRatchetVersion !== intent.expectedRatchetVersion) {
+                throw new Error("Agent Task cancellation request is unavailable or stale.");
+              }
+              storage.agentTaskCancellations.put({...cancellation, state: "acknowledged"});
+            }
+            storage.agentTaskTerminalIntents.put({...intent, state: "committed"});
+            appendAuthorityEvent(storage, {
+              type: "agentTaskChanged",
+              subjectId: task.id,
+              operationId: intent.operationId,
+              beforeGeneration: task.generation,
+              afterGeneration: generation,
+            });
+            return {type: <const>"publishedAgentTaskTerminated", taskId: task.id, generation};
+          });
         case "materializeAgentTaskDispatch":
           return storage.transaction(() => {
             requireActiveAuthority(storage);
@@ -2862,7 +3374,7 @@ export function createWorkspaceAuthorityModule<
               decidedBy: "system:task-template",
               decisionSequence,
             });
-            const environmentBindings = placed.map(({requirement, binding, instance}) => {
+            const environmentBindings = placed.map(({requirement, binding, instance, debt}) => {
               const requirementReference = requirementReferences.find(reference =>
                 reference.requirementId === requirement.requirementId)!;
               const contractInstanceId = issueAuthorityId<"contractInstance">();
@@ -2921,6 +3433,14 @@ export function createWorkspaceAuthorityModule<
                 revision: 1,
                 installedSequence: createdSequence,
               });
+              const taskDebtId = issueAuthorityId<"authorityDebt">();
+              appendAuthorityEvent(storage, {
+                type: "authorityDebtRecorded",
+                subjectId: taskDebtId,
+                operationId: input.operationId,
+              });
+              storage.authorityDebts.put({...structuredClone(debt), id: taskDebtId,
+                bindingId, revision: 1});
               return {
                 name: requirement.name,
                 required: requirement.required,
@@ -2929,6 +3449,7 @@ export function createWorkspaceAuthorityModule<
                 contractInstanceId,
                 bindingId,
                 upstreamBinding: structuredClone(requirement.standingBinding),
+                authority: structuredClone(requirement.maximumAuthority),
               };
             });
             const leaseExpiresAt = Math.min(absoluteExpiresAt, input.requestedAt + 15 * 60_000);
@@ -2967,6 +3488,9 @@ export function createWorkspaceAuthorityModule<
               taskGeneration: 1,
               generation: 1,
               ratchetVersion: 1,
+              networkGeneration: 1,
+              cancellationId: crypto.randomUUID(),
+              cancellationGeneration: 1,
               leaseGeneration: 1,
               leaseExpiresAt,
               absoluteExpiresAt,
@@ -3075,6 +3599,7 @@ export function createWorkspaceAuthorityModule<
               command.record.placementDecision.type,
               command.record.placementDecision.decisionId,
               command.record.intendedRequirement?.requirementId ?? "",
+              "",
             );
             const existing = storage.contractInstances.byPlacementDecision.get(placementKey);
             if (existing) {

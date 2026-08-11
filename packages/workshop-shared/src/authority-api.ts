@@ -317,6 +317,8 @@ export interface AgentTaskAuthorityView {
   readonly cancellation?: AgentTaskCancellationView;
   /** Bounded operational blocks safe for the authority UI. */
   readonly blocks: readonly AgentTaskOperationalBlock[];
+  /** Visible provider-native authority debt retained across Ratchet replacements. */
+  readonly authorityDebtRefs: readonly string[];
   /** Separately typed evidence references; bodies and credentials are never included. */
   readonly evidence: AgentTaskEvidenceRefs;
 }

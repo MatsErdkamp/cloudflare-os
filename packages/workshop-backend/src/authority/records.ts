@@ -1,9 +1,13 @@
 import type {WorkpieceId} from "@gadgets/workshop-shared/api";
-import type {ContractReachabilitySnapshot} from "@gadgets/contractors/runtime";
+import type {
+  ContractInvalidationAcknowledgement,
+  ContractReachabilitySnapshot,
+} from "@gadgets/contractors/runtime";
 import type {
   ProviderAuthorityIdentity,
   ProviderNativeAuthorityScope,
 } from "@gadgets/workshop-shared/gatekeeper-authority";
+import type {RatchetAuthorityEnvelope} from "./trust-ratchet";
 
 declare const authorityIdKind: unique symbol;
 
@@ -252,6 +256,7 @@ export type TaskTemplateRequirementRecord = Readonly<{
   artifactApprovalEpoch: number;
   standingBinding: TaskStandingBindingReference;
   maximumEffectiveAuthorityEnvelopeHash: string;
+  maximumAuthority: RatchetAuthorityEnvelope;
   evaluatorPolicyHash: string;
   sharedState: SharedStateChoice;
 }>;
@@ -352,6 +357,29 @@ export type AgentTaskOperationalRecord = Readonly<{
   revision: number;
 }>;
 
+/** Durable enforcement-first terminal intent and exact endpoint invalidation receipt. */
+export type AgentTaskTerminalIntentRecord = Readonly<{
+  id: string;
+  operationId: string;
+  taskId: AgentTaskId;
+  expectedTaskGeneration: number;
+  expectedEnvironmentGeneration: number;
+  expectedRatchetVersion: number;
+  outcome: "completed" | "cancelled" | "failed" | "expired";
+  state: "planned" | "invalidated" | "committed";
+  endpointAcknowledgements: readonly ContractInvalidationAcknowledgement[];
+}>;
+
+/** Exact idempotency receipt for one committed canonical Trust Ratchet replacement. */
+export type AgentTaskRatchetReceiptRecord = Readonly<{
+  operationId: string;
+  requestDigest: string;
+  taskId: AgentTaskId;
+  environmentGeneration: number;
+  ratchetVersion: number;
+  networkGeneration: number;
+}>;
+
 /** One immutable manifest of the exact task placements for one environment generation. */
 export type TaskEnvironmentRecord = Readonly<{
   id: string;
@@ -359,6 +387,9 @@ export type TaskEnvironmentRecord = Readonly<{
   taskGeneration: number;
   generation: number;
   ratchetVersion: number;
+  networkGeneration: number;
+  cancellationId: string;
+  cancellationGeneration: number;
   leaseGeneration: number;
   leaseExpiresAt: number;
   absoluteExpiresAt: number;
@@ -372,6 +403,7 @@ export type TaskEnvironmentRecord = Readonly<{
     contractInstanceId: ContractInstanceId;
     bindingId: BindingId;
     upstreamBinding: TaskStandingBindingReference;
+    authority: RatchetAuthorityEnvelope;
   }>[];
   omittedOptionalRequirements: readonly Readonly<{
     requirementId: RequirementId;
@@ -430,6 +462,8 @@ export type ContractInstanceRecord = Readonly<{
   revision: number;
   createdSequence: number;
   predecessorId?: ContractInstanceId;
+  /** Ratchet transition identity distinguishing task-local replacement generations. */
+  ratchetLineageKey?: string;
   rollbackToId?: ContractInstanceId;
 }>;
 

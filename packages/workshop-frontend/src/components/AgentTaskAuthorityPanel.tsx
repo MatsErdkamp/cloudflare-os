@@ -141,6 +141,7 @@ export function AgentTaskAuthorityPanel({authenticatedApi, workspaceId}: Props) 
               <dt>Environment</dt><dd>generation {task.environment.generation}, Ratchet {task.environment.ratchetVersion}</dd>
               <dt>Authority</dt><dd className="break-all font-mono">{task.environment.originalAuthorityDigest} → {task.environment.currentAuthorityDigest}</dd>
               <dt>Bindings</dt><dd>{task.environment.bindings.map(binding => binding.name).join(", ") || "None"}</dd>
+              <dt>Authority debt</dt><dd>{task.authorityDebtRefs.join(", ") || "None"}</dd>
             </dl>
             {task.blocks.length > 0 && (
               <ul className="mt-3 list-disc pl-5 text-xs text-destructive">

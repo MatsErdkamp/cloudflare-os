@@ -1265,6 +1265,21 @@ describe("Workspace Authority module", () => {
         lifecycle: "active",
       },
     })).toMatchObject({type: "workspacePrincipalRecorded", generation: 1});
+    const taskRequestedAt = Date.now();
+    const maximumTaskAuthority = {
+      provider: "cloudflare-r2",
+      resourceIdentity: "task-approved-prefix",
+      upstreamAuthorityIdentity: "deployment-r2-bucket",
+      artifactApprovalId: approval.id,
+      artifactApprovalEpoch: 1,
+      operations: ["get", "list", "put"],
+      recipients: [],
+      egress: [],
+      releaseClasses: ["observation"],
+      sharing: "per-task",
+      enforcementProfile: "r2-task-v1",
+      maximumExpiresAt: taskRequestedAt + 60_000,
+    } as const;
     const template = module.authority.execute({
       type: "recordTaskTemplateVersion",
       record: {
@@ -1284,6 +1299,7 @@ describe("Workspace Authority module", () => {
             contractInstanceGeneration: 1,
           },
           maximumEffectiveAuthorityEnvelopeHash: `sha256:${"c".repeat(64)}`,
+          maximumAuthority: maximumTaskAuthority,
           evaluatorPolicyHash: `sha256:${"9".repeat(64)}`,
           sharedState: {type: "isolated"},
         }],
@@ -1320,7 +1336,6 @@ describe("Workspace Authority module", () => {
       workloadRegistrationId: "registration-1",
       workloadRegistrationGeneration: 1,
     };
-    const taskRequestedAt = Date.now();
     const materialized = module.authority.execute({
       type: "materializeAgentTaskDispatch",
       input: {
@@ -1388,6 +1403,183 @@ describe("Workspace Authority module", () => {
           upstreamBinding: {bindingId: standingBinding.bindingId},
         },
       });
+    const taskInstance = module.authority.query({
+      type: "contractInstance",
+      id: taskPlacement.contractInstanceId,
+    });
+    if (taskInstance.type !== "contractInstance" || !taskInstance.value) {
+      throw new Error("task instance unavailable");
+    }
+    module.authority.execute({
+      type: "recordProviderBacking",
+      operationId: "task-provider-backing",
+      contractInstanceId: taskPlacement.contractInstanceId,
+      expectedInstanceGeneration: 1,
+      description: {
+        identity: providerIdentity,
+        health: "healthy",
+        providerNativeScope: {
+          resources: ["deployment-r2-bucket"],
+          operations: ["head", "get", "list", "put", "delete"],
+          recipients: [],
+          egress: [],
+        },
+        providerNativeRevocationGranularity: "deployment-resource",
+        localEnforcementRevocationGranularity: "contract-instance-backing",
+      },
+      result: {
+        provider: providerIdentity,
+        contractInstance: {id: taskPlacement.contractInstanceId, generation: 1},
+        backingReference: "task-specific-backing",
+        capabilityGeneration: 1,
+        state: "prepared",
+        cleanup: "not-required",
+      },
+    });
+    const taskEndpointSnapshot = {
+      endpointId: `contract-instance:${taskPlacement.contractInstanceId}`,
+      instanceId: taskPlacement.contractInstanceId,
+      instanceGeneration: 1,
+      artifactHash: taskInstance.value.artifactHash,
+      runtimeProfileHash: taskInstance.value.runtimeProfileHash,
+      reachabilityId: `binding:${taskPlacement.bindingId}`,
+      reachabilityGeneration: 1,
+      authoritySnapshotDigest: `sha256:${"2".repeat(64)}`,
+      compositionLineage: [`contract-instance:${taskPlacement.contractInstanceId}`],
+      chainDepth: 0,
+      maxChainDepth: 8,
+    };
+    expect(module.authority.execute({
+      type: "publishMaterializedAgentTask",
+      operationId: "publish-task-environment",
+      taskId: materialized.taskId,
+      expectedTaskGeneration: 1,
+      expectedEnvironmentGeneration: 1,
+      endpoints: [{
+        bindingId: taskPlacement.bindingId,
+        contractInstanceId: taskPlacement.contractInstanceId,
+        snapshot: taskEndpointSnapshot,
+        acknowledgement: {
+          endpointId: taskEndpointSnapshot.endpointId,
+          reachabilityGeneration: taskEndpointSnapshot.reachabilityGeneration,
+          taskGeneration: 1,
+          leaseGeneration: 1,
+          environmentGeneration: 1,
+          ratchetVersion: 1,
+          cancellationId: taskEnvironment.value.cancellationId,
+          cancellationGeneration: 1,
+          networkGeneration: 1,
+          bindingId: taskPlacement.bindingId,
+          bindingGeneration: 1,
+          contractInstanceId: taskPlacement.contractInstanceId,
+          contractInstanceGeneration: 1,
+        },
+      }],
+    })).toMatchObject({type: "materializedAgentTaskPublished", environmentGeneration: 1});
+    const replacementBindingId = "task-binding-ratchet-2" as typeof taskPlacement.bindingId;
+    const replacementResolutionId = "task-resolution-ratchet-2" as typeof taskPlacement.resolutionId;
+    const replacementInstanceId =
+      "task-instance-ratchet-2" as typeof taskPlacement.contractInstanceId;
+    const replacementEndpointSnapshot = {
+      ...taskEndpointSnapshot,
+      endpointId: `contract-instance:${replacementInstanceId}`,
+      instanceId: replacementInstanceId,
+      reachabilityId: `binding:${replacementBindingId}`,
+      authoritySnapshotDigest: `sha256:${"3".repeat(64)}`,
+      compositionLineage: [`contract-instance:${replacementInstanceId}`],
+    };
+    const predecessorAuthority = {
+      name: "R2_STORAGE",
+      requirementId: taskPlacement.requirementId,
+      bindingId: taskPlacement.bindingId,
+      bindingGeneration: 1,
+      contractInstanceId: taskPlacement.contractInstanceId,
+      contractInstanceGeneration: 1,
+      authority: maximumTaskAuthority,
+    } as const;
+    const replacementAuthority = {
+      ...predecessorAuthority,
+      bindingId: replacementBindingId,
+      contractInstanceId: replacementInstanceId,
+      authority: {...predecessorAuthority.authority,
+        operations: ["get", "list"], maximumExpiresAt: taskRequestedAt + 30_000},
+    } as const;
+    const ratchetCommand = {
+      type: "commitR2TaskRatchetReplacement",
+      operationId: "ratchet-task-environment",
+      taskId: materialized.taskId,
+      expectedTaskGeneration: 1,
+      expectedEnvironmentGeneration: 1,
+      expectedRatchetVersion: 1,
+      predecessorBindingId: taskPlacement.bindingId,
+      replacementBindingId,
+      replacementResolutionId,
+      replacementContractInstanceId: replacementInstanceId,
+      nextLeaseExpiresAt: taskRequestedAt + 30_000,
+      predecessorAuthority,
+      replacementAuthority,
+      providerDescription: {
+        identity: providerIdentity,
+        health: "healthy",
+        providerNativeScope: {
+          resources: ["deployment-r2-bucket"],
+          operations: ["head", "get", "list", "put", "delete"],
+          recipients: [],
+          egress: [],
+        },
+        providerNativeRevocationGranularity: "deployment-resource",
+        localEnforcementRevocationGranularity: "contract-instance-backing",
+      },
+      providerResult: {
+        provider: providerIdentity,
+        contractInstance: {id: replacementInstanceId, generation: 1},
+        backingReference: "task-specific-backing-narrower",
+        capabilityGeneration: 1,
+        state: "prepared",
+        cleanup: "not-required",
+      },
+      endpointSnapshot: replacementEndpointSnapshot,
+      endpointAcknowledgement: {
+        endpointId: replacementEndpointSnapshot.endpointId,
+        reachabilityGeneration: 1,
+        taskGeneration: 1,
+        leaseGeneration: 1,
+        environmentGeneration: 2,
+        ratchetVersion: 2,
+        cancellationId: taskEnvironment.value.cancellationId,
+        cancellationGeneration: 1,
+        networkGeneration: 2,
+      },
+      predecessorInvalidation: {
+        endpointId: taskEndpointSnapshot.endpointId,
+        reachabilityGeneration: 1,
+        invalidated: true,
+        cancelledInvocations: 1,
+        cleanupFailures: 0,
+      },
+    } as const;
+    expect(() => module.authority.execute({...ratchetCommand,
+      operationId: "ratchet-fabricated-parent",
+      predecessorAuthority: {...predecessorAuthority,
+        authority: {...predecessorAuthority.authority,
+          operations: ["get", "list", "put", "delete"]}},
+    })).toThrow("parent authority is not canonical");
+    expect(module.authority.execute(ratchetCommand)).toMatchObject({
+      type: "r2TaskRatchetCommitted",
+      environmentGeneration: 2,
+      ratchetVersion: 2,
+      networkGeneration: 2,
+    });
+    expect(module.authority.execute(ratchetCommand)).toMatchObject({
+      type: "r2TaskRatchetCommitted",
+      environmentGeneration: 2,
+    });
+    expect(module.authority.query({type: "binding", id: taskPlacement.bindingId}))
+      .toMatchObject({value: {status: "retracted", generation: 2}});
+    expect(module.authority.query({type: "binding", id: replacementBindingId}))
+      .toMatchObject({value: {predecessorId: taskPlacement.bindingId}});
+    expect(module.authority.query({type: "authorityDebtByBinding", bindingId: replacementBindingId}))
+      .toMatchObject({value: {bindingId: replacementBindingId, lifecycle: "open"}});
     expect(() => module.authority.execute({
       type: "materializeAgentTaskDispatch",
       input: {
@@ -1423,8 +1615,8 @@ describe("Workspace Authority module", () => {
       expectedPermissionGeneration: authoritySession.permissionGeneration,
       taskId: materialized.taskId,
       expectedTaskGeneration: 1,
-      expectedEnvironmentGeneration: 1,
-      expectedRatchetVersion: 1,
+      expectedEnvironmentGeneration: 2,
+      expectedRatchetVersion: 2,
     };
     expect(module.authority.requestAgentTaskCancellation(
       authoritySession,
@@ -1445,8 +1637,8 @@ describe("Workspace Authority module", () => {
       record: {
         taskId: materialized.taskId,
         taskGeneration: 1,
-        environmentGeneration: 1,
-        ratchetVersion: 1,
+        environmentGeneration: 2,
+        ratchetVersion: 2,
         protectedResultRefs: ["protected-result:1"],
         missingAcknowledgementRefs: ["endpoint:1"],
         staleParallelWorkRefs: ["invocation:old"],
@@ -1459,9 +1651,10 @@ describe("Workspace Authority module", () => {
       expect.objectContaining({
         taskId: materialized.taskId,
         template: expect.objectContaining({version: 1, approvalLifecycle: "active"}),
-        environment: expect.objectContaining({generation: 1, ratchetVersion: 1}),
+        environment: expect.objectContaining({generation: 2, ratchetVersion: 2}),
         agentServiceWorkload: {id: "workload-1", generation: 1},
         cancellation: {generation: 1, state: "requested"},
+        authorityDebtRefs: [expect.stringMatching(/^authority-debt:/)],
         blocks: expect.arrayContaining([
           {type: "protectedResult", reference: "protected-result:1"},
           {type: "missingAcknowledgement", reference: "endpoint:1"},
@@ -1488,15 +1681,45 @@ describe("Workspace Authority module", () => {
         activeTaskConsequence: expect.any(String),
       }),
     ]);
-    expect(module.authority.execute({
-      type: "terminateUnpublishedAgentTask",
-      operationId: "cancel-materializing-task",
+    const terminal = module.authority.execute({
+      type: "beginPublishedAgentTaskTermination",
+      operationId: "cancel-published-task",
       taskId: materialized.taskId,
       expectedTaskGeneration: 1,
-      lifecycle: "cancelled",
-    })).toMatchObject({type: "agentTaskTerminated", generation: 2});
+      expectedEnvironmentGeneration: 2,
+      expectedRatchetVersion: 2,
+      outcome: "cancelled",
+    });
+    if (terminal.type !== "publishedAgentTaskTerminationBegun") {
+      throw new Error("published task termination unavailable");
+    }
+    expect(() => module.authority.execute({
+      type: "commitDestroyedAgentTask",
+      intentId: terminal.intentId,
+    })).toThrow("not acknowledged");
+    expect(module.authority.execute({
+      type: "acknowledgePublishedAgentTaskDestruction",
+      intentId: terminal.intentId,
+      endpointAcknowledgements: [{
+        endpointId: replacementEndpointSnapshot.endpointId,
+        reachabilityGeneration: replacementEndpointSnapshot.reachabilityGeneration,
+        invalidated: true,
+        cancelledInvocations: 1,
+        cleanupFailures: 0,
+      }],
+    })).toMatchObject({type: "publishedAgentTaskDestructionAcknowledged"});
+    expect(module.authority.execute({
+      type: "commitDestroyedAgentTask",
+      intentId: terminal.intentId,
+    })).toMatchObject({type: "publishedAgentTaskTerminated", generation: 2});
+    expect(module.authority.execute({
+      type: "commitDestroyedAgentTask",
+      intentId: terminal.intentId,
+    })).toMatchObject({type: "publishedAgentTaskTerminated", generation: 2});
     expect(module.authority.query({type: "agentTask", id: materialized.taskId}))
       .toMatchObject({value: {lifecycle: "cancelled", generation: 2}});
+    expect(module.authority.listAgentTaskAuthorityViews(authoritySession))
+      .toEqual([expect.objectContaining({cancellation: {generation: 1, state: "acknowledged"}})]);
     expect(module.authority.query({type: "binding", id: taskPlacement.bindingId}))
       .toMatchObject({value: {status: "retracted", generation: 2}});
     expect(module.authority.query({
