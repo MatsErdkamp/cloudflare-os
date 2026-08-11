@@ -634,6 +634,16 @@ describe("Workspace Authority module", () => {
         expectedBindingGeneration: 0,
       }),
     });
+    expect(module.authority.query({
+      type: "bindingExecutionByRuntimeWorkpiece",
+      runtimeWorkpieceId: 10,
+    })).toMatchObject({
+      type: "bindingExecutionByRuntimeWorkpiece",
+      value: {
+        binding: {id: published.bindingId, status: "active"},
+        instance: {id: prepared.id, runtimeWorkpieceId: 10, lifecycle: "ready"},
+      },
+    });
 
     expect(() => publishAcknowledgedBinding(module.authority, {
       operationId: "stale-publish",
@@ -775,6 +785,13 @@ describe("Workspace Authority module", () => {
       .toMatchObject({type: "binding", value: {status: "retracted", generation: 2}});
     expect(module.authority.query({type: "contractInstance", id: prepared.id}))
       .toMatchObject({type: "contractInstance", value: {lifecycle: "retracted", generation: 2}});
+    expect(module.authority.query({
+      type: "contractInstanceByRuntimeWorkpiece",
+      runtimeWorkpieceId: 10,
+    })).toMatchObject({
+      type: "contractInstanceByRuntimeWorkpiece",
+      value: {id: prepared.id, lifecycle: "retracted", generation: 2},
+    });
     expect(module.authority.query({
       type: "authorityTombstoneBySubject",
       subjectType: "contractInstance",

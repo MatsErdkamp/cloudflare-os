@@ -127,7 +127,8 @@ import type {
   ArtifactApprovalId,
   ArtifactProposalId,
   ConsumerId,
-  ContractInstanceId,
+  BindingRecord as CanonicalBindingRecord,
+  ContractInstanceRecord as CanonicalContractInstanceRecord,
   LiveUpstreamAuthorityReference,
   RequirementId,
   SourceId,
@@ -327,8 +328,16 @@ type GatekeeperRecord = {
 // Legacy combined Contract row retained as migration input and runtime locator until retirement.
 type ContractRecord = ContractorsContractRecord<WorkpieceId> & {
   installationRequestId?: string;
-  canonicalInstanceId?: string;
 };
+
+type CanonicalBindingExecution = Readonly<{
+  binding: CanonicalBindingRecord;
+  instance: CanonicalContractInstanceRecord;
+}>;
+
+type ContractExecutionMode =
+  | Readonly<{mode: "canonical"; execution: CanonicalBindingExecution}>
+  | Readonly<{mode: "legacy"}>;
 
 type CanonicalSourceActivityRecord = Readonly<{
   id: string;
@@ -1897,6 +1906,48 @@ class OverseerImpl implements AgentHooks {
     return record;
   }
 
+  // The only ordinary-runtime cutover decision: active workspaces must resolve a current
+  // canonical Binding; pre-cutover workspaces may still use their legacy Contract session.
+  resolveContractExecution(
+      runtimeWorkpieceId: WorkpieceId,
+      purpose: "invoke" | "retract" = "invoke"): ContractExecutionMode {
+    if (purpose === "retract") {
+      const instance = this.workspaceAuthority.query({
+        type: "contractInstanceByRuntimeWorkpiece",
+        runtimeWorkpieceId,
+      });
+      if (instance.type !== "contractInstanceByRuntimeWorkpiece") {
+        throw new Error("Canonical Contract instance lookup is unavailable.");
+      }
+      if (instance.value) {
+        const binding = this.workspaceAuthority.query({
+          type: "bindingByInstance",
+          contractInstanceId: instance.value.id,
+        });
+        if (binding.type !== "bindingByInstance") {
+          throw new Error("Canonical Contract Binding lookup is unavailable.");
+        }
+        if (binding.value) {
+          return {mode: "canonical", execution: {binding: binding.value, instance: instance.value}};
+        }
+      }
+    } else {
+      const canonical = this.workspaceAuthority.query({
+        type: "bindingExecutionByRuntimeWorkpiece",
+        runtimeWorkpieceId,
+      });
+      if (canonical.type !== "bindingExecutionByRuntimeWorkpiece") {
+        throw new Error("Canonical Contract execution lookup is unavailable.");
+      }
+      if (canonical.value) return {mode: "canonical", execution: canonical.value};
+    }
+    const status = this.workspaceAuthority.query({type: "status"});
+    if (status.type !== "status" || status.value.state === "active") {
+      throw new Error("Canonical Contract Binding is stale, invalidating, or unavailable.");
+    }
+    return {mode: "legacy"};
+  }
+
   // Name of the Y.Doc root map holding the given gadget's files. The default gadget keeps the
   // legacy unnamed root ""; all others use the decimal workpiece ID.
   gadgetRootName(id: WorkpieceId): string {
@@ -2994,10 +3045,11 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
-  getContractFacet(contract: ContractRecord): Fetcher<ContractFacetRpc> {
+  getContractFacet(
+      contract: ContractRecord, artifactHash = contract.artifactHash): Fetcher<ContractFacetRpc> {
     let facetName = `contract${contract.id}`;
     return this.ctx.facets.get<ContractFacetRpc>(facetName, () => {
-      let worker = this.loadContractWorker(contract.artifactHash);
+      let worker = this.loadContractWorker(artifactHash);
       return {
         class: worker.getDurableObjectClass<ContractFacetRpc>("ContractFacet"),
         id: facetName,
@@ -3077,7 +3129,6 @@ class OverseerImpl implements AgentHooks {
     if (!contract) {
       contract = {
         id: instance.value.runtimeWorkpieceId,
-        canonicalInstanceId: instance.value.id,
         artifactHash: artifact.hash,
         runtimeProfileHash: artifact.runtimeProfileHash,
         sourceGatekeeperId: effect.command.sourceGatekeeperId,
@@ -3572,18 +3623,12 @@ class OverseerImpl implements AgentHooks {
 
   async deleteContract(contractId: WorkpieceId): Promise<void> {
     let contract = this.requireContract(contractId);
+    const executionMode = this.resolveContractExecution(contractId, "retract");
 
     // Enforcement closes and acknowledges before any canonical edge or instance is retracted.
-    if (contract.canonicalInstanceId) {
-      const bindingView = this.workspaceAuthority.query({
-        type: "bindingByInstance",
-        contractInstanceId: contract.canonicalInstanceId as ContractInstanceId,
-      });
-      if (bindingView.type !== "bindingByInstance" || !bindingView.value) {
-        throw new Error("Canonical Contract Binding is unavailable for retraction.");
-      }
-      const binding = bindingView.value;
-      const operationId = `retract-contract:${contract.canonicalInstanceId}:${binding.generation}`;
+    if (executionMode.mode === "canonical") {
+      const {binding, instance} = executionMode.execution;
+      const operationId = `retract-contract:${instance.id}:${binding.generation}`;
       let intent = this.workspaceAuthority.query({
         type: "invalidationIntentByOperation",
         operationId,
@@ -3805,9 +3850,11 @@ class OverseerImpl implements AgentHooks {
       contractId: WorkpieceId, caller: GatekeeperCaller,
       methodName?: string): Promise<unknown> {
     let contract = this.requireContract(contractId);
-    if (contract.canonicalInstanceId) {
+    const executionMode = this.resolveContractExecution(contractId);
+    if (executionMode.mode === "canonical") {
       return this.startCanonicalContractSession(
-        contract as ContractRecord & {canonicalInstanceId: string},
+        contract,
+        executionMode.execution,
         caller,
         methodName,
       );
@@ -3835,11 +3882,13 @@ class OverseerImpl implements AgentHooks {
   }
 
   async startCanonicalContractSession(
-      contract: ContractRecord & {canonicalInstanceId: string},
+      contract: ContractRecord,
+      execution: CanonicalBindingExecution,
       caller: GatekeeperCaller,
       methodName?: string): Promise<unknown> {
     return this.withCanonicalContractSession(
       contract,
+      execution,
       caller,
       methodName,
       (facet, session) => facet.startSession(session),
@@ -3847,20 +3896,20 @@ class OverseerImpl implements AgentHooks {
   }
 
   async withCanonicalContractSession<T>(
-      contract: ContractRecord & {canonicalInstanceId: string},
+      contract: ContractRecord,
+      execution: CanonicalBindingExecution,
       caller: GatekeeperCaller,
       methodName: string | undefined,
       invoke: (facet: Fetcher<ContractFacetRpc>, session: ContractLifecycleSession) => Promise<T>,
   ): Promise<T> {
-    const execution = this.workspaceAuthority.query({
-      type: "bindingExecutionByInstance",
-      contractInstanceId: contract.canonicalInstanceId as ContractInstanceId,
-    });
-    if (execution.type !== "bindingExecutionByInstance" || !execution.value ||
-        !execution.value.binding.endpointSnapshot || !execution.value.instance.providerBacking) {
+    if (!execution.binding.endpointSnapshot || !execution.instance.providerBacking) {
       throw new Error("Canonical Contract Binding is stale, invalidating, or unavailable.");
     }
-    const {binding, instance} = execution.value;
+    const {binding, instance} = execution;
+    const sourceGatekeeperId = instance.sourceGatekeeperId;
+    if (sourceGatekeeperId === undefined) {
+      throw new Error("Canonical Contract Source lineage is unavailable.");
+    }
     if (instance.placementDecision.type !== "installation") {
       throw new Error("Standing Contract execution requires Installation Decision lineage.");
     }
@@ -3873,7 +3922,7 @@ class OverseerImpl implements AgentHooks {
     }
     const endpointSnapshot = binding.endpointSnapshot!;
     const providerBacking = instance.providerBacking!;
-    const provider = this.getCanonicalProviderFacet(instance.id, contract.sourceGatekeeperId);
+    const provider = this.getCanonicalProviderFacet(instance.id, sourceGatekeeperId);
     const providerRequest = {
       expectedProvider: structuredClone(providerBacking.provider),
       contractInstance: {id: instance.id, generation: instance.generation},
@@ -3899,8 +3948,8 @@ class OverseerImpl implements AgentHooks {
     const call: ContractCallContext = {
       callId: crypto.randomUUID(),
       contractId: contract.id,
-      artifactHash: contract.artifactHash,
-      sourceGatekeeperId: contract.sourceGatekeeperId,
+      artifactHash: instance.artifactHash,
+      sourceGatekeeperId,
       caller,
       startedAt: new Date(),
       ...(methodName ? {methodName} : {}),
@@ -3909,8 +3958,8 @@ class OverseerImpl implements AgentHooks {
     const sessionBase: Omit<ContractLifecycleSession, "source"> = {
       approval: new ContractApprovalTarget(this, call),
       restorer: new ContractRestorerTarget(this, call),
-      ...(contract.sharedStateKey
-        ? {sharedState: new ContractSharedStateTarget(this, contract.sharedStateKey)}
+      ...(instance.sharedState.type === "shared"
+        ? {sharedState: new ContractSharedStateTarget(this, instance.sharedState.key)}
         : {}),
       reachability: endpointSnapshot,
       invocation: createContractInvocationEvidence({
@@ -3940,7 +3989,7 @@ class OverseerImpl implements AgentHooks {
         actionStager,
       );
       const session: ContractLifecycleSession = {...sessionBase, source};
-      const facet = this.getContractFacet(contract);
+      const facet = this.getContractFacet(contract, instance.artifactHash);
       const cancellation = new NativeRpcStub(new CanonicalProviderCancellation(
         provider,
         providerRequest,
@@ -4139,11 +4188,13 @@ class OverseerImpl implements AgentHooks {
       caller: GatekeeperCaller,
       methodName: string, args: unknown[]): Promise<unknown> {
     let contract = this.requireContract(contractId);
-    if (contract.canonicalInstanceId) {
+    const executionMode = this.resolveContractExecution(contractId);
+    if (executionMode.mode === "canonical") {
       let capability: unknown;
       try {
         capability = await this.withCanonicalContractSession(
-          contract as ContractRecord & {canonicalInstanceId: string},
+          contract,
+          executionMode.execution,
           caller,
           methodName,
           (facet, session) => facet.restoreSession(session, restoration),
@@ -10008,7 +10059,7 @@ class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
     if (!artifact || artifact.runtimeProfileHash !== proposal.value.runtimeProfileHash) {
       throw new Error("Approved Contract Artifact is unavailable or mismatched.");
     }
-    const accepted = this.impl.workspaceAuthority.acceptStandingInstallation({
+    this.impl.workspaceAuthority.acceptStandingInstallation({
       session,
       command,
       requestDigest,
@@ -10042,10 +10093,8 @@ class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
       },
       providerDescription: description,
     });
-    const prepared = {id: accepted.contractInstanceId};
     const contract: ContractRecord = {
       id: runtimeWorkpieceId,
-      canonicalInstanceId: prepared.id,
       artifactHash: artifact.hash,
       runtimeProfileHash: artifact.runtimeProfileHash,
       sourceGatekeeperId: command.sourceGatekeeperId,
@@ -10057,7 +10106,9 @@ class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
       ...(command.sharedStateKey ? {sharedStateKey: command.sharedStateKey} : {}),
     };
     const existingContract = this.impl.storage.contracts.get(runtimeWorkpieceId);
-    if (existingContract && existingContract.canonicalInstanceId !== prepared.id) {
+    if (existingContract && (existingContract.artifactHash !== artifact.hash ||
+        existingContract.runtimeProfileHash !== artifact.runtimeProfileHash ||
+        existingContract.sourceGatekeeperId !== command.sourceGatekeeperId)) {
       throw new Error("Contract runtime locator was reused.");
     }
     this.impl.storage.contracts.put(contract);

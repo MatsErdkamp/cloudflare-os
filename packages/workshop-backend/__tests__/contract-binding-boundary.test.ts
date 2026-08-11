@@ -136,4 +136,20 @@ describe("Contract binding boundary", () => {
       },
     );
   });
+
+  it("never falls back to legacy Contract dispatch after canonical cutover", async () => {
+    await runInDurableObject(
+      env.TEST_OVERSEER.getByName("contract-binding-no-post-cutover-legacy-dispatch"),
+      async (instance: OverseerDurableObject) => {
+        const impl = (instance as any).impl;
+        seedWorkpieces(impl);
+        impl.ensureCanonicalAuthorityActive();
+        impl.openContractSourceSession = vi.fn();
+
+        await expect(impl.startContractSession(70, {from: "user"}))
+          .rejects.toThrow("Canonical Contract Binding is stale");
+        expect(impl.openContractSourceSession).not.toHaveBeenCalled();
+      },
+    );
+  });
 });

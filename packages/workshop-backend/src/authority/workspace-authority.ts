@@ -546,6 +546,9 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
           byLegacyWorkpieceId(record: ContractInstanceRecord) {
             return record.legacyWorkpieceId ?? null;
           },
+          byRuntimeWorkpieceId(record: ContractInstanceRecord) {
+            return record.runtimeWorkpieceId ?? null;
+          },
           byPlacementDecision(record: ContractInstanceRecord) {
             return compositeKey(
               record.placementDecision.type,
@@ -982,6 +985,7 @@ export type WorkspaceAuthorityQuery =
   | {type: "agentTask"; id: AgentTaskId}
   | {type: "taskEnvironment"; taskId: AgentTaskId; generation: number}
   | {type: "contractInstance"; id: ContractInstanceId}
+  | {type: "contractInstanceByRuntimeWorkpiece"; runtimeWorkpieceId: WorkpieceId}
   | {type: "binding"; id: BindingId}
   | {type: "bindingByConsumerName"; consumerId: ConsumerId; name: string}
   | {type: "bindingByInstance"; contractInstanceId: ContractInstanceId}
@@ -991,6 +995,7 @@ export type WorkspaceAuthorityQuery =
   | {type: "invalidationIntentByOperation"; operationId: string}
   | {type: "bindingExecution"; consumerId: ConsumerId; name: string}
   | {type: "bindingExecutionByInstance"; contractInstanceId: ContractInstanceId}
+  | {type: "bindingExecutionByRuntimeWorkpiece"; runtimeWorkpieceId: WorkpieceId}
   | {type: "consumerReadiness"; consumerId: ConsumerId}
   | {type: "consumerEnvironment"; consumerId: ConsumerId}
   | {type: "runtimeApprovalRequest"; id: RuntimeApprovalRequestId}
@@ -1030,6 +1035,7 @@ export type WorkspaceAuthorityQueryResult =
   | {type: "agentTask"; value?: AgentTaskRecord}
   | {type: "taskEnvironment"; value?: TaskEnvironmentRecord}
   | {type: "contractInstance"; value?: ContractInstanceRecord}
+  | {type: "contractInstanceByRuntimeWorkpiece"; value?: ContractInstanceRecord}
   | {type: "binding"; value?: BindingRecord}
   | {type: "bindingByConsumerName"; value?: BindingRecord}
   | {type: "bindingByInstance"; value?: BindingRecord}
@@ -1039,6 +1045,8 @@ export type WorkspaceAuthorityQueryResult =
   | {type: "invalidationIntentByOperation"; value?: InvalidationIntentRecord}
   | {type: "bindingExecution"; value?: Readonly<{binding: BindingRecord; instance: ContractInstanceRecord}>}
   | {type: "bindingExecutionByInstance"; value?: Readonly<{binding: BindingRecord; instance: ContractInstanceRecord}>}
+  | {type: "bindingExecutionByRuntimeWorkpiece";
+      value?: Readonly<{binding: BindingRecord; instance: ContractInstanceRecord}>}
   | {type: "consumerReadiness"; value: Readonly<{ready: boolean; generation: number}>}
   | {
       type: "consumerEnvironment";
@@ -1688,10 +1696,12 @@ function backfillLegacyContract<Gadget extends LegacyGadgetAuthorityRecord>(
   const instance: ContractInstanceRecord = {
     id: existingId,
     legacyWorkpieceId: legacy.id,
+    runtimeWorkpieceId: legacy.id,
     artifactApprovalId: approvalId,
     artifactHash: legacy.artifactHash,
     runtimeProfileHash: legacy.runtimeProfileHash,
     upstreamAuthority,
+    sourceGatekeeperId: legacy.sourceGatekeeperId,
     placementDecision: {type: "installation", decisionId},
     ...(consumer ? {intendedConsumer: consumer} : {}),
     ...(requirement ? {intendedRequirement: requirement} : {}),
@@ -1764,7 +1774,11 @@ function validateBackfill<Gadget extends LegacyGadgetAuthorityRecord>(
   if ([...storage.authorityMigrationDeltas.list()].length !== 0) {
     throw new Error("Legacy migration deltas must be replayed before cutover.");
   }
-  for (const legacy of adapter.listContracts()) {
+  // Durable Object KV permits only one live list iterator. Snapshot both legacy collections
+  // before validation opens canonical indexes or scans Gadget placements.
+  const liveContracts = Array.from(adapter.listContracts());
+  const contractTombstones = Array.from(adapter.listContractTombstones());
+  for (const legacy of liveContracts) {
     const instance = storage.contractInstances.byLegacyWorkpieceId.get(legacy.id);
     if (!instance) throw new Error(`Legacy Contract ${legacy.id} has not been backfilled.`);
     const placement = findLegacyPlacement(adapter, legacy.id);
@@ -1777,7 +1791,7 @@ function validateBackfill<Gadget extends LegacyGadgetAuthorityRecord>(
       throw new Error(`Legacy Binding ${placement.gadget.id}.${placement.name} is not canonical.`);
     }
   }
-  for (const legacy of adapter.listContractTombstones()) {
+  for (const legacy of contractTombstones) {
     const instance = storage.contractInstances.byLegacyWorkpieceId.get(legacy.id);
     if (!instance || instance.lifecycle !== "retracted") {
       throw new Error(`Legacy Contract tombstone ${legacy.id} has not been backfilled.`);
@@ -4358,6 +4372,14 @@ export function createWorkspaceAuthorityModule<
               ? storage.contractInstances.get(query.id)
               : undefined,
           };
+        case "contractInstanceByRuntimeWorkpiece":
+          return {
+            type: "contractInstanceByRuntimeWorkpiece",
+            value: requireAuthorityState(storage).state === "active"
+              ? storage.contractInstances.byRuntimeWorkpieceId.get(query.runtimeWorkpieceId) ??
+                storage.contractInstances.byLegacyWorkpieceId.get(query.runtimeWorkpieceId)
+              : undefined,
+          };
         case "binding":
           return {
             type: "binding",
@@ -4445,6 +4467,24 @@ export function createWorkspaceAuthorityModule<
             type: "bindingExecutionByInstance",
             value: instance?.lifecycle === "ready" ? {binding, instance} : undefined,
           };
+        }
+        case "bindingExecutionByRuntimeWorkpiece": {
+          if (requireAuthorityState(storage).state !== "active") {
+            return {type: "bindingExecutionByRuntimeWorkpiece", value: undefined};
+          }
+          const instance = storage.contractInstances.byRuntimeWorkpieceId.get(
+            query.runtimeWorkpieceId,
+          ) ?? storage.contractInstances.byLegacyWorkpieceId.get(query.runtimeWorkpieceId);
+          if (!instance || instance.lifecycle !== "ready") {
+            return {type: "bindingExecutionByRuntimeWorkpiece", value: undefined};
+          }
+          const binding = Array.from(storage.bindings.byInstance.get(instance.id))
+            .find(candidate => candidate.status === "active");
+          if (!binding || Array.from(storage.invalidationIntents.byBinding.get(binding.id))
+            .some(intent => intent.state !== "committed")) {
+            return {type: "bindingExecutionByRuntimeWorkpiece", value: undefined};
+          }
+          return {type: "bindingExecutionByRuntimeWorkpiece", value: {binding, instance}};
         }
         case "consumerReadiness": {
           if (requireAuthorityState(storage).state !== "active") {
