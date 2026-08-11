@@ -1,5 +1,5 @@
 import {hashArtifact} from "@gadgets/contractors/artifact";
-import type {ContractArtifact, ContractBuildCandidate} from "@gadgets/contractors/artifact";
+import type {ContractArtifact, ContractBuildCandidate, ContractBuildInputs} from "@gadgets/contractors/artifact";
 
 import {
   canonicalReviewJson,
@@ -26,6 +26,7 @@ import type {
   ReviewBuildRunResult,
   ReviewBuildRunnerFactory,
   ReviewDependencyLock,
+  LockedReviewBuildManifest,
   ReviewToolchainIdentity,
 } from "./types.js";
 
@@ -122,14 +123,18 @@ async function attestation(
   recipeHash: string,
   buildTraceHash: string,
   publicDeclarationHash: string,
+  publicExportedSurfaceHash: string,
   sourceDeclarationHash: string,
+  sourceExportedSurfaceHash: string,
 ): Promise<ReviewBuildAttestation> {
   return {
     ...result.isolation,
     inputSetHash,
     artifactHash: result.candidate.artifact.hash,
     publicDeclarationHash,
+    publicExportedSurfaceHash,
     sourceDeclarationHash,
+    sourceExportedSurfaceHash,
     dependencyLockHash,
     directDependencyRequestsHash,
     toolchainHash,
@@ -144,13 +149,44 @@ function assertManifestCap(json: string, limit: number, label: string): void {
   }
 }
 
+/** Creates a content-addressed build manifest from inputs and pre-locked package identities. */
+export async function createReviewBuildManifest(
+  inputs: ContractBuildInputs,
+  packageClosure: LockedReviewBuildManifest["packageClosure"],
+  toolchain: ReviewToolchainIdentity,
+): Promise<LockedReviewBuildManifest> {
+  const inputJson = canonicalReviewJson(inputs);
+  const lockedInputs = {
+    hash: await hashReviewValue(encoder.encode(inputJson)),
+    json: inputJson,
+  };
+  const content = {
+    inputs: lockedInputs,
+    packageClosure: structuredClone(packageClosure),
+    toolchain: structuredClone(toolchain),
+  };
+  return freezeReviewValue({hash: await hashReviewValue(content), ...content});
+}
+
 /** Produces bounded immutable review evidence after two independent exact builds agree. */
 export async function buildContractReviewEvidence(
   input: BuildContractReviewEvidenceInput,
   runnerFactory: ReviewBuildRunnerFactory,
 ): Promise<BuiltContractReviewEvidence> {
+  const {hash: manifestHash, ...manifestContent} = input.buildManifest;
+  if (await hashReviewValue(manifestContent) !== manifestHash) {
+    throw new ReviewEvidenceError("INVALID_INPUT", "Build manifest content address is invalid.");
+  }
+  const inputSetHash = input.buildManifest.inputs.hash;
+  if (await hashReviewValue(encoder.encode(input.buildManifest.inputs.json)) !== inputSetHash) {
+    throw new ReviewEvidenceError("INVALID_INPUT", "Build input content address is invalid.");
+  }
+  const inputs = JSON.parse(input.buildManifest.inputs.json) as ContractBuildInputs;
+  if (canonicalReviewJson(inputs) !== input.buildManifest.inputs.json) {
+    throw new ReviewEvidenceError("INVALID_INPUT", "Build inputs are not canonical.");
+  }
   if (canonicalReviewJson(input.policySnapshot) !==
-      canonicalReviewJson(input.inputs.organizationPolicy ?? {})) {
+      canonicalReviewJson(inputs.organizationPolicy ?? {})) {
     throw new ReviewEvidenceError(
       "INVALID_INPUT",
       "Deployment policy snapshot does not match the policy evaluated by the compiler.",
@@ -170,8 +206,8 @@ export async function buildContractReviewEvidence(
   let verifierRun: ReviewBuildRunResult;
   try {
     [candidateRun, verifierRun] = await Promise.all([
-      candidateRunner.build({inputs: freezeReviewValue(structuredClone(input.inputs))}),
-      verifierRunner.build({inputs: freezeReviewValue(structuredClone(input.inputs))}),
+      candidateRunner.build({buildManifest: input.buildManifest}),
+      verifierRunner.build({buildManifest: input.buildManifest}),
     ]);
   } finally {
     candidateRunner[Symbol.dispose]();
@@ -180,11 +216,24 @@ export async function buildContractReviewEvidence(
   validateRun("candidate", candidateRun);
   validateRun("verifier", verifierRun);
   for (const [role, run] of [["candidate", candidateRun], ["verifier", verifierRun]] as const) {
-    if (canonicalReviewJson(run.candidate.inputs) !== canonicalReviewJson(input.inputs)) {
+    if (canonicalReviewJson(run.candidate.inputs) !== canonicalReviewJson(inputs)) {
       throw new ReviewEvidenceError(
         "NON_REPRODUCIBLE",
         `${role} runner did not compile the exact declared input set.`,
       );
+    }
+  }
+  const expectedClosure = input.buildManifest.packageClosure;
+  for (const [role, run] of [["candidate", candidateRun], ["verifier", verifierRun]] as const) {
+    const actualClosure = run.dependencyLock.entries.map(entry => ({
+      name: entry.name,
+      version: entry.version,
+      packageContentHash: entry.packageContentHash,
+      dependencies: entry.dependencies ?? [],
+    }));
+    if (canonicalReviewJson(actualClosure) !== canonicalReviewJson(expectedClosure) ||
+        canonicalReviewJson(run.toolchain) !== canonicalReviewJson(input.buildManifest.toolchain)) {
+      throw new ReviewEvidenceError("NON_REPRODUCIBLE", `${role} build inputs drifted from their lock manifest.`);
     }
   }
   if (candidateRun.isolation.environmentIdentity === verifierRun.isolation.environmentIdentity) {
@@ -203,6 +252,10 @@ export async function buildContractReviewEvidence(
     ["toolchain", candidateRun.toolchain, verifierRun.toolchain],
     ["recipe", candidateRun.recipe, verifierRun.recipe],
     ["build trace", candidateRun.candidate.trace, verifierRun.candidate.trace],
+    ["public exported surface", candidateRun.publicExportedSurface,
+      verifierRun.publicExportedSurface],
+    ["Source exported surface", candidateRun.sourceExportedSurface,
+      verifierRun.sourceExportedSurface],
   ] as const;
   for (const [label, candidate, verifier] of compared) {
     if (canonicalReviewJson(candidate) !== canonicalReviewJson(verifier)) {
@@ -211,7 +264,7 @@ export async function buildContractReviewEvidence(
   }
 
   const blobs = new Map<string, Uint8Array>();
-  const originalModules = await Promise.all(Object.entries(input.inputs.modules)
+  const originalModules = await Promise.all(Object.entries(inputs.modules)
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(async ([path, source]) => ({
       path,
@@ -233,7 +286,17 @@ export async function buildContractReviewEvidence(
     candidateRun.candidate.artifact.publicTypes,
     "text/typescript",
   );
-  const sourceDeclaration = await addBlob(blobs, input.inputs.sourceTypes, "text/typescript");
+  const sourceDeclaration = await addBlob(blobs, inputs.sourceTypes, "text/typescript");
+  const publicExportedSurface = await addBlob(
+    blobs,
+    canonicalReviewJson(candidateRun.publicExportedSurface),
+    "application/json",
+  );
+  const sourceExportedSurface = await addBlob(
+    blobs,
+    canonicalReviewJson(candidateRun.sourceExportedSurface),
+    "application/json",
+  );
   const dependencyLock = await addBlob(
     blobs,
     canonicalReviewJson(candidateRun.dependencyLock),
@@ -260,7 +323,6 @@ export async function buildContractReviewEvidence(
     canonicalReviewJson(input.policySnapshot),
     "application/json",
   );
-  const inputSetHash = await hashReviewValue(input.inputs);
   const candidateAttestation = await attestation(
     candidateRun,
     inputSetHash,
@@ -270,7 +332,9 @@ export async function buildContractReviewEvidence(
     recipe.hash,
     trace.hash,
     publicDeclaration.hash,
+    publicExportedSurface.hash,
     sourceDeclaration.hash,
+    sourceExportedSurface.hash,
   );
   const verifierAttestation = await attestation(
     verifierRun,
@@ -281,7 +345,9 @@ export async function buildContractReviewEvidence(
     recipe.hash,
     trace.hash,
     publicDeclaration.hash,
+    publicExportedSurface.hash,
     sourceDeclaration.hash,
+    sourceExportedSurface.hash,
   );
   const bundle: ContractReviewBundle = {
     artifact: {
@@ -289,15 +355,17 @@ export async function buildContractReviewEvidence(
       authority: artifactAuthority,
       emittedModules,
       publicDeclaration,
+      publicExportedSurface,
     },
     originalModules,
     source: {
       declaration: sourceDeclaration,
-      rootType: input.inputs.sourceRootType,
+      exportedSurface: sourceExportedSurface,
+      rootType: inputs.sourceRootType,
       typeHash: candidateRun.candidate.artifact.sourceTypeHash,
     },
     build: {
-      mainModule: input.inputs.mainModule,
+      mainModule: inputs.mainModule,
       inputSetHash,
       dependencyLock,
       directDependencyRequests,
@@ -327,7 +395,6 @@ export async function buildContractReviewEvidence(
     parsedBundle,
     blobs,
     bundleHash,
-    input.comparisonGenerator,
   );
   const comparisonJson = canonicalReviewJson(comparison);
   assertManifestCap(comparisonJson, REVIEW_LIMITS.comparisonBytes, "Review Comparison");

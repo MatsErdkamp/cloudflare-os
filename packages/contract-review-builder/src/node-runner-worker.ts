@@ -4,7 +4,7 @@ import {join} from "node:path";
 
 import type {ContractBuildInputs} from "@gadgets/contractors/artifact";
 
-import type {ReviewBuildRunResult, ReviewToolchainComponent} from "./types.js";
+import type {LockedReviewBuildInputs, ReviewBuildRunResult, ReviewToolchainComponent} from "./types.js";
 
 interface WorkerRequest {
   readonly role: "candidate" | "verifier";
@@ -25,7 +25,7 @@ interface WorkerRequest {
     readonly identity: string;
   }>[];
   readonly nodeIdentity: string;
-  readonly inputs: ContractBuildInputs;
+  readonly lockedInputs: LockedReviewBuildInputs;
 }
 
 async function stdinText(): Promise<string> {
@@ -82,8 +82,34 @@ async function runProbe(
   }
 }
 
+async function exportedSurface(text: string): Promise<readonly string[]> {
+  const imported = await import("typescript");
+  const ts = imported.default;
+  const source = ts.createSourceFile("review.d.ts", text, ts.ScriptTarget.Latest, true);
+  const printer = ts.createPrinter({newLine: ts.NewLineKind.LineFeed});
+  const declarations = source.statements.filter(statement =>
+    ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) ||
+    ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) ||
+    ts.isModuleDeclaration(statement) || ts.isFunctionDeclaration(statement) ||
+    ts.isVariableStatement(statement) || ts.isImportEqualsDeclaration(statement) ||
+    ts.isExportDeclaration(statement) || ts.isExportAssignment(statement));
+  const hasExports = declarations.some(statement => ts.isExportDeclaration(statement) ||
+    ts.isExportAssignment(statement) ||
+    (ts.canHaveModifiers(statement) && ts.getModifiers(statement)?.some(modifier =>
+      modifier.kind === ts.SyntaxKind.ExportKeyword)));
+  return declarations.filter(statement => !hasExports || ts.isExportDeclaration(statement) ||
+      ts.isExportAssignment(statement) ||
+      (ts.canHaveModifiers(statement) && ts.getModifiers(statement)?.some(modifier =>
+        modifier.kind === ts.SyntaxKind.ExportKeyword)))
+    .map(statement => printer.printNode(ts.EmitHint.Unspecified, statement, source))
+    .toSorted();
+}
+
 async function main(): Promise<void> {
   const request = JSON.parse(await stdinText()) as WorkerRequest;
+  const inputDigest = `sha256:${createHash("sha256").update(request.lockedInputs.json).digest("hex")}`;
+  if (inputDigest !== request.lockedInputs.hash) throw new Error("Content-addressed build inputs mismatch.");
+  const inputs = JSON.parse(request.lockedInputs.json) as ContractBuildInputs;
   if (request.conformanceProbe) {
     await runProbe(request.conformanceProbe, request.conformanceNetworkUrl);
   }
@@ -113,7 +139,11 @@ async function main(): Promise<void> {
   components.push(nodeComponent);
   components.sort((left, right) => left.name.localeCompare(right.name));
   const {compileContract} = await import("@gadgets/contractors/compiler");
-  const candidate = await compileContract(request.inputs);
+  const candidate = await compileContract(inputs);
+  const [publicExportedSurface, sourceExportedSurface] = await Promise.all([
+    exportedSurface(candidate.artifact.publicTypes),
+    exportedSurface(inputs.sourceTypes),
+  ]);
   const directIntegrity = new Map(candidate.artifact.dependencies.map(dependency =>
     [`${dependency.name}@${dependency.version}`, dependency.integrity]));
   const dependencyLock = {entries: await Promise.all(request.packageClosure.map(async entry => {
@@ -136,14 +166,16 @@ async function main(): Promise<void> {
       networkAttempts: 0,
     },
     dependencyLock,
-    directDependencyRequests: Object.entries(request.inputs.dependencies)
+    directDependencyRequests: Object.entries(inputs.dependencies)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([name, version]) => ({name, version})),
+    publicExportedSurface,
+    sourceExportedSurface,
     toolchain: {components},
     recipe: {
       name: "contract-current",
-      compatibilityDate: request.inputs.compatibilityDate,
-      compatibilityFlags: [...request.inputs.compatibilityFlags],
+      compatibilityDate: inputs.compatibilityDate,
+      compatibilityFlags: [...inputs.compatibilityFlags],
       target: "es2022",
       platform: "neutral",
       moduleFormat: "esm",

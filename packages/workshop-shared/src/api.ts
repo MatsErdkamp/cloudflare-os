@@ -26,6 +26,8 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { AccountDescription, ActionKind, ActionDescription, AvatarImage, GatekeeperUiFrame, ObservationDescription, ResourceDescription, ResourceConfiguratorFrame, SupportedResource, VendorDescription, HookDescription } from "./gatekeeper.js";
 import type { UiFeatureFlags } from "./feature-flags.js";
+import type {AuthorityApi} from "./authority-api.js";
+export type {AuthorityApi} from "./authority-api.js";
 
 export const SERVICE_SALT = new Uint8Array([
   0xd9, 0x4e, 0x54, 0x1d, 0x29, 0xc1, 0x03, 0x74, 0x73, 0x7e, 0xb3, 0xe3, 0x34, 0x6d, 0x8f, 0x21
@@ -287,6 +289,8 @@ function isOpenGadgetErrorCode(value: unknown): value is OpenGadgetErrorCode {
 
 // Top-level API exposed to the user after they have authenticated.
 export interface AuthenticatedApi extends RpcTarget {
+  /** Opens authority administration for an owner or live `manageAuthority` manager. */
+  openAuthority(workspaceId: string): Promise<RpcStub<AuthorityApi>>;
   // Get profile info for the user who is logged in.
   whoami(): Promise<AiChatAuthorInfo>;
 
@@ -1531,12 +1535,6 @@ export interface Overseer extends RpcTarget {
   // the turn stays ended so the user can decide what to tell the agent to do instead.
   denyConnectionRequest(requestId: string): Promise<void>;
 
-  /** Record an owner-authorized Artifact Approval after review; this does not install it. */
-  acceptContractRequest(requestId: string): Promise<void>;
-
-  /** Record an owner-authorized Artifact rejection without creating runtime authority. */
-  denyContractRequest(requestId: string): Promise<void>;
-
   /** List durable Contract approval operations, including provider child action IDs. */
   listContractOperations(): Promise<ContractOperationSummary[]>;
 
@@ -2058,10 +2056,12 @@ export type AiChatMessageBody = {
 } | {
   /** The agent proposed installing reviewed code as a new delegated capability. */
   type: "contractRequest";
-  /** Stable identifier used by the accept/deny RPCs. */
+  /** Stable chat-projection identifier cited by the separate Workspace Authority command. */
   requestId: string;
   /** Workspace-issued canonical Artifact Proposal identity. */
   proposalId: string;
+  /** Exact Artifact Proposal revision presented for review. */
+  proposalRevision: number;
   /** Private Source selected by the Manager authoring flow. */
   sourceGatekeeperId: WorkpieceId;
   /** Denormalized Source title retained for proposal review. */

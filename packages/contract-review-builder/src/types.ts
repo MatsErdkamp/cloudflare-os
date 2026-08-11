@@ -1,7 +1,6 @@
 import type {
   ContractArtifact,
   ContractBuildCandidate,
-  ContractBuildInputs,
 } from "@gadgets/contractors/artifact";
 
 /** A bounded immutable blob named by its exact bytes. */
@@ -89,11 +88,32 @@ export interface ReviewBuildRunResult {
     readonly name: string;
     readonly version: string;
   }>[];
+  readonly publicExportedSurface: readonly string[];
+  readonly sourceExportedSurface: readonly string[];
 }
 
 /** A fresh runner which owns no Workspace or provider capability. */
 export interface ReviewBuildRunner extends Disposable {
-  build(request: Readonly<{readonly inputs: ContractBuildInputs}>): Promise<ReviewBuildRunResult>;
+  build(request: Readonly<{readonly buildManifest: LockedReviewBuildManifest}>): Promise<ReviewBuildRunResult>;
+}
+
+/** Canonical build-input bytes paired with their content address. */
+export interface LockedReviewBuildInputs {
+  readonly hash: string;
+  readonly json: string;
+}
+
+/** Pre-existing content-addressed manifest for every input a trusted build may consume. */
+export interface LockedReviewBuildManifest {
+  readonly hash: string;
+  readonly inputs: LockedReviewBuildInputs;
+  readonly packageClosure: readonly Readonly<{
+    readonly name: string;
+    readonly version: string;
+    readonly packageContentHash: string;
+    readonly dependencies: readonly string[];
+  }>[];
+  readonly toolchain: ReviewToolchainIdentity;
 }
 
 /** Trusted host seam that creates two distinct isolated runners. */
@@ -116,7 +136,7 @@ export type ReviewBaseline =
 
 /** Inputs accepted by the capability-free review evidence builder. */
 export interface BuildContractReviewEvidenceInput {
-  readonly inputs: ContractBuildInputs;
+  readonly buildManifest: LockedReviewBuildManifest;
   readonly submittedProvenance: ReviewSubmittedProvenance;
   readonly policySnapshot: Readonly<{
     readonly allowedPackages?: readonly string[];
@@ -126,7 +146,6 @@ export interface BuildContractReviewEvidenceInput {
   readonly baseline: ReviewBaseline;
   readonly baselineBundle?: ContractReviewBundle;
   readonly baselineBlobs?: ReadonlyMap<string, Uint8Array>;
-  readonly comparisonGenerator: Readonly<{readonly name: string; readonly identity: string}>;
 }
 
 /** One trusted build attestation over exact content identities. */
@@ -134,7 +153,9 @@ export interface ReviewBuildAttestation extends ReviewRunnerIsolation {
   readonly inputSetHash: string;
   readonly artifactHash: string;
   readonly publicDeclarationHash: string;
+  readonly publicExportedSurfaceHash: string;
   readonly sourceDeclarationHash: string;
+  readonly sourceExportedSurfaceHash: string;
   readonly dependencyLockHash: string;
   readonly directDependencyRequestsHash: string;
   readonly toolchainHash: string;
@@ -149,10 +170,12 @@ export interface ContractReviewBundle {
     readonly authority: ReviewBlobReference;
     readonly emittedModules: readonly Readonly<{readonly path: string; readonly blob: ReviewBlobReference}>[];
     readonly publicDeclaration: ReviewBlobReference;
+    readonly publicExportedSurface: ReviewBlobReference;
   }>;
   readonly originalModules: readonly Readonly<{readonly path: string; readonly blob: ReviewBlobReference}>[];
   readonly source: Readonly<{
     readonly declaration: ReviewBlobReference;
+    readonly exportedSurface: ReviewBlobReference;
     readonly rootType: string;
     readonly typeHash: string;
   }>;

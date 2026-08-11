@@ -171,11 +171,13 @@ function attestation(value: unknown): ReviewBuildAttestation {
   const item = exact(value, [
     "artifactHash", "buildTraceHash", "dependencyLockHash", "environmentIdentity",
     "directDependencyRequestsHash", "inputSetHash", "mutableState", "network", "networkAttempts", "producerIdentity",
-    "publicDeclarationHash", "recipeHash", "role", "sourceDeclarationHash", "toolchainHash",
+    "publicDeclarationHash", "publicExportedSurfaceHash", "recipeHash", "role",
+    "sourceDeclarationHash", "sourceExportedSurfaceHash", "toolchainHash",
   ]);
   for (const key of [
     "artifactHash", "buildTraceHash", "dependencyLockHash", "directDependencyRequestsHash", "inputSetHash",
-    "publicDeclarationHash", "recipeHash", "sourceDeclarationHash", "toolchainHash",
+    "publicDeclarationHash", "publicExportedSurfaceHash", "recipeHash", "sourceDeclarationHash",
+    "sourceExportedSurfaceHash", "toolchainHash",
   ]) {
     if (!isReviewHash(item[key])) {
       throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid build attestation hash.");
@@ -211,8 +213,10 @@ function collectBlobReferences(bundle: ContractReviewBundle): ReviewBlobReferenc
     bundle.artifact.authority,
     ...bundle.artifact.emittedModules.map(item => item.blob),
     bundle.artifact.publicDeclaration,
+    bundle.artifact.publicExportedSurface,
     ...bundle.originalModules.map(item => item.blob),
     bundle.source.declaration,
+    bundle.source.exportedSurface,
     bundle.build.dependencyLock,
     bundle.build.directDependencyRequests,
     bundle.build.toolchain,
@@ -231,12 +235,12 @@ export function parseContractReviewBundle(
     "reproducibility", "source",
   ]);
   const artifact = exact(root.artifact, [
-    "authority", "emittedModules", "hash", "publicDeclaration",
+    "authority", "emittedModules", "hash", "publicDeclaration", "publicExportedSurface",
   ]);
   if (!isReviewHash(artifact.hash)) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid reviewed Artifact hash.");
   }
-  const source = exact(root.source, ["declaration", "rootType", "typeHash"]);
+  const source = exact(root.source, ["declaration", "exportedSurface", "rootType", "typeHash"]);
   if (typeof source.typeHash !== "string" || !SOURCE_HASH.test(source.typeHash)) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Invalid Source type hash.");
   }
@@ -256,10 +260,12 @@ export function parseContractReviewBundle(
       authority: blobReference(artifact.authority),
       emittedModules: moduleEntries(artifact.emittedModules, "emitted"),
       publicDeclaration: blobReference(artifact.publicDeclaration),
+      publicExportedSurface: blobReference(artifact.publicExportedSurface),
     },
     originalModules: moduleEntries(root.originalModules, "authoring"),
     source: {
       declaration: blobReference(source.declaration),
+      exportedSurface: blobReference(source.exportedSurface),
       rootType: boundedString(source.rootType, "Source root type"),
       typeHash: source.typeHash,
     },
@@ -355,6 +361,13 @@ export async function verifyContractReviewBlobs(
     }
     return value;
   };
+  for (const reference of [bundle.artifact.publicExportedSurface, bundle.source.exportedSurface]) {
+    const surface = parseCanonicalBlob(reference);
+    if (!Array.isArray(surface) || !surface.every(value => typeof value === "string") ||
+        surface.some((value, index) => index > 0 && value <= surface[index - 1]!)) {
+      throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Exported surface evidence is invalid.");
+    }
+  }
   const lock = exact(parseCanonicalBlob(bundle.build.dependencyLock), ["entries"]);
   if (!Array.isArray(lock.entries) || lock.entries.length > REVIEW_LIMITS.dependencyEntries) {
     throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Dependency lock evidence is invalid.");
@@ -446,7 +459,9 @@ export async function verifyContractReviewBlobs(
     if (attestation.artifactHash !== artifact.hash ||
         attestation.inputSetHash !== bundle.build.inputSetHash ||
         attestation.publicDeclarationHash !== bundle.artifact.publicDeclaration.hash ||
+        attestation.publicExportedSurfaceHash !== bundle.artifact.publicExportedSurface.hash ||
         attestation.sourceDeclarationHash !== bundle.source.declaration.hash ||
+        attestation.sourceExportedSurfaceHash !== bundle.source.exportedSurface.hash ||
         attestation.dependencyLockHash !== bundle.build.dependencyLock.hash ||
         attestation.directDependencyRequestsHash !== bundle.build.directDependencyRequests.hash ||
         attestation.toolchainHash !== bundle.build.toolchain.hash ||

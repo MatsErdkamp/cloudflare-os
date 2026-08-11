@@ -9,6 +9,10 @@
       "types": "./src/api.ts",
       "import": "./src/api.ts"
     },
+    "./authority-api": {
+      "types": "./src/authority-api.ts",
+      "import": "./src/authority-api.ts"
+    },
     "./feature-flags": {
       "types": "./src/feature-flags.ts",
       "import": "./src/feature-flags.ts"

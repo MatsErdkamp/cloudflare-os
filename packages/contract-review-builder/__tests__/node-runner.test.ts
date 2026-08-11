@@ -3,10 +3,12 @@ import {createServer} from "node:http";
 
 import type {ContractBuildInputs} from "@gadgets/contractors/artifact";
 
+import {buildContractReviewEvidence} from "../src/index.js";
+import {createReviewBuildManifest} from "../src/index.js";
 import {
-  buildContractReviewEvidence,
-} from "../src/index.js";
-import {createNodeReviewBuildRunnerFactory} from "../src/node-runner.js";
+  createNodeReviewBuildManifest,
+  createNodeReviewBuildRunnerFactory,
+} from "../src/node-runner.js";
 
 const INPUTS: ContractBuildInputs = {
   modules: {"contract.ts": `
@@ -28,9 +30,9 @@ const INPUTS: ContractBuildInputs = {
   compatibilityFlags: [],
 };
 
-function buildInput() {
+async function buildInput() {
   return {
-    inputs: INPUTS,
+    buildManifest: await createNodeReviewBuildManifest(INPUTS),
     submittedProvenance: {
       submittedBy: {identity: "integration-test", generation: 1},
       authorship: "integration-test",
@@ -38,14 +40,17 @@ function buildInput() {
     },
     policySnapshot: {},
     baseline: {kind: "none" as const},
-    comparisonGenerator: {name: "comparison", identity: "sha256:" + "2".repeat(64)},
   };
+}
+
+async function lock(inputs: ContractBuildInputs) {
+  return createNodeReviewBuildManifest(inputs);
 }
 
 describe("Node review runner", () => {
   it("uses two fresh network-disabled subprocesses", async () => {
     const evidence = await buildContractReviewEvidence(
-      buildInput(),
+      await buildInput(),
       createNodeReviewBuildRunnerFactory({producerIdentity: "local-trusted-runner"}),
     );
     const environments = evidence.bundle.attestations.map(item => item.environmentIdentity);
@@ -68,7 +73,7 @@ describe("Node review runner", () => {
       conformanceNetworkUrl: `http://127.0.0.1:${address.port}`,
     }).create({role: "candidate", network: "disabled", mutableState: "fresh"});
     try {
-      await expect(runner.build({inputs: INPUTS})).rejects.toThrow("failed closed");
+      await expect(runner.build({buildManifest: await lock(INPUTS)})).rejects.toThrow("failed closed");
     } finally {
       runner[Symbol.dispose]();
       await new Promise<void>((resolve, reject) => server.close(error =>
@@ -82,7 +87,7 @@ describe("Node review runner", () => {
       conformanceProbe: "undeclaredRead",
     }).create({role: "candidate", network: "disabled", mutableState: "fresh"});
     try {
-      await expect(runner.build({inputs: INPUTS})).rejects.toThrow("failed closed");
+      await expect(runner.build({buildManifest: await lock(INPUTS)})).rejects.toThrow("failed closed");
     } finally {
       runner[Symbol.dispose]();
     }
@@ -94,7 +99,7 @@ describe("Node review runner", () => {
       conformanceProbe: "lockedInputDrift",
     }).create({role: "candidate", network: "disabled", mutableState: "fresh"});
     try {
-      await expect(runner.build({inputs: INPUTS})).rejects.toThrow("failed closed");
+      await expect(runner.build({buildManifest: await lock(INPUTS)})).rejects.toThrow("failed closed");
     } finally {
       runner[Symbol.dispose]();
     }
@@ -111,7 +116,7 @@ describe("Node review runner", () => {
     const runner = createNodeReviewBuildRunnerFactory({producerIdentity: "local-trusted-runner"})
       .create({role: "candidate", network: "disabled", mutableState: "fresh"});
     try {
-      const result = await runner.build({inputs: dependencyInputs});
+      const result = await runner.build({buildManifest: await lock(dependencyInputs)});
       expect(result.dependencyLock.entries).toEqual(expect.arrayContaining([
         expect.objectContaining({
           name: "zod",
@@ -126,6 +131,26 @@ describe("Node review runner", () => {
           hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
         }),
       ]));
+    } finally {
+      runner[Symbol.dispose]();
+    }
+  }, 120_000);
+
+  it("fails closed when installed package bytes differ from the supplied lock manifest", async () => {
+    const dependencyInputs: ContractBuildInputs = {...INPUTS, dependencies: {zod: "4.2.0"}};
+    const provisioned = await createNodeReviewBuildManifest(dependencyInputs);
+    const forgedClosure = provisioned.packageClosure.map((entry, index) =>
+      index === 0 ? {...entry, packageContentHash: `sha256:${"0".repeat(64)}`} : entry);
+    const driftedManifest = await createReviewBuildManifest(
+      dependencyInputs,
+      forgedClosure,
+      provisioned.toolchain,
+    );
+    const runner = createNodeReviewBuildRunnerFactory({producerIdentity: "local-trusted-runner"})
+      .create({role: "candidate", network: "disabled", mutableState: "fresh"});
+    try {
+      await expect(runner.build({buildManifest: driftedManifest}))
+        .rejects.toThrow("drifted from the lock manifest");
     } finally {
       runner[Symbol.dispose]();
     }

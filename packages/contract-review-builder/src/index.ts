@@ -1,6 +1,6 @@
-export {buildContractReviewEvidence} from "./builder.js";
+export {buildContractReviewEvidence, createReviewBuildManifest} from "./builder.js";
 export {canonicalReviewJson, hashReviewValue, ReviewEvidenceError} from "./canonical.js";
-export {createReviewComparison} from "./comparison.js";
+export {createReviewComparison, registeredReviewComparisonGenerator} from "./comparison.js";
 export {REVIEW_LIMITS} from "./limits.js";
 export {
   parseContractReviewBundle,
@@ -20,6 +20,8 @@ export type {
   ReviewBuildRunner,
   ReviewBuildRunnerFactory,
   ReviewBuildRunResult,
+  LockedReviewBuildInputs,
+  LockedReviewBuildManifest,
   ReviewComparison,
   ReviewComparisonItem,
   ReviewComparisonSection,

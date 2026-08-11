@@ -2,23 +2,32 @@ import {spawn} from "node:child_process";
 import {createHash} from "node:crypto";
 import {createRequire} from "node:module";
 import {delimiter, dirname, join, resolve} from "node:path";
+import {tmpdir} from "node:os";
 import {fileURLToPath} from "node:url";
 import {
   existsSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
   statSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 
-import {ReviewEvidenceError} from "./canonical.js";
+import {canonicalReviewJson, ReviewEvidenceError} from "./canonical.js";
+import {createReviewBuildManifest} from "./builder.js";
 import {REVIEW_LIMITS} from "./limits.js";
 import type {
   ReviewBuildRunner,
   ReviewBuildRunnerFactory,
   ReviewBuildRunResult,
+  LockedReviewBuildManifest,
 } from "./types.js";
+import type {ContractBuildInputs} from "@gadgets/contractors/artifact";
 
 /** Options for the concrete Node permission-model review runner. */
 export interface NodeReviewBuildRunnerFactoryOptions {
@@ -46,7 +55,6 @@ const ESBUILD_NATIVE_ROOT = Object.keys(esbuildManifest.optionalDependencies ?? 
   }
 }).find((root): root is string => root !== undefined && existsSync(resolve(root, "bin/esbuild")));
 if (!ESBUILD_NATIVE_ROOT) throw new Error("The native esbuild package is unavailable.");
-const ESBUILD_BINARY = realpathSync(resolve(ESBUILD_NATIVE_ROOT, "bin/esbuild"));
 
 function isolatedNodeCommand(nodeArgs: readonly string[]): readonly [string, readonly string[]] {
   if (process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec")) {
@@ -124,21 +132,14 @@ function packageName(root: string): string {
   return manifest.name;
 }
 
-function lockedToolchainRoots(): readonly LockedToolchainRoot[] {
-  const packageRoots: readonly [string, string?][] = [
-    [WORKERS_TYPES_ROOT],
-    [CONTRACTORS_ROOT, resolve(CONTRACTORS_ROOT, "dist")],
-    [ESBUILD_ROOT],
-    [ESBUILD_NATIVE_ROOT!],
-    [TYPESCRIPT_ROOT],
-  ];
-  return packageRoots.map(([root, contentRoot]) => ({
-    name: packageName(root),
-    root,
-    ...(contentRoot ? {contentRoot} : {}),
-    identity: hashTree(contentRoot ?? root),
-  }));
+function nodeToolchainComponent(): Readonly<{name: string; identity: string}> {
+  return {
+    name: "node",
+    identity: `sha256:${createHash("sha256").update(readFileSync(process.execPath)).digest("hex")}`,
+  };
 }
+
+
 
 function resolveInstalledPackageRoot(name: string, issuerRoot: string): string {
   const requireFromIssuer = createRequire(join(issuerRoot, "package.json"));
@@ -209,6 +210,92 @@ function resolvePackageClosure(direct: Readonly<Record<string, string>>): Resolv
     `${left.name}@${left.version}`.localeCompare(`${right.name}@${right.version}`));
 }
 
+/** Provisions a lock manifest whose package identities can be stored before review builds run. */
+export async function createNodeReviewBuildManifest(
+  inputs: ContractBuildInputs,
+): Promise<LockedReviewBuildManifest> {
+  const snapshot = createLockedSnapshot(resolvePackageClosure(inputs.dependencies));
+  try {
+    const closure = snapshot.packageClosure.map(entry => ({
+      name: entry.name,
+      version: entry.version,
+      packageContentHash: entry.packageContentHash,
+      dependencies: entry.dependencies,
+    }));
+    const toolchain = {
+      components: [
+        ...snapshot.toolchainRoots.map(({name, identity}) => ({name, identity})),
+        nodeToolchainComponent(),
+      ].toSorted((left, right) => left.name.localeCompare(right.name)),
+    };
+    return await createReviewBuildManifest(inputs, closure, toolchain);
+  } finally {
+    rmSync(snapshot.root, {recursive: true, force: true});
+  }
+}
+
+function packageDestination(root: string, name: string): string {
+  return join(root, "node_modules", ...name.split("/"));
+}
+
+function copyPackage(source: string, destination: string): void {
+  mkdirSync(dirname(destination), {recursive: true});
+  cpSync(source, destination, {
+    recursive: true,
+    dereference: true,
+    filter: path => path === source || !path.slice(source.length + 1).split("/").includes("node_modules"),
+  });
+}
+
+function createLockedSnapshot(packageClosure: readonly ResolvedPackageClosureEntry[]): Readonly<{
+  root: string;
+  workerPath: string;
+  contractorsRoot: string;
+  esbuildBinary: string;
+  packageClosure: readonly ResolvedPackageClosureEntry[];
+  toolchainRoots: readonly LockedToolchainRoot[];
+}> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "contract-review-")));
+  const workerPath = join(root, "node-runner-worker.js");
+  writeFileSync(workerPath, readFileSync(WORKER_PATH));
+  writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
+  const contractorsRoot = packageDestination(root, "@gadgets/contractors");
+  copyPackage(CONTRACTORS_ROOT, contractorsRoot);
+  const sources = new Map<string, string>([
+    [packageName(TYPESCRIPT_ROOT), TYPESCRIPT_ROOT],
+    [packageName(ESBUILD_ROOT), ESBUILD_ROOT],
+    [packageName(ESBUILD_NATIVE_ROOT!), ESBUILD_NATIVE_ROOT!],
+    [packageName(WORKERS_TYPES_ROOT), WORKERS_TYPES_ROOT],
+    ...packageClosure.map(entry => [entry.name, entry.root] as const),
+  ]);
+  for (const [name, source] of sources) copyPackage(source, packageDestination(root, name));
+  const lockedClosure = packageClosure.map(entry => {
+    const lockedRoot = packageDestination(root, entry.name);
+    return {...entry, root: lockedRoot, packageContentHash: hashTree(lockedRoot)};
+  });
+  const lockedContractors = packageDestination(root, "@gadgets/contractors");
+  const toolchainRoots: LockedToolchainRoot[] = [
+    packageDestination(root, "@cloudflare/workers-types"),
+    lockedContractors,
+    packageDestination(root, "esbuild"),
+    packageDestination(root, packageName(ESBUILD_NATIVE_ROOT!)),
+    packageDestination(root, "typescript"),
+  ].map(packageRoot => ({
+    name: packageName(packageRoot),
+    root: packageRoot,
+    ...(packageRoot === lockedContractors ? {contentRoot: join(packageRoot, "dist")} : {}),
+    identity: hashTree(packageRoot === lockedContractors ? join(packageRoot, "dist") : packageRoot),
+  }));
+  return {
+    root,
+    workerPath,
+    contractorsRoot,
+    esbuildBinary: join(packageDestination(root, packageName(ESBUILD_NATIVE_ROOT!)), "bin/esbuild"),
+    packageClosure: lockedClosure,
+    toolchainRoots,
+  };
+}
+
 class NodeReviewBuildRunner implements ReviewBuildRunner {
   #disposed = false;
 
@@ -221,20 +308,31 @@ class NodeReviewBuildRunner implements ReviewBuildRunner {
     if (this.#disposed) {
       throw new ReviewEvidenceError("ISOLATION_FAILED", "Review runner was already disposed.");
     }
-    const packageClosure = resolvePackageClosure(request.inputs.dependencies);
-    const toolchainRoots = lockedToolchainRoots();
+    const inputs = JSON.parse(request.buildManifest.inputs.json) as ContractBuildInputs;
+    const resolvedClosure = resolvePackageClosure(inputs.dependencies);
+    const snapshot = createLockedSnapshot(resolvedClosure);
+    const packageClosure = snapshot.packageClosure;
+    const toolchainRoots = snapshot.toolchainRoots;
+    const snapshotManifestClosure = packageClosure.map(entry => ({
+      name: entry.name,
+      version: entry.version,
+      packageContentHash: entry.packageContentHash,
+      dependencies: entry.dependencies,
+    }));
+    const snapshotToolchain = {
+      components: [
+        ...toolchainRoots.map(({name, identity}) => ({name, identity})),
+        nodeToolchainComponent(),
+      ].toSorted((left, right) => left.name.localeCompare(right.name)),
+    };
+    if (canonicalReviewJson(snapshotManifestClosure) !==
+        canonicalReviewJson(request.buildManifest.packageClosure) ||
+        canonicalReviewJson(snapshotToolchain) !== canonicalReviewJson(request.buildManifest.toolchain)) {
+      rmSync(snapshot.root, {recursive: true, force: true});
+      throw new ReviewEvidenceError("ISOLATION_FAILED", "Installed build inputs drifted from the lock manifest.");
+    }
     const readableRoots = [
-      WORKER_PATH,
-      resolve(PACKAGE_ROOT, "package.json"),
-      resolve(PACKAGE_ROOT, "node_modules"),
-      resolve(CONTRACTORS_ROOT, "dist"),
-      resolve(CONTRACTORS_ROOT, "package.json"),
-      resolve(CONTRACTORS_ROOT, "node_modules"),
-      TYPESCRIPT_ROOT,
-      ESBUILD_ROOT,
-      ESBUILD_NATIVE_ROOT,
-      WORKERS_TYPES_ROOT,
-      ESBUILD_BINARY,
+      snapshot.root,
       process.execPath,
       ...packageClosure.flatMap(entry => [entry.root, join(entry.root, "node_modules")]),
       ...toolchainRoots.flatMap(entry => [entry.root, entry.contentRoot].filter(Boolean) as string[]),
@@ -243,14 +341,14 @@ class NodeReviewBuildRunner implements ReviewBuildRunner {
       "--permission",
       "--allow-child-process",
       ...readableRoots.map(path => `--allow-fs-read=${path}`),
-      WORKER_PATH,
+      snapshot.workerPath,
     ];
     const [executable, args] = isolatedNodeCommand(nodeArgs);
     const child = spawn(executable, args, {
-      cwd: PACKAGE_ROOT,
+      cwd: snapshot.root,
       env: {
-        ESBUILD_BINARY_PATH: ESBUILD_BINARY,
-        PATH: [dirname(process.execPath), dirname(ESBUILD_BINARY)].join(delimiter),
+        ESBUILD_BINARY_PATH: snapshot.esbuildBinary,
+        PATH: [dirname(process.execPath), dirname(snapshot.esbuildBinary)].join(delimiter),
       },
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
@@ -269,6 +367,7 @@ class NodeReviewBuildRunner implements ReviewBuildRunner {
     child.stderr.on("data", (chunk: Buffer) => {
       if (stderr.reduce((sum, item) => sum + item.byteLength, 0) < 64 * 1024) stderr.push(chunk);
     });
+    child.stdin.on("error", () => undefined);
     child.stdin.end(JSON.stringify({
       role: this.role,
       producerIdentity: this.options.producerIdentity,
@@ -276,13 +375,16 @@ class NodeReviewBuildRunner implements ReviewBuildRunner {
       conformanceNetworkUrl: this.options.conformanceNetworkUrl,
       packageClosure,
       toolchainRoots,
-      nodeIdentity: `sha256:${createHash("sha256").update(readFileSync(process.execPath)).digest("hex")}`,
-      inputs: request.inputs,
+      nodeIdentity: nodeToolchainComponent().identity,
+      lockedInputs: request.buildManifest.inputs,
     }));
     const exitCode = await new Promise<number | null>((resolveExit, reject) => {
       child.once("error", reject);
       child.once("exit", resolveExit);
-    }).finally(() => clearTimeout(timeout));
+    }).finally(() => {
+      clearTimeout(timeout);
+      rmSync(snapshot.root, {recursive: true, force: true});
+    });
     const output = Buffer.concat(stdout).toString("utf8");
     if (exitCode !== 0 || outputBytes > outputLimit) {
       const diagnostic = Buffer.concat(stderr).toString("utf8").slice(0, 2_048);

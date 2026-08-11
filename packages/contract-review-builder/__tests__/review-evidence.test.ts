@@ -1,4 +1,5 @@
 import {describe, expect, it} from "vitest";
+import ts from "typescript";
 
 import {compileContract} from "@gadgets/contractors/compiler";
 import type {ContractBuildInputs} from "@gadgets/contractors/artifact";
@@ -7,6 +8,7 @@ import {
   ReviewEvidenceError,
   buildContractReviewEvidence,
   canonicalReviewJson,
+  createReviewBuildManifest,
   parseContractReviewBundle,
   parseReviewComparison,
   type ReviewBuildRunner,
@@ -36,6 +38,25 @@ const BUILD_INPUTS: ContractBuildInputs = {
   compatibilityFlags: [],
 };
 
+function exportedSurface(text: string): readonly string[] {
+  const source = ts.createSourceFile("review.d.ts", text, ts.ScriptTarget.Latest, true);
+  const printer = ts.createPrinter({newLine: ts.NewLineKind.LineFeed});
+  const declarations = source.statements.filter(statement =>
+    ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) ||
+    ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) ||
+    ts.isModuleDeclaration(statement) || ts.isFunctionDeclaration(statement) ||
+    ts.isVariableStatement(statement) || ts.isImportEqualsDeclaration(statement) ||
+    ts.isExportDeclaration(statement) || ts.isExportAssignment(statement));
+  const isExported = (statement: ts.Statement) => ts.isExportDeclaration(statement) ||
+    ts.isExportAssignment(statement) ||
+    (ts.canHaveModifiers(statement) && ts.getModifiers(statement)?.some(modifier =>
+      modifier.kind === ts.SyntaxKind.ExportKeyword));
+  const hasExports = declarations.some(isExported);
+  return declarations.filter(statement => !hasExports || isExported(statement))
+    .map(statement => printer.printNode(ts.EmitHint.Unspecified, statement, source))
+    .toSorted();
+}
+
 function runnerResult(
   role: "candidate" | "verifier",
   environmentIdentity: string,
@@ -43,7 +64,8 @@ function runnerResult(
 ): ReviewBuildRunner {
   return {
     async build(request) {
-      const candidate = await compileContract(request.inputs);
+      const inputs = JSON.parse(request.buildManifest.inputs.json) as ContractBuildInputs;
+      const candidate = await compileContract(inputs);
       const result: ReviewBuildRunResult = {
         candidate,
         isolation: {
@@ -55,8 +77,10 @@ function runnerResult(
           networkAttempts: 0,
         },
         dependencyLock: {entries: []},
-        directDependencyRequests: Object.entries(request.inputs.dependencies)
+        directDependencyRequests: Object.entries(inputs.dependencies)
           .map(([name, version]) => ({name, version})),
+        publicExportedSurface: exportedSurface(candidate.artifact.publicTypes),
+        sourceExportedSurface: exportedSurface(inputs.sourceTypes),
         toolchain: {
           components: [
             {name: "@gadgets/contractors", identity: "sha256:" + "1".repeat(64)},
@@ -85,6 +109,14 @@ function runnerResult(
   };
 }
 
+function buildManifest(inputs: ContractBuildInputs) {
+  return createReviewBuildManifest(inputs, [], {components: [
+    {name: "@gadgets/contractors", identity: "sha256:" + "1".repeat(64)},
+    {name: "esbuild", identity: "sha256:" + "2".repeat(64)},
+    {name: "typescript", identity: "sha256:" + "3".repeat(64)},
+  ]});
+}
+
 function factory(
   candidate = runnerResult("candidate", "candidate-environment"),
   verifier = runnerResult("verifier", "verifier-environment"),
@@ -104,7 +136,7 @@ function factory(
 describe("Contract review evidence", () => {
   it("builds reproducible unversioned evidence in two distinct isolated runners", async () => {
     const evidence = await buildContractReviewEvidence({
-      inputs: BUILD_INPUTS,
+      buildManifest: await buildManifest(BUILD_INPUTS),
       submittedProvenance: {
         submittedBy: {identity: "developer-1", generation: 4},
         authorship: "developer",
@@ -112,7 +144,6 @@ describe("Contract review evidence", () => {
       },
       policySnapshot: {},
       baseline: {kind: "none"},
-      comparisonGenerator: {name: "review-comparison", identity: "sha256:" + "5".repeat(64)},
     }, factory());
 
     expect(evidence.bundle.reproducibility).toBe("reproduced");
@@ -153,23 +184,18 @@ describe("Contract review evidence", () => {
       authorship: "developer",
       origin: {kind: "import" as const, digest: "sha256:" + "c".repeat(64)},
     };
-    const comparisonGenerator = {
-      name: "comparison",
-      identity: "sha256:" + "d".repeat(64),
-    };
     const baselineEvidence = await buildContractReviewEvidence({
-      inputs: BUILD_INPUTS,
+      buildManifest: await buildManifest(BUILD_INPUTS),
       submittedProvenance: provenance,
       policySnapshot: {},
       baseline: {kind: "none"},
-      comparisonGenerator,
     }, factory());
     const changedInputs = {
       ...BUILD_INPUTS,
       modules: {"contract.ts": CONTRACT_SOURCE.replace("read(id: string)", "read(key: string)")},
     };
     const changed = await buildContractReviewEvidence({
-      inputs: changedInputs,
+      buildManifest: await buildManifest(changedInputs),
       submittedProvenance: provenance,
       policySnapshot: {},
       baseline: {
@@ -179,7 +205,6 @@ describe("Contract review evidence", () => {
       },
       baselineBundle: baselineEvidence.bundle,
       baselineBlobs: baselineEvidence.blobs,
-      comparisonGenerator,
     }, factory(
       runnerResult("candidate", "candidate-changed"),
       runnerResult("verifier", "verifier-changed"),
@@ -214,7 +239,7 @@ describe("Contract review evidence", () => {
     }))],
   ])("fails closed on %s", async (_name, verifier) => {
     await expect(buildContractReviewEvidence({
-      inputs: BUILD_INPUTS,
+      buildManifest: await buildManifest(BUILD_INPUTS),
       submittedProvenance: {
         submittedBy: {identity: "developer", generation: 1},
         authorship: "developer",
@@ -222,14 +247,13 @@ describe("Contract review evidence", () => {
       },
       policySnapshot: {},
       baseline: {kind: "none"},
-      comparisonGenerator: {name: "comparison", identity: "sha256:" + "9".repeat(64)},
     }, factory(runnerResult("candidate", "candidate-environment"), verifier)))
       .rejects.toBeInstanceOf(ReviewEvidenceError);
   });
 
   it("fails closed when recorded deployment policy differs from compiler policy", async () => {
     await expect(buildContractReviewEvidence({
-      inputs: BUILD_INPUTS,
+      buildManifest: await buildManifest(BUILD_INPUTS),
       submittedProvenance: {
         submittedBy: {identity: "developer", generation: 1},
         authorship: "developer",
@@ -237,13 +261,12 @@ describe("Contract review evidence", () => {
       },
       policySnapshot: {deniedPackages: ["zod"]},
       baseline: {kind: "none"},
-      comparisonGenerator: {name: "comparison", identity: "sha256:" + "9".repeat(64)},
     }, factory())).rejects.toThrow("policy snapshot");
   });
 
   it("rejects non-canonical, unknown, oversized, and hash-mismatched manifests", async () => {
     const evidence = await buildContractReviewEvidence({
-      inputs: BUILD_INPUTS,
+      buildManifest: await buildManifest(BUILD_INPUTS),
       submittedProvenance: {
         submittedBy: {identity: "developer", generation: 1},
         authorship: "developer",
@@ -251,7 +274,6 @@ describe("Contract review evidence", () => {
       },
       policySnapshot: {},
       baseline: {kind: "none"},
-      comparisonGenerator: {name: "comparison", identity: "sha256:" + "b".repeat(64)},
     }, factory());
 
     expect(() => parseContractReviewBundle(` ${evidence.bundleJson}`))

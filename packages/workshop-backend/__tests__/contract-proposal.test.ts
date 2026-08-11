@@ -5,10 +5,12 @@ import {currentContractArtifact} from "./contract-artifact-fixture";
 import {keyString} from "@gadgets/typed-storage";
 import {
   buildContractReviewEvidence,
+  createReviewBuildManifest,
   type ReviewBuildRunnerFactory,
 } from "@gadgets/contract-review-builder";
 import {R2ContractArtifactStore} from "../src/contract-artifacts";
 import {R2ContractReviewEvidenceStore} from "../src/contract-review-evidence";
+import {hashAuthorityCommand, hashAuthorityRequest} from "@gadgets/workshop-shared/authority-api";
 
 import type {OverseerDurableObject} from "../src/overseer.js";
 
@@ -25,6 +27,53 @@ const COMPILER_STYLE_MODULE = `
   export {createContract as default};
 `;
 const SOURCE_TYPES = "interface Source { read(): Promise<string>; }";
+
+async function decideArtifact(
+  instance: OverseerDurableObject,
+  message: any,
+  decision: "approved" | "rejected",
+): Promise<void> {
+  const authority = await instance.openAuthority("user-id", new RpcStub<() => void>(() => {}));
+  try {
+    const snapshot = await authority.getSessionSnapshot();
+    const operation = await authority.beginOperation({
+      idempotencyKey: `artifact-decision:${message.requestId}:${decision}`,
+      requestDigest: await hashAuthorityRequest({
+        type: "artifactProposalDecision",
+        requestId: message.requestId,
+        proposalId: message.proposalId,
+        decision,
+      }),
+    });
+    const payload = {
+      type: "decideArtifactProposal" as const,
+      operationId: operation.id,
+      stepKey: "artifact-decision",
+      expectedAuthorityEpoch: snapshot.authorityEpoch,
+      expectedPermissionGeneration: snapshot.permissionGeneration,
+      requestId: message.requestId,
+      expectedProposalRevision: message.proposalRevision,
+      evidence: {
+        artifactHash: message.artifactHash,
+        proposalId: message.proposalId,
+        reviewBundleHash: message.reviewBundleHash,
+        reviewComparisonHash: message.reviewComparisonHash,
+        policyHash: message.policyHash,
+        generatorIdentityHash: message.generatorIdentityHash,
+        baseline: message.baseline,
+      },
+      decision,
+    };
+    await authority.execute({...payload, requestDigest: await hashAuthorityCommand(payload)});
+    await expect(authority.getOperation(operation.id)).resolves.toMatchObject({
+      state: "completed",
+      lastCompletedStep: "artifact-decision",
+      result: {type: "artifactProposalDecided", decision},
+    });
+  } finally {
+    authority[Symbol.dispose]?.();
+  }
+}
 
 function prepareProposalFixture(impl: any): void {
   impl.storage.gatekeepers.put({
@@ -91,6 +140,8 @@ async function proposalInput(sourceCode: string, publicTypes = `
             },
             dependencyLock: {entries: []},
             directDependencyRequests: [],
+            publicExportedSurface: ["export interface ContractBinding extends RpcTarget {\n    read(id: string): Promise<string>;\n}"],
+            sourceExportedSurface: ["interface SourceRoot {\n    read(id: string): Promise<string>;\n}"],
             toolchain: {components: [
               {name: "@gadgets/contractors", identity: identity("1")},
               {name: "esbuild", identity: identity("2")},
@@ -117,7 +168,11 @@ async function proposalInput(sourceCode: string, publicTypes = `
     },
   };
   const evidence = await buildContractReviewEvidence({
-    inputs,
+    buildManifest: await createReviewBuildManifest(inputs, [], {components: [
+      {name: "@gadgets/contractors", identity: identity("1")},
+      {name: "esbuild", identity: identity("2")},
+      {name: "typescript", identity: identity("3")},
+    ]}),
     submittedProvenance: {
       submittedBy: {identity: "test-builder", generation: 1},
       authorship: "test fixture",
@@ -125,7 +180,6 @@ async function proposalInput(sourceCode: string, publicTypes = `
     },
     policySnapshot: {},
     baseline: {kind: "none"},
-    comparisonGenerator: {name: "test-comparison", identity: identity("4")},
   }, runnerFactory);
   await Promise.all([
     new R2ContractArtifactStore(env.BLUEPRINT_CONTENT).put(artifact),
@@ -292,7 +346,21 @@ describe("Contract proposal compilation boundary", () => {
           message.sourceCode = "throw new Error('display snapshot must not execute')";
           message.publicTypes = "export interface ContractBinding { displayOnly: never }";
           impl.storage.chats.put(message);
-          await client.acceptContractRequest(proposal.requestId);
+          if (bindingName === "REVIEWED") {
+            const reviewAuthority = await instance.openAuthority(
+              "user-id",
+              new RpcStub<() => void>(() => {}),
+            );
+            const reader = await reviewAuthority.openReviewEvidence({
+              bundleHash: message.reviewBundleHash,
+              comparisonHash: message.reviewComparisonHash,
+            });
+            await expect(reader.getComparisonJson()).resolves.toContain(message.reviewBundleHash);
+            reviewAuthority[Symbol.dispose]?.();
+            await expect(reader.getComparisonJson()).rejects.toThrow("Authority unavailable");
+            reader[Symbol.dispose]?.();
+          }
+          await decideArtifact(instance, message, "approved");
           const approval = impl.workspaceAuthority.query({
             type: "artifactApprovalByProposal",
             proposalId: proposal.proposalId,
@@ -327,11 +395,63 @@ describe("Contract proposal compilation boundary", () => {
           author: {type: "agent", id: "model", name: "Agent"},
           ...builderBody,
         });
-        (client as any).isOwner = false;
-        await expect(client.acceptContractRequest(builderProposal.requestId))
-          .rejects.toThrow("Authority unavailable");
-        await expect(client.denyContractRequest(builderProposal.requestId))
-          .rejects.toThrow("Authority unavailable");
+        await expect(instance.openAuthority(
+          "builder-id",
+          new RpcStub<() => void>(() => {}),
+        )).rejects.toThrow("Authority unavailable");
+        const ownerAuthority = await instance.openAuthority(
+          "user-id",
+          new RpcStub<() => void>(() => {}),
+        );
+        const ownerControl = await ownerAuthority.openOwnerControl();
+        expect(ownerControl).not.toBeNull();
+        const grantSnapshot = await ownerAuthority.getSessionSnapshot();
+        const grantOperation = await ownerAuthority.beginOperation({
+          idempotencyKey: "grant-builder",
+          requestDigest: await hashAuthorityRequest({principalId: "builder-id", enabled: true}),
+        });
+        const grantPayload = {
+          type: "setManagerGrant" as const,
+          operationId: grantOperation.id,
+          stepKey: "set-manager-grant",
+          expectedAuthorityEpoch: grantSnapshot.authorityEpoch,
+          expectedPermissionGeneration: grantSnapshot.permissionGeneration,
+          principalId: "builder-id",
+          enabled: true,
+        };
+        await ownerControl!.execute({
+          ...grantPayload,
+          requestDigest: await hashAuthorityRequest(grantPayload),
+        });
+        const managerAuthority = await instance.openAuthority(
+          "builder-id",
+          new RpcStub<() => void>(() => {}),
+        );
+        await expect(managerAuthority.getSessionSnapshot()).resolves.toMatchObject({
+          permissionGeneration: 1,
+        });
+        const revokeOperation = await ownerAuthority.beginOperation({
+          idempotencyKey: "revoke-builder",
+          requestDigest: await hashAuthorityRequest({principalId: "builder-id", enabled: false}),
+        });
+        const revokePayload = {
+          ...grantPayload,
+          operationId: revokeOperation.id,
+          principalId: "builder-id",
+          enabled: false,
+        };
+        await ownerControl!.execute({
+          ...revokePayload,
+          requestDigest: await hashAuthorityRequest(revokePayload),
+        });
+        await expect(managerAuthority.getSessionSnapshot()).rejects.toThrow("Authority unavailable");
+        ownerAuthority[Symbol.dispose]?.();
+        await expect(ownerControl!.execute({
+          ...revokePayload,
+          requestDigest: await hashAuthorityRequest(revokePayload),
+        })).rejects.toThrow("Authority unavailable");
+        managerAuthority[Symbol.dispose]?.();
+        ownerControl![Symbol.dispose]?.();
         expect(impl.workspaceAuthority.query({
           type: "artifactApprovalByProposal",
           proposalId: builderProposal.proposalId,
@@ -374,12 +494,12 @@ describe("Contract proposal compilation boundary", () => {
         const notifyClosed = new RpcStub<() => void>(() => {});
         const client = await instance.open("user-id", "profile-id", notifyClosed);
 
-        await expect(client.acceptContractRequest(proposal.requestId)).rejects.toThrow();
+        await expect(decideArtifact(instance, message, "approved")).rejects.toThrow();
         const stored = impl.storage.chats.get(
           `${keyString(message.chatId)}.${keyString(message.sequence)}`,
         );
         expect(stored.accepting).toBeUndefined();
-        await expect(client.denyContractRequest(proposal.requestId)).resolves.toBeUndefined();
+        await expect(decideArtifact(instance, message, "rejected")).resolves.toBeUndefined();
         client[Symbol.dispose]?.();
       },
     );

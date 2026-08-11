@@ -3,6 +3,7 @@ import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
 import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES } from '@gadgets/workshop-shared/api';
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
+import type {AuthorityApi} from "@gadgets/workshop-shared/authority-api";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
 import { getAuthVendorBinding } from "./auth/auth-vendors.js";
@@ -200,6 +201,33 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
   getUiFeatureFlags(): Promise<UiFeatureFlags> {
     return resolveUiFeatureFlags(this.env, this.user.id.name!);
+  }
+
+  async openAuthority(workspaceId: string): Promise<RpcStub<AuthorityApi>> {
+    let overseerId;
+    try {
+      overseerId = this.overseers.idFromString(workspaceId);
+    } catch {
+      throw new Error("Authority unavailable.");
+    }
+    const overseer = this.overseers.get(overseerId);
+    let closed = false;
+    let started = false;
+    const notifyClosed = () => {
+      closed = true;
+    };
+    (notifyClosed as typeof notifyClosed & {[Symbol.dispose](): void})[Symbol.dispose] = () => {
+      if (started && !closed) this.abortSession(new Error("lost connection to workspace authority"));
+    };
+    let result;
+    try {
+      result = await overseer.openAuthority(this.user.id.toString(), notifyClosed);
+    } catch {
+      throw new Error("Authority unavailable.");
+    }
+    started = true;
+    // @ts-expect-error Cap'n Web and native Workers RPC stubs are wire-compatible.
+    return result;
   }
 
   async #openGadgetInternal(id: string, shareKey?: string,

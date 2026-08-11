@@ -5,6 +5,12 @@ import {
   type WorkpieceId,
 } from "@gadgets/workshop-shared/api";
 import type {
+  AuthorityCommandResult,
+  AuthorityOwnerCommand,
+  AuthorityOwnerCommandResult,
+  DecideArtifactProposalCommand,
+} from "@gadgets/workshop-shared/authority-api";
+import type {
   AuthorityId,
   ArtifactApprovalId,
   ArtifactApprovalRecord,
@@ -129,6 +135,48 @@ type WorkspaceAuthorityState = {
   nextEventSequence: number;
   migrationId?: string;
   cutoverDigest?: string;
+  authorityEpoch?: number;
+  ownerGeneration?: number;
+};
+
+/** Server-minted, generation-bound authorization context for authority administration. */
+export type AuthoritySessionBinding = Readonly<{
+  principalId: string;
+  permissionKind: "owner" | "manager";
+  permissionGeneration: number;
+  authorityEpoch: number;
+}>;
+
+type AuthorityManagerGrant = {
+  principalId: string;
+  generation: number;
+  state: "active" | "revoked";
+};
+
+type AuthorityCommandReceipt = {
+  key: string;
+  requestDigest: string;
+  artifactApprovalId: ArtifactApprovalId;
+  artifactApprovalEpoch: number;
+  decision: "approved" | "rejected";
+  sequence: number;
+};
+
+type AuthorityOperationRecord = {
+  id: string;
+  actor: string;
+  idempotencyKey: string;
+  requestDigest: string;
+  state: "begun" | "completed";
+  lastCompletedStep?: string;
+  result?: AuthorityCommandResult | AuthorityOwnerCommandResult;
+};
+
+type AuthorityOwnerCommandReceipt = {
+  key: string;
+  requestDigest: string;
+  generation: number;
+  state: "active" | "revoked";
 };
 
 type WorkspaceAuthorityEvent = {
@@ -147,6 +195,7 @@ type WorkspaceAuthorityEvent = {
     | "runtimeApprovalRequested"
     | "runtimeApprovalDecided"
     | "authorityDebtRecorded"
+    | "authorityManagerGrantChanged"
     | "migrationBaseline";
   revision: number;
   subjectId?: string;
@@ -205,6 +254,17 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
       workspaceAuthorityEffects: collection<WorkspaceAuthorityEffect>()({
         primaryKey: "id",
       }),
+      authorityManagerGrants: collection<AuthorityManagerGrant>()({primaryKey: "principalId"}),
+      authorityCommandReceipts: collection<AuthorityCommandReceipt>()({primaryKey: "key"}),
+      authorityOperations: collection<AuthorityOperationRecord>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byActorKey(record: AuthorityOperationRecord) {
+            return compositeKey(record.actor, record.idempotencyKey);
+          },
+        },
+      }),
+      authorityOwnerCommandReceipts: collection<AuthorityOwnerCommandReceipt>()({primaryKey: "key"}),
       artifactApprovals: collection<ArtifactApprovalRecord>()({
         primaryKey: "id",
         uniqueIndexes: {
@@ -353,11 +413,6 @@ export type WorkspaceAuthorityCommand =
       record: Omit<ArtifactProposalRecord, "id" | "state" | "revision">;
     }
   | {
-      type: "recordArtifactApproval";
-      operationId: string;
-      record: LiveArtifactApprovalInput;
-    }
-  | {
       type: "recordInstallationDecision";
       operationId: string;
       record: LiveInstallationDecisionInput;
@@ -504,6 +559,28 @@ export interface WorkspaceAuthority {
   execute(command: WorkspaceAuthorityCommand): WorkspaceAuthorityCommandResult;
   query(query: WorkspaceAuthorityQuery): WorkspaceAuthorityQueryResult;
   reconcile(): WorkspaceAuthorityReconciliationResult;
+  openSession(principalId: string, isOwner: boolean): AuthoritySessionBinding | undefined;
+  beginOperation(
+    session: AuthoritySessionBinding,
+    idempotencyKey: string,
+    requestDigest: string,
+  ): AuthorityOperationRecord;
+  getOperation(session: AuthoritySessionBinding, operationId: string): AuthorityOperationRecord | undefined;
+  hasReviewEvidence(
+    session: AuthoritySessionBinding,
+    bundleHash: string,
+    comparisonHash: string,
+  ): boolean;
+  decideArtifactProposal(
+    session: AuthoritySessionBinding,
+    command: DecideArtifactProposalCommand,
+    requestDigest: string,
+  ): Extract<WorkspaceAuthorityCommandResult, {type: "artifactApprovalRecorded"}>;
+  setManagerGrant(
+    ownerSession: AuthoritySessionBinding,
+    command: AuthorityOwnerCommand,
+    requestDigest: string,
+  ): Readonly<{principalId: string; generation: number; state: "active" | "revoked"}>;
 }
 
 /** One legacy Gadget binding edge retained only until canonical Binding cutover. */
@@ -624,10 +701,12 @@ function requireAuthorityState(storage: AuthorityStorage): WorkspaceAuthoritySta
   return state;
 }
 
-function requireActiveAuthority(storage: AuthorityStorage): void {
-  if (requireAuthorityState(storage).state !== "active") {
+function requireActiveAuthority(storage: AuthorityStorage): WorkspaceAuthorityState {
+  const state = requireAuthorityState(storage);
+  if (state.state !== "active") {
     throw new Error("Canonical Workspace Authority is not active.");
   }
+  return state;
 }
 
 function appendAuthorityEvent(
@@ -1014,6 +1093,241 @@ export function createWorkspaceAuthorityModule<
   const issuedLegacyManagerSourceAccess = new WeakSet<object>();
 
   const authority: WorkspaceAuthority = {
+    openSession(principalId, isOwner) {
+      return storage.transaction(() => {
+        const state = requireActiveAuthority(storage);
+        const authorityEpoch = state.authorityEpoch ?? 1;
+        if (isOwner) {
+          return {
+            principalId,
+            permissionKind: <const>"owner",
+            permissionGeneration: state.ownerGeneration ?? 1,
+            authorityEpoch,
+          };
+        }
+        const grant = storage.authorityManagerGrants.get(principalId);
+        if (!grant || grant.state !== "active") return undefined;
+        return {
+          principalId,
+          permissionKind: <const>"manager",
+          permissionGeneration: grant.generation,
+          authorityEpoch,
+        };
+      });
+    },
+    beginOperation(session, idempotencyKey, requestDigest) {
+      return storage.transaction(() => {
+        const state = requireActiveAuthority(storage);
+        const liveGeneration = session.permissionKind === "owner"
+          ? state.ownerGeneration ?? 1
+          : storage.authorityManagerGrants.get(session.principalId)?.generation;
+        if (session.authorityEpoch !== (state.authorityEpoch ?? 1) ||
+            session.permissionGeneration !== liveGeneration || !idempotencyKey ||
+            !CONTENT_HASH.test(requestDigest)) {
+          throw new Error("Authority session or operation request is invalid.");
+        }
+        const existing = storage.authorityOperations.byActorKey.get(
+          compositeKey(session.principalId, idempotencyKey),
+        );
+        if (existing) {
+          if (existing.requestDigest !== requestDigest) throw new Error("Authority idempotency conflict.");
+          return existing;
+        }
+        const operation: AuthorityOperationRecord = {
+          id: issueAuthorityId<"authorityOperation">(),
+          actor: session.principalId,
+          idempotencyKey,
+          requestDigest,
+          state: "begun",
+        };
+        storage.authorityOperations.put(operation);
+        return operation;
+      });
+    },
+    getOperation(session, operationId) {
+      return storage.transaction(() => {
+        const state = requireActiveAuthority(storage);
+        const liveGeneration = session.permissionKind === "owner"
+          ? state.ownerGeneration ?? 1
+          : storage.authorityManagerGrants.get(session.principalId)?.generation;
+        if (session.authorityEpoch !== (state.authorityEpoch ?? 1) ||
+            session.permissionGeneration !== liveGeneration) {
+          throw new Error("Authority session is stale or revoked.");
+        }
+        const operation = storage.authorityOperations.get(operationId);
+        return operation?.actor === session.principalId ? operation : undefined;
+      });
+    },
+    hasReviewEvidence(session, bundleHash, comparisonHash) {
+      return storage.transaction(() => {
+        const state = requireActiveAuthority(storage);
+        const liveGeneration = session.permissionKind === "owner"
+          ? state.ownerGeneration ?? 1
+          : storage.authorityManagerGrants.get(session.principalId)?.generation;
+        if (session.authorityEpoch !== (state.authorityEpoch ?? 1) ||
+            session.permissionGeneration !== liveGeneration) {
+          throw new Error("Authority session is stale or revoked.");
+        }
+        return [...storage.artifactProposals.list()].some(proposal =>
+          proposal.reviewBundleHash === bundleHash &&
+          proposal.reviewComparisonHash === comparisonHash);
+      });
+    },
+    decideArtifactProposal(session, command, requestDigest) {
+      return storage.transaction(() => {
+        const state = requireActiveAuthority(storage);
+        const authorityEpoch = state.authorityEpoch ?? 1;
+        const liveGeneration = session.permissionKind === "owner"
+          ? state.ownerGeneration ?? 1
+          : (() => {
+              const grant = storage.authorityManagerGrants.get(session.principalId);
+              return grant?.state === "active" ? grant.generation : undefined;
+            })();
+        if (session.authorityEpoch !== authorityEpoch ||
+            command.expectedAuthorityEpoch !== authorityEpoch ||
+            liveGeneration === undefined || session.permissionGeneration !== liveGeneration ||
+            command.expectedPermissionGeneration !== liveGeneration) {
+          throw new Error("Authority session is stale or revoked.");
+        }
+        if (command.requestDigest !== requestDigest) {
+          throw new Error("Authority command digest mismatch.");
+        }
+        const operation = storage.authorityOperations.get(command.operationId);
+        if (!operation || operation.actor !== session.principalId) {
+          throw new Error("Authority Operation is unavailable.");
+        }
+        const receiptKey = compositeKey(session.principalId, command.operationId, command.stepKey);
+        const receipt = storage.authorityCommandReceipts.get(receiptKey);
+        if (receipt) {
+          if (receipt.requestDigest !== requestDigest) throw new Error("Authority idempotency conflict.");
+          return {
+            type: <const>"artifactApprovalRecorded",
+            id: receipt.artifactApprovalId,
+            approvalEpoch: receipt.artifactApprovalEpoch,
+            sequence: receipt.sequence,
+          };
+        }
+        if (command.evidence.proposalId.length === 0) {
+          throw new TypeError("Artifact Proposal ID is required.");
+        }
+        const proposal = storage.artifactProposals.get(command.evidence.proposalId as ArtifactProposalId);
+        if (!proposal || proposal.revision !== command.expectedProposalRevision || proposal.state !== "pending") {
+          throw new Error("Artifact Proposal is stale or not pending.");
+        }
+        const record: LiveArtifactApprovalInput = {
+          ...structuredClone(command.evidence),
+          proposalId: command.evidence.proposalId as ArtifactProposalId,
+          baseline: command.evidence.baseline.type === "none"
+            ? {type: "none"}
+            : {
+                type: "bundle",
+                bundleHash: command.evidence.baseline.bundleHash,
+                artifactApprovalId: command.evidence.baseline.artifactApprovalId as ArtifactApprovalId,
+              },
+          evidence: "complete",
+          decision: command.decision,
+          decidedBy: session.principalId,
+          permissionGeneration: liveGeneration,
+          lifecycle: command.decision === "approved" ? "active" : "revoked",
+        };
+        const validatedProposal = validateArtifactApprovalEvidence(storage, record);
+        let approvalEpoch = 1;
+        while (storage.artifactApprovals.byArtifactEpoch.get(
+          compositeKey(record.artifactHash, approvalEpoch),
+        )) approvalEpoch++;
+        const id = issueAuthorityId<"artifactApproval">();
+        const sequence = appendAuthorityEvent(storage, {
+          type: "artifactApprovalRecorded",
+          subjectId: id,
+          operationId: command.operationId,
+        });
+        storage.artifactApprovals.put({
+          ...record,
+          id,
+          approvalEpoch,
+          decisionSequence: sequence,
+          revision: 1,
+        });
+        storage.artifactProposals.put({
+          ...validatedProposal,
+          state: command.decision === "approved" ? "accepted" : "rejected",
+          revision: validatedProposal.revision + 1,
+        });
+        storage.authorityCommandReceipts.put({
+          key: receiptKey,
+          requestDigest,
+          artifactApprovalId: id,
+          artifactApprovalEpoch: approvalEpoch,
+          decision: command.decision,
+          sequence,
+        });
+        storage.authorityOperations.put({
+          ...operation,
+          state: "completed",
+          lastCompletedStep: command.stepKey,
+          result: {
+            type: "artifactProposalDecided",
+            artifactApprovalId: id,
+            artifactApprovalEpoch: approvalEpoch,
+            decision: command.decision,
+          },
+        });
+        return {type: "artifactApprovalRecorded", id, approvalEpoch, sequence};
+      });
+    },
+    setManagerGrant(ownerSession, command, requestDigest) {
+      return storage.transaction(() => {
+        const state = requireActiveAuthority(storage);
+        if (ownerSession.permissionKind !== "owner" ||
+            ownerSession.authorityEpoch !== (state.authorityEpoch ?? 1) ||
+            ownerSession.permissionGeneration !== (state.ownerGeneration ?? 1) ||
+            command.expectedAuthorityEpoch !== (state.authorityEpoch ?? 1) ||
+            command.expectedPermissionGeneration !== (state.ownerGeneration ?? 1) ||
+            command.requestDigest !== requestDigest) {
+          throw new Error("Authority owner session is stale or revoked.");
+        }
+        const operation = storage.authorityOperations.get(command.operationId);
+        if (!operation || operation.actor !== ownerSession.principalId) {
+          throw new Error("Authority Operation is unavailable.");
+        }
+        const receiptKey = compositeKey(ownerSession.principalId, command.operationId, command.stepKey);
+        const receipt = storage.authorityOwnerCommandReceipts.get(receiptKey);
+        if (receipt) {
+          if (receipt.requestDigest !== requestDigest) throw new Error("Authority idempotency conflict.");
+          return {principalId: command.principalId, generation: receipt.generation, state: receipt.state};
+        }
+        if (!command.principalId) throw new TypeError("Authority manager principal is required.");
+        const current = storage.authorityManagerGrants.get(command.principalId);
+        const next: AuthorityManagerGrant = {
+          principalId: command.principalId,
+          generation: (current?.generation ?? 0) + 1,
+          state: command.enabled ? "active" : "revoked",
+        };
+        storage.authorityManagerGrants.put(next);
+        appendAuthorityEvent(storage, {
+          type: "authorityManagerGrantChanged",
+          subjectId: command.principalId,
+          operationId: command.operationId,
+        });
+        storage.authorityOwnerCommandReceipts.put({
+          key: receiptKey,
+          requestDigest,
+          generation: next.generation,
+          state: next.state,
+        });
+        storage.authorityOperations.put({
+          ...operation,
+          state: "completed",
+          lastCompletedStep: command.stepKey,
+          result: {
+            type: "managerGrantChanged",
+            generation: next.generation,
+            state: next.state,
+          },
+        });
+        return next;
+      });
+    },
     execute(command) {
       switch (command.type) {
         case "initialize":
@@ -1026,6 +1340,8 @@ export function createWorkspaceAuthorityModule<
               state: "legacy",
               revision: 1,
               nextEventSequence: 2,
+              authorityEpoch: 1,
+              ownerGeneration: 1,
             };
             storage.workspaceAuthorityState.put(initial);
             storage.workspaceAuthorityEvents.put({
@@ -1128,34 +1444,6 @@ export function createWorkspaceAuthorityModule<
               revision: 1,
             });
             return {type: "artifactProposalRecorded", id, sequence};
-          });
-        case "recordArtifactApproval":
-          return storage.transaction(() => {
-            requireActiveAuthority(storage);
-            const proposal = validateArtifactApprovalEvidence(storage, command.record);
-            let approvalEpoch = 1;
-            while (storage.artifactApprovals.byArtifactEpoch.get(
-              compositeKey(command.record.artifactHash, approvalEpoch),
-            )) approvalEpoch++;
-            const id = issueAuthorityId<"artifactApproval">();
-            const sequence = appendAuthorityEvent(storage, {
-              type: "artifactApprovalRecorded",
-              subjectId: id,
-              operationId: command.operationId,
-            });
-            storage.artifactApprovals.put({
-              ...structuredClone(command.record),
-              id,
-              approvalEpoch,
-              decisionSequence: sequence,
-              revision: 1,
-            });
-            storage.artifactProposals.put({
-              ...proposal,
-              state: command.record.decision === "approved" ? "accepted" : "rejected",
-              revision: proposal.revision + 1,
-            });
-            return {type: "artifactApprovalRecorded", id, approvalEpoch, sequence};
           });
         case "recordInstallationDecision":
           return storage.transaction(() => {

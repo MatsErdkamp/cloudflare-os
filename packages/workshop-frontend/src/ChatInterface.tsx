@@ -75,6 +75,7 @@ import {
   OutputFormatOffer,
 } from "@gadgets/workshop-shared/api";
 import { ActionKind, ResourceDescription } from "@gadgets/workshop-shared/gatekeeper";
+import {hashAuthorityCommand, hashAuthorityRequest} from "@gadgets/workshop-shared/authority-api";
 import {
   parseSlashCommandInput, slashCommandTokenKey, stripSlashCommandToken,
 } from "./components/chat/slash-command-input";
@@ -4018,6 +4019,7 @@ function fallbackToStoredModelSelection(
 }
 
 interface ChatInterfaceProps {
+  workspaceId: string;
   overseer: RpcStub<Overseer>;
   selectedChatId: number | null;
   onNavigateToChat: (
@@ -4211,6 +4213,7 @@ function getOrCreateProvisionalToolCall(
 }
 
 function ChatInterface({
+  workspaceId,
   overseer,
   selectedChatId,
   onNavigateToChat,
@@ -4238,7 +4241,7 @@ function ChatInterface({
 }: ChatInterfaceProps) {
   // Persistent cache that survives reconnects
   const toasts = useToast();
-  const { currentUser } = useAuthenticatedApi();
+  const {authenticatedApi, currentUser} = useAuthenticatedApi();
   const getOverseer = useCallback(() => overseer, [overseer]);
   const cacheRef = useRef<ChatCache>({
     chats: new Map(),
@@ -4316,6 +4319,11 @@ function ChatInterface({
   const [processingConnections, setProcessingConnections] = useState<Set<string>>(
     new Set(),
   );
+  const [reviewedContractEvidence, setReviewedContractEvidence] = useState(new Map<string, {
+    comparisonJson: string;
+    authoringText: string;
+    emittedText: string;
+  }>());
   const [availableModels, setAvailableModels] = useState<AiChatAuthorInfo[]>(
     [],
   );
@@ -5766,34 +5774,103 @@ function ChatInterface({
     }
   };
 
-  const handleAcceptContract = async (requestId: string) => {
-    setProcessingConnections((prev) => new Set(prev).add(requestId));
+  const loadContractReview = async (
+    message: Extract<AiChatMessage, {type: "contractRequest"}>,
+  ) => {
+    setProcessingConnections((previous) => new Set(previous).add(message.requestId));
     try {
-      await overseer.acceptContractRequest(requestId);
-      toasts.add({title: "Contract installed", type: "success"});
-    } catch (err) {
-      console.error("Failed to install Contract:", err);
-      toasts.add({title: "Failed to install Contract", type: "error"});
+      using authority = await authenticatedApi.openAuthority(workspaceId);
+      using reader = await authority.openReviewEvidence({
+        bundleHash: message.reviewBundleHash,
+        comparisonHash: message.reviewComparisonHash,
+      });
+      const [bundleJson, comparisonJson] = await Promise.all([
+        reader.getBundleJson(),
+        reader.getComparisonJson(),
+      ]);
+      const bundle = JSON.parse(bundleJson) as {
+        originalModules: {path: string; blob: {hash: string; bytes: number; mediaType: "text/typescript"}}[];
+        artifact: {emittedModules: {path: string; blob: {hash: string; bytes: number; mediaType: "text/javascript"}}[]};
+      };
+      const decodeModules = async (modules: {
+        path: string;
+        blob: {hash: string; bytes: number; mediaType: "text/typescript" | "text/javascript"};
+      }[]) =>
+        (await Promise.all(modules.map(async module =>
+          `// ${module.path}\n${new TextDecoder().decode(await reader.getBlob(module.blob))}`)))
+          .join("\n\n");
+      const [authoringText, emittedText] = await Promise.all([
+        decodeModules(bundle.originalModules),
+        decodeModules(bundle.artifact.emittedModules),
+      ]);
+      setReviewedContractEvidence(previous => new Map(previous).set(message.requestId, {
+        comparisonJson,
+        authoringText,
+        emittedText,
+      }));
+    } catch (error) {
+      console.error("Failed to load immutable Contract review evidence:", error);
+      toasts.add({title: "Failed to load review evidence", type: "error"});
     } finally {
-      setProcessingConnections((prev) => {
-        const next = new Set(prev);
-        next.delete(requestId);
+      setProcessingConnections(previous => {
+        const next = new Set(previous);
+        next.delete(message.requestId);
         return next;
       });
     }
   };
 
-  const handleDenyContract = async (requestId: string) => {
-    setProcessingConnections((prev) => new Set(prev).add(requestId));
+  const decideContract = async (
+    message: Extract<AiChatMessage, {type: "contractRequest"}>,
+    decision: "approved" | "rejected",
+  ) => {
+    setProcessingConnections((prev) => new Set(prev).add(message.requestId));
     try {
-      await overseer.denyContractRequest(requestId);
+      if (decision === "approved" && !reviewedContractEvidence.has(message.requestId)) {
+        throw new Error("Immutable Review Comparison must be shown before approval.");
+      }
+      using authority = await authenticatedApi.openAuthority(workspaceId);
+      const snapshot = await authority.getSessionSnapshot();
+      const intent = {
+        type: "artifactProposalDecision",
+        requestId: message.requestId,
+        proposalId: message.proposalId,
+        decision,
+      };
+      const operation = await authority.beginOperation({
+        idempotencyKey: `artifact-decision:${message.requestId}:${decision}`,
+        requestDigest: await hashAuthorityRequest(intent),
+      });
+      const payload = {
+        type: "decideArtifactProposal" as const,
+        operationId: operation.id,
+        stepKey: "artifact-decision",
+        expectedAuthorityEpoch: snapshot.authorityEpoch,
+        expectedPermissionGeneration: snapshot.permissionGeneration,
+        requestId: message.requestId,
+        expectedProposalRevision: message.proposalRevision,
+        evidence: {
+          artifactHash: message.artifactHash,
+          proposalId: message.proposalId,
+          reviewBundleHash: message.reviewBundleHash,
+          reviewComparisonHash: message.reviewComparisonHash,
+          policyHash: message.policyHash,
+          generatorIdentityHash: message.generatorIdentityHash,
+          baseline: message.baseline,
+        },
+        decision,
+      };
+      await authority.execute({...payload, requestDigest: await hashAuthorityCommand(payload)});
+      if (decision === "approved") {
+        toasts.add({title: "Artifact approved", type: "success"});
+      }
     } catch (err) {
-      console.error("Failed to deny Contract:", err);
-      toasts.add({title: "Failed to deny Contract", type: "error"});
+      console.error("Failed to decide Contract Artifact:", err);
+      toasts.add({title: "Failed to record Artifact decision", type: "error"});
     } finally {
       setProcessingConnections((prev) => {
         const next = new Set(prev);
-        next.delete(requestId);
+        next.delete(message.requestId);
         return next;
       });
     }
@@ -6150,6 +6227,7 @@ function ChatInterface({
   ) => {
     const isPending = msg.state === "pending";
     const isProc = processingConnections.has(msg.requestId);
+    const reviewedEvidence = reviewedContractEvidence.get(msg.requestId);
     const status = msg.state === "accepted" ? "Installed" :
       msg.state === "approved" ? "Artifact approved" :
       msg.state === "denied" ? "Denied" : "Approval required";
@@ -6174,7 +6252,7 @@ function ChatInterface({
                 Possession preapproves every public method. This code defines the capability. It
                 may return or delegate any authority available through the selected Source.
               </p>
-              <details className="mt-2">
+              <details className="mt-2" open={Boolean(reviewedEvidence)}>
                 <summary className="cursor-pointer text-[12px] font-medium text-foreground">
                   Review code, interface, and authority
                 </summary>
@@ -6218,18 +6296,39 @@ function ChatInterface({
                     <div className="mb-1 font-medium text-foreground">Contract code (non-authoritative display snapshot)</div>
                     <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px] leading-4 text-foreground">{msg.sourceCode}</pre>
                   </div>
+                  {reviewedEvidence && (
+                    <>
+                      <div>
+                        <div className="mb-1 font-medium text-foreground">Immutable Review Comparison</div>
+                        <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px] leading-4 text-foreground">{reviewedEvidence.comparisonJson}</pre>
+                      </div>
+                      <div>
+                        <div className="mb-1 font-medium text-foreground">Immutable authoring modules</div>
+                        <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px] leading-4 text-foreground">{reviewedEvidence.authoringText}</pre>
+                      </div>
+                      <div>
+                        <div className="mb-1 font-medium text-foreground">Immutable emitted executable</div>
+                        <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px] leading-4 text-foreground">{reviewedEvidence.emittedText}</pre>
+                      </div>
+                    </>
+                  )}
                 </div>
               </details>
             </div>
             {isPending && (
               <div className="ml-3 flex flex-shrink-0 items-center gap-2 self-center text-[13px]">
                 <Button variant="ghost" type="button" disabled={isProc}
-                  onClick={() => handleDenyContract(msg.requestId)}
+                  onClick={() => loadContractReview(msg)}
+                  className="cursor-pointer rounded-md px-2 py-1 font-medium text-foreground disabled:opacity-40">
+                  {reviewedEvidence ? "Reviewed" : "Review evidence"}
+                </Button>
+                <Button variant="ghost" type="button" disabled={isProc || !reviewedEvidence}
+                  onClick={() => decideContract(msg, "rejected")}
                   className="cursor-pointer rounded-md px-2 py-1 font-medium text-muted-foreground hover:text-destructive disabled:opacity-40">
                   Deny
                 </Button>
                 <Button variant="ghost" type="button" disabled={isProc}
-                  onClick={() => handleAcceptContract(msg.requestId)}
+                  onClick={() => decideContract(msg, "approved")}
                   className="cursor-pointer rounded-md bg-primary px-3 py-1 font-medium text-white hover:opacity-90 disabled:opacity-40">
                   Approve artifact
                 </Button>

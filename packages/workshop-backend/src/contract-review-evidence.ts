@@ -2,6 +2,7 @@ import {
   REVIEW_LIMITS,
   ReviewEvidenceError,
   canonicalReviewJson,
+  createReviewComparison,
   hashReviewValue,
   parseContractReviewBundle,
   parseReviewComparison,
@@ -61,8 +62,10 @@ function bundleBlobReferences(bundle: ContractReviewBundle): readonly ReviewBlob
     bundle.artifact.authority,
     ...bundle.artifact.emittedModules.map(module => module.blob),
     bundle.artifact.publicDeclaration,
+    bundle.artifact.publicExportedSurface,
     ...bundle.originalModules.map(module => module.blob),
     bundle.source.declaration,
+    bundle.source.exportedSurface,
     bundle.build.dependencyLock,
     bundle.build.directDependencyRequests,
     bundle.build.toolchain,
@@ -113,6 +116,7 @@ export class R2ContractReviewEvidenceStore {
     const comparison = parseReviewComparison(evidence.comparisonJson);
     assertComparisonReferences(comparison, evidence.bundleHash, bundle);
     await verifyContractReviewBlobs(bundle, evidence.blobs);
+    await this.#assertDeterministicComparison(comparison, bundle, evidence.blobs);
 
     const references = uniqueBlobReferences(bundle);
     if (evidence.blobs.size !== references.size ||
@@ -135,6 +139,13 @@ export class R2ContractReviewEvidenceStore {
 
   /** Loads a Bundle only after validating its canonical bytes and every referenced blob. */
   async getBundle(hash: string): Promise<ContractReviewBundle | undefined> {
+    return (await this.#getBundleEvidence(hash))?.bundle;
+  }
+
+  async #getBundleEvidence(hash: string): Promise<Readonly<{
+    bundle: ContractReviewBundle;
+    blobs: ReadonlyMap<string, Uint8Array>;
+  }> | undefined> {
     const encoded = await this.#getBytes(bundleKey(hash), REVIEW_LIMITS.manifestBytes);
     if (!encoded) return undefined;
     const json = this.#decodeJson(encoded, "Review Bundle");
@@ -145,7 +156,7 @@ export class R2ContractReviewEvidenceStore {
       blobs.set(reference.hash, await this.#requireBlob(reference));
     }
     await verifyContractReviewBlobs(bundle, blobs);
-    return bundle;
+    return {bundle, blobs};
   }
 
   /** Loads a Comparison only after validating its exact candidate Bundle cross-reference. */
@@ -155,10 +166,35 @@ export class R2ContractReviewEvidenceStore {
     const json = this.#decodeJson(encoded, "Review Comparison");
     await this.#assertManifestHash(json, hash, "Review Comparison");
     const comparison = parseReviewComparison(json);
-    const bundle = await this.getBundle(comparison.candidateBundleHash);
-    if (!bundle) throw corrupt("Review Comparison candidate Bundle is missing.");
-    assertComparisonReferences(comparison, comparison.candidateBundleHash, bundle);
+    const evidence = await this.#getBundleEvidence(comparison.candidateBundleHash);
+    if (!evidence) throw corrupt("Review Comparison candidate Bundle is missing.");
+    assertComparisonReferences(comparison, comparison.candidateBundleHash, evidence.bundle);
+    await this.#assertDeterministicComparison(comparison, evidence.bundle, evidence.blobs);
     return comparison;
+  }
+
+  async #assertDeterministicComparison(
+    comparison: ReviewComparison,
+    candidateBundle: ContractReviewBundle,
+    candidateBlobs: ReadonlyMap<string, Uint8Array>,
+  ): Promise<void> {
+    const baselineEvidence = comparison.baseline.kind === "bundle"
+      ? await this.#getBundleEvidence(comparison.baseline.bundleHash) : undefined;
+    if (comparison.baseline.kind === "bundle" && !baselineEvidence) {
+      throw corrupt("Review Comparison baseline Bundle is missing.");
+    }
+    const expected = await createReviewComparison(
+      comparison.baseline,
+      baselineEvidence?.bundle,
+      baselineEvidence?.blobs,
+      candidateBundle,
+      candidateBlobs,
+      comparison.candidateBundleHash,
+      comparison.generator,
+    );
+    if (canonicalReviewJson(expected) !== canonicalReviewJson(comparison)) {
+      throw corrupt("Review Comparison does not match its cited evidence.");
+    }
   }
 
   /** Loads and validates one exact content-addressed Review Bundle blob. */

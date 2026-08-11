@@ -3,6 +3,7 @@ import {describe, expect, it, vi} from "vitest";
 import {
   createWorkspaceAuthorityModule,
   type LegacyGadgetAuthorityRecord,
+  type WorkspaceAuthority,
 } from "../src/authority/workspace-authority.js";
 import type {
   TaskDispatchDecisionId,
@@ -11,6 +12,37 @@ import type {
 import {makeMockStorage} from "./mock-storage.js";
 
 type TestGadget = LegacyGadgetAuthorityRecord & {title: string};
+
+function recordArtifactDecision(
+  authority: WorkspaceAuthority,
+  operationId: string,
+  record: any,
+) {
+  const session = authority.openSession("test-owner", true);
+  if (!session) throw new Error("owner authority unavailable");
+  const operation = authority.beginOperation(session, operationId, `sha256:${"d".repeat(64)}`);
+  const {
+    evidence: _evidence,
+    decidedBy: _decidedBy,
+    lifecycle: _lifecycle,
+    decision,
+    permissionGeneration: _permissionGeneration,
+    ...proposalEvidence
+  } = record;
+  const command = {
+    type: "decideArtifactProposal" as const,
+    operationId: operation.id,
+    stepKey: "artifact-decision",
+    requestDigest: operationId,
+    expectedAuthorityEpoch: session.authorityEpoch,
+    expectedPermissionGeneration: session.permissionGeneration,
+    expectedProposalRevision: 1,
+    requestId: `test:${operationId}`,
+    evidence: proposalEvidence,
+    decision,
+  };
+  return authority.decideArtifactProposal(session, command, operationId);
+}
 
 function makeModule({
   legacyPlacement = false,
@@ -131,37 +163,29 @@ describe("Workspace Authority module", () => {
       lifecycle: "active" as const,
     };
 
-    expect(() => module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "malformed-evidence",
-      record: {...valid, reviewBundleHash: "not-content-addressed"},
-    })).toThrow("Review Bundle hash must be a sha256 content hash");
-    expect(() => module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "empty-proposal",
-      record: {...valid, proposalId: ""},
-    })).toThrow("Artifact Proposal ID is required");
-    expect(() => module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "mismatched-evidence",
-      record: {...valid, policyHash: `sha256:${"f".repeat(64)}`},
-    })).toThrow("Artifact Approval evidence does not match its Proposal");
+    expect(() => recordArtifactDecision(
+      module.authority,
+      "malformed-evidence",
+      {...valid, reviewBundleHash: "not-content-addressed"},
+    )).toThrow("Review Bundle hash must be a sha256 content hash");
+    expect(() => recordArtifactDecision(
+      module.authority,
+      "empty-proposal",
+      {...valid, proposalId: ""},
+    )).toThrow("Artifact Proposal ID is required");
+    expect(() => recordArtifactDecision(
+      module.authority,
+      "mismatched-evidence",
+      {...valid, policyHash: `sha256:${"f".repeat(64)}`},
+    )).toThrow("Artifact Approval evidence does not match its Proposal");
 
-    const approval = module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "complete-evidence",
-      record: valid,
-    });
+    const approval = recordArtifactDecision(module.authority, "complete-evidence", valid);
     expect(approval).toMatchObject({type: "artifactApprovalRecorded"});
     expect(module.authority.query({type: "artifactProposal", id: proposal.id})).toMatchObject({
       type: "artifactProposal",
       value: {state: "accepted", revision: 2},
     });
-    expect(() => module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "duplicate-epoch",
-      record: valid,
-    })).toThrow();
+    expect(() => recordArtifactDecision(module.authority, "duplicate-epoch", valid)).toThrow();
 
     const reapprovalProposal = module.authority.execute({
       type: "recordArtifactProposal",
@@ -181,11 +205,11 @@ describe("Workspace Authority module", () => {
     if (reapprovalProposal.type !== "artifactProposalRecorded") {
       throw new Error("reapproval proposal unavailable");
     }
-    const reapproval = module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "reapproval",
-      record: {...valid, proposalId: reapprovalProposal.id},
-    });
+    const reapproval = recordArtifactDecision(
+      module.authority,
+      "reapproval",
+      {...valid, proposalId: reapprovalProposal.id},
+    );
     expect(reapproval).toMatchObject({type: "artifactApprovalRecorded", approvalEpoch: 2});
     expect(module.authority.query({
       type: "artifactApprovalByProposal",
@@ -210,16 +234,16 @@ describe("Workspace Authority module", () => {
     if (rejectedProposal.type !== "artifactProposalRecorded") {
       throw new Error("rejected proposal unavailable");
     }
-    expect(module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "rejection",
-      record: {
+    expect(recordArtifactDecision(
+      module.authority,
+      "rejection",
+      {
         ...valid,
         proposalId: rejectedProposal.id,
         decision: "rejected",
         lifecycle: "revoked",
       },
-    })).toMatchObject({type: "artifactApprovalRecorded", approvalEpoch: 3});
+    )).toMatchObject({type: "artifactApprovalRecorded", approvalEpoch: 3});
     expect(module.authority.query({type: "artifactProposal", id: rejectedProposal.id}))
       .toMatchObject({type: "artifactProposal", value: {state: "rejected"}});
   });
@@ -379,10 +403,10 @@ describe("Workspace Authority module", () => {
     if (standingProposal.type !== "artifactProposalRecorded") {
       throw new Error("standing proposal unavailable");
     }
-    const approval = module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "operation-approval",
-      record: {
+    const approval = recordArtifactDecision(
+      module.authority,
+      "operation-approval",
+      {
         artifactHash: `sha256:${"1".repeat(64)}`,
         proposalId: standingProposal.id,
         reviewBundleHash: `sha256:${"2".repeat(64)}`,
@@ -395,7 +419,7 @@ describe("Workspace Authority module", () => {
         decidedBy: "legacy-attribution",
         lifecycle: "active",
       },
-    });
+    );
     if (approval.type !== "artifactApprovalRecorded") throw new Error("approval not recorded");
     const decision = module.authority.execute({
       type: "recordInstallationDecision",
@@ -722,10 +746,10 @@ describe("Workspace Authority module", () => {
     if (taskProposal.type !== "artifactProposalRecorded") {
       throw new Error("task proposal unavailable");
     }
-    const approval = module.authority.execute({
-      type: "recordArtifactApproval",
-      operationId: "task-artifact-approval",
-      record: {
+    const approval = recordArtifactDecision(
+      module.authority,
+      "task-artifact-approval",
+      {
         artifactHash: `sha256:${"6".repeat(64)}`,
         proposalId: taskProposal.id,
         reviewBundleHash: `sha256:${"7".repeat(64)}`,
@@ -738,7 +762,7 @@ describe("Workspace Authority module", () => {
         decidedBy: "reviewer",
         lifecycle: "active",
       },
-    });
+    );
     if (approval.type !== "artifactApprovalRecorded") throw new Error("approval unavailable");
     const taskTemplateId = "task-template-files" as TaskTemplateId;
     const consumer = {

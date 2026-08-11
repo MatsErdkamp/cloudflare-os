@@ -1,4 +1,5 @@
 import {canonicalReviewJson, hashReviewValue, ReviewEvidenceError} from "./canonical.js";
+import {COMPARISON_GENERATOR_IDENTITY} from "./generated/comparison-generator-identity.js";
 import {REVIEW_LIMITS} from "./limits.js";
 import type {
   ContractReviewBundle,
@@ -28,6 +29,16 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 // The manifest itself is capped at 256 KiB, so rendered patches use the smaller bound in practice.
 const PATCH_MANIFEST_BUDGET = Math.min(REVIEW_LIMITS.renderedComparisonPatchBytes, 128 * 1024);
+/** Returns the sole registered comparison implementation and its content-addressed identity. */
+export async function registeredReviewComparisonGenerator(): Promise<Readonly<{
+  readonly name: string;
+  readonly identity: string;
+}>> {
+  return {
+    name: "contract-review-comparison",
+    identity: COMPARISON_GENERATOR_IDENTITY,
+  };
+}
 
 function requireBlob(
   blobs: ReadonlyMap<string, Uint8Array>,
@@ -83,76 +94,14 @@ function truncatePatch(patch: string, remainingBytes: number): {patch?: string; 
   return {patch: patch.slice(0, low), truncated: true};
 }
 
-function exportedSurface(text: string): readonly string[] {
-  const statements: string[] = [];
-  let start = 0;
-  let braces = 0;
-  let parentheses = 0;
-  let brackets = 0;
-  let quote: "\"" | "'" | "`" | undefined;
-  let lineComment = false;
-  let blockComment = false;
-  const finish = (end: number) => {
-    const statement = text.slice(start, end).trim();
-    if (statement) statements.push(statement);
-    start = end;
-  };
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index]!;
-    const next = text[index + 1];
-    if (lineComment) {
-      if (character === "\n") lineComment = false;
-      continue;
-    }
-    if (blockComment) {
-      if (character === "*" && next === "/") {
-        blockComment = false;
-        index += 1;
-      }
-      continue;
-    }
-    if (quote) {
-      if (character === "\\") index += 1;
-      else if (character === quote) quote = undefined;
-      continue;
-    }
-    if (character === "/" && next === "/") {
-      lineComment = true;
-      index += 1;
-      continue;
-    }
-    if (character === "/" && next === "*") {
-      blockComment = true;
-      index += 1;
-      continue;
-    }
-    if (character === "\"" || character === "'" || character === "`") {
-      quote = character;
-      continue;
-    }
-    if (character === "{") braces += 1;
-    else if (character === "}") braces -= 1;
-    else if (character === "(") parentheses += 1;
-    else if (character === ")") parentheses -= 1;
-    else if (character === "[") brackets += 1;
-    else if (character === "]") brackets -= 1;
-    const topLevel = braces === 0 && parentheses === 0 && brackets === 0;
-    if (topLevel && (character === ";" || character === "}")) finish(index + 1);
-  }
-  finish(text.length);
-  const declaration = /^(?:export\s+)?(?:declare\s+)?(?:interface|type|class|enum|namespace|module|function|const)\b|^export\s*\{/;
-  const candidates = statements.filter(statement => declaration.test(statement));
-  const hasExplicitExports = candidates.some(statement => /^export\b/.test(statement));
-  return candidates.filter(statement => !hasExplicitExports || /^export\b/.test(statement)).toSorted();
-}
-
 async function textComparisonItem(
   key: string,
   oldReference: ReviewBlobReference | undefined,
   newReference: ReviewBlobReference | undefined,
   oldBlobs: ReadonlyMap<string, Uint8Array> | undefined,
   newBlobs: ReadonlyMap<string, Uint8Array>,
-  includeSurface: boolean,
+  oldSurfaceReference: ReviewBlobReference | undefined,
+  newSurfaceReference: ReviewBlobReference | undefined,
   patchBudget: {remaining: number},
 ): Promise<ReviewComparisonItem> {
   const oldText = oldReference && oldBlobs ? textBlob(oldBlobs, oldReference) : undefined;
@@ -160,8 +109,10 @@ async function textComparisonItem(
   const fullPatch = exactPatch(oldText, newText);
   const rendered = truncatePatch(fullPatch, patchBudget.remaining);
   if (rendered.patch) patchBudget.remaining -= encoder.encode(rendered.patch).byteLength;
-  const oldSurface = includeSurface && oldText !== undefined ? exportedSurface(oldText) : undefined;
-  const newSurface = includeSurface && newText !== undefined ? exportedSurface(newText) : undefined;
+  const oldSurface = oldSurfaceReference && oldBlobs
+    ? jsonBlob(oldBlobs, oldSurfaceReference) as readonly string[] : undefined;
+  const newSurface = newSurfaceReference
+    ? jsonBlob(newBlobs, newSurfaceReference) as readonly string[] : undefined;
   return {
     key,
     kind: "text",
@@ -170,9 +121,9 @@ async function textComparisonItem(
     ...(newReference ? {newHash: newReference.hash} : {}),
     ...(rendered.patch === undefined ? {} : {patch: rendered.patch}),
     ...(rendered.truncated ? {patchTruncated: true as const} : {}),
-    ...(includeSurface ? {exportedSurface: {
-      ...(oldSurface ? {oldHash: await hashReviewValue(oldSurface)} : {}),
-      ...(newSurface ? {newHash: await hashReviewValue(newSurface)} : {}),
+    ...(newSurfaceReference ? {exportedSurface: {
+      ...(oldSurfaceReference ? {oldHash: oldSurfaceReference.hash} : {}),
+      newHash: newSurfaceReference.hash,
       added: newSurface?.filter(item => !oldSurface?.includes(item)) ?? [],
       removed: oldSurface?.filter(item => !newSurface?.includes(item)) ?? [],
     }} : {}),
@@ -285,7 +236,7 @@ async function sectionItems(
     const paths = [...new Set([...oldModules.keys(), ...newModules.keys()])].toSorted();
     return Promise.all(paths.map(path => textComparisonItem(
       path, oldModules.get(path), newModules.get(path), baselineBlobs, candidateBlobs,
-      false, patchBudget,
+      undefined, undefined, patchBudget,
     )));
   }
   if (name === "publicInterface" || name === "sourceDeclaration") {
@@ -293,8 +244,13 @@ async function sectionItems(
       ? baselineBundle?.artifact.publicDeclaration : baselineBundle?.source.declaration;
     const newReference = name === "publicInterface"
       ? candidateBundle.artifact.publicDeclaration : candidateBundle.source.declaration;
+    const oldSurfaceReference = name === "publicInterface"
+      ? baselineBundle?.artifact.publicExportedSurface : baselineBundle?.source.exportedSurface;
+    const newSurfaceReference = name === "publicInterface"
+      ? candidateBundle.artifact.publicExportedSurface : candidateBundle.source.exportedSurface;
     return [await textComparisonItem(
-      name, oldReference, newReference, baselineBlobs, candidateBlobs, true, patchBudget,
+      name, oldReference, newReference, baselineBlobs, candidateBlobs,
+      oldSurfaceReference, newSurfaceReference, patchBudget,
     )];
   }
   if (name === "artifactAuthority") {
@@ -342,8 +298,12 @@ export async function createReviewComparison(
   candidateBundle: ContractReviewBundle,
   candidateBlobs: ReadonlyMap<string, Uint8Array>,
   candidateBundleHash: string,
-  generator: Readonly<{readonly name: string; readonly identity: string}>,
+  registeredGenerator?: Readonly<{readonly name: string; readonly identity: string}>,
 ): Promise<ReviewComparison> {
+  const generator = await registeredReviewComparisonGenerator();
+  if (registeredGenerator && canonicalReviewJson(registeredGenerator) !== canonicalReviewJson(generator)) {
+    throw new ReviewEvidenceError("CORRUPT_EVIDENCE", "Review Comparison generator is not registered.");
+  }
   if (baseline.kind === "bundle") {
     if (!baselineBundle || !baselineBlobs || await hashReviewValue(baselineBundle) !== baseline.bundleHash) {
       throw new ReviewEvidenceError("INVALID_INPUT", "Comparison baseline evidence is missing or mismatched.");
@@ -367,5 +327,10 @@ export async function createReviewComparison(
       ),
     });
   }
-  return {baseline, candidateBundleHash, generator, sections};
+  return {
+    baseline,
+    candidateBundleHash,
+    generator,
+    sections,
+  };
 }

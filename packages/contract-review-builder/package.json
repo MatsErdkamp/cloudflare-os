@@ -13,8 +13,9 @@
     }
   },
   "scripts": {
-    "build": "tsc",
-    "types:check": "tsc --noEmit",
+    "generate:comparison-identity": "node scripts/build-comparison-generator-identity.mjs",
+    "build": "pnpm run generate:comparison-identity && tsc",
+    "types:check": "pnpm run generate:comparison-identity && tsc --noEmit",
     "test": "pnpm run build && tsc --noEmit -p tsconfig.test.json && vitest run"
   },
   "dependencies": {

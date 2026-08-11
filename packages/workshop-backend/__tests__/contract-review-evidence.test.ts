@@ -3,6 +3,7 @@ import {describe, expect, it} from "vitest";
 import {
   REVIEW_LIMITS,
   canonicalReviewJson,
+  createReviewComparison,
   hashReviewValue,
   type BuiltContractReviewEvidence,
   type ContractReviewBundle,
@@ -118,7 +119,17 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
     "text/javascript",
   );
   const publicDeclaration = await blob(blobs, artifact.publicTypes, "text/typescript");
+  const publicExportedSurface = await blob(
+    blobs,
+    canonicalReviewJson([artifact.publicTypes]),
+    "application/json",
+  );
   const sourceDeclaration = await blob(blobs, SOURCE_TYPES, "text/typescript");
+  const sourceExportedSurface = await blob(
+    blobs,
+    canonicalReviewJson([SOURCE_TYPES]),
+    "application/json",
+  );
   const dependencyLock = await blob(blobs, "{\"entries\":[]}", "application/json");
   const directDependencyRequests = await blob(blobs, "[]", "application/json");
   const toolchain = await blob(blobs, canonicalReviewJson({components: [
@@ -151,6 +162,7 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
         blob: emittedModule,
       }],
       publicDeclaration,
+      publicExportedSurface,
     },
     originalModules: [{
       path: "contract.ts",
@@ -158,6 +170,7 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
     }],
     source: {
       declaration: sourceDeclaration,
+      exportedSurface: sourceExportedSurface,
       rootType: "SourceRoot",
       typeHash: artifact.sourceTypeHash,
     },
@@ -186,7 +199,9 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
       inputSetHash: HASH,
       artifactHash: artifact.hash,
       publicDeclarationHash: publicDeclaration.hash,
+      publicExportedSurfaceHash: publicExportedSurface.hash,
       sourceDeclarationHash: sourceDeclaration.hash,
+      sourceExportedSurfaceHash: sourceExportedSurface.hash,
       dependencyLockHash: dependencyLock.hash,
       directDependencyRequestsHash: directDependencyRequests.hash,
       toolchainHash: toolchain.hash,
@@ -202,7 +217,9 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
       inputSetHash: HASH,
       artifactHash: artifact.hash,
       publicDeclarationHash: publicDeclaration.hash,
+      publicExportedSurfaceHash: publicExportedSurface.hash,
       sourceDeclarationHash: sourceDeclaration.hash,
+      sourceExportedSurfaceHash: sourceExportedSurface.hash,
       dependencyLockHash: dependencyLock.hash,
       directDependencyRequestsHash: directDependencyRequests.hash,
       toolchainHash: toolchain.hash,
@@ -214,17 +231,14 @@ async function evidence(): Promise<BuiltContractReviewEvidence> {
   };
   const bundleJson = canonicalReviewJson(bundle);
   const bundleHash = await hashReviewValue(new TextEncoder().encode(bundleJson));
-  const sectionNames: ReviewComparison["sections"][number]["name"][] = [
-    "originalModules", "emittedExecutable", "artifactAuthority", "publicInterface",
-    "sourceDeclaration", "dependencies", "toolchainAndRecipe", "originAndAuthorship",
-    "reproducibility",
-  ];
-  const comparison: ReviewComparison = {
-    baseline: {kind: "none"},
-    candidateBundleHash: bundleHash,
-    generator: {name: "comparison", identity: HASH},
-    sections: sectionNames.map(name => ({name, change: "added", newHash: HASH, items: []})),
-  };
+  const comparison: ReviewComparison = await createReviewComparison(
+    {kind: "none"},
+    undefined,
+    undefined,
+    bundle,
+    blobs,
+    bundleHash,
+  );
   const comparisonJson = canonicalReviewJson(comparison);
   const comparisonHash = await hashReviewValue(new TextEncoder().encode(comparisonJson));
   return {
@@ -301,6 +315,20 @@ describe("R2ContractReviewEvidenceStore", () => {
       comparisonJson,
       comparisonHash,
     })).rejects.toThrow("different candidate");
+
+    const fabricated: ReviewComparison = {
+      ...value.comparison,
+      sections: value.comparison.sections.map((section, index) =>
+        index === 0 ? {...section, items: []} : section),
+    };
+    const fabricatedJson = canonicalReviewJson(fabricated);
+    const fabricatedHash = await hashReviewValue(new TextEncoder().encode(fabricatedJson));
+    await expect(new R2ContractReviewEvidenceStore(new MemoryBucket()).put({
+      ...value,
+      comparison: fabricated,
+      comparisonJson: fabricatedJson,
+      comparisonHash: fabricatedHash,
+    })).rejects.toThrow("does not match its cited evidence");
 
     const bucket = new MemoryBucket();
     bucket.values.set(

@@ -85,6 +85,7 @@ import {
 } from "@gadgets/contractors/cloudflare-os";
 import { R2ContractArtifactStore } from "./contract-artifacts";
 import { R2ContractReviewEvidenceStore } from "./contract-review-evidence";
+import {canonicalReviewJson, type ReviewBlobReference} from "@gadgets/contract-review-builder";
 import {
   createWorkspaceAuthorityModule,
   type LegacyGadgetBindingRecord,
@@ -93,6 +94,23 @@ import {
   type WorkspaceAuthority,
 } from "./authority/workspace-authority";
 import type {ArtifactApprovalId, ArtifactProposalId} from "./authority/records";
+import {
+  hashAuthorityCommand,
+  hashAuthorityRequest,
+  type AuthorityApi,
+  type AuthorityOwnerApi,
+  type AuthorityOwnerCommand,
+  type AuthorityOwnerCommandResult,
+  type AuthorityCommand,
+  type AuthorityCommandResult,
+  type AuthoritySessionSnapshot,
+  type BeginAuthorityOperation,
+  type AuthorityOperationView,
+  type OpenReviewEvidenceRequest,
+  type ReviewEvidenceBlobReference,
+  type ReviewEvidenceReader,
+} from "@gadgets/workshop-shared/authority-api";
+import type {AuthoritySessionBinding} from "./authority/workspace-authority";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
@@ -6782,6 +6800,7 @@ class OverseerImpl implements AgentHooks {
       type: "contractRequest",
       requestId,
       proposalId: proposal.id,
+      proposalRevision: 1,
       sourceGatekeeperId: input.sourceGatekeeperId,
       sourceTitle: source.resourceTitle || description.title,
       sourceUrl: source.resourceUrl || description.url,
@@ -7490,6 +7509,16 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   async getOutputsForOwnerBackfill(ownerId: string): Promise<WorkspaceOutputEntry[] | null> {
     if (this.impl.ownerId !== ownerId) return null;
     return this.impl.outputsSnapshot();
+  }
+
+  /** Opens a separately authorized, generation-bound Workspace Authority capability. */
+  async openAuthority(
+    userId: string,
+    notifyClosed: NativeRpcStub<() => void>,
+  ): Promise<AuthorityApi> {
+    const session = this.impl.workspaceAuthority.openSession(userId, userId === this.impl.ownerId);
+    if (!session) throw new Error("Authority unavailable.");
+    return new AuthorityApiImpl(this.impl, session, notifyClosed.dup());
   }
 
   // `notifyClosed` should be invoked when the return `Overseer` stub is disposed, which is used
@@ -8368,10 +8397,261 @@ function joinSessionPresence(
   };
 }
 
-const contractApprovalRuns = new WeakMap<
-  OverseerImpl,
-  Map<string, Promise<void>>
->();
+function findContractRequest(
+  impl: OverseerImpl,
+  requestId: string,
+): (AiChatMessage & {type: "contractRequest"}) | undefined {
+  const colonIndex = requestId.indexOf(":");
+  if (colonIndex < 0) return undefined;
+  const chatId = Number(requestId.slice(0, colonIndex));
+  if (!Number.isFinite(chatId)) return undefined;
+  for (const message of impl.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
+    if (message.type === "contractRequest" && message.requestId === requestId) return message;
+  }
+  return undefined;
+}
+
+type AuthorityRevocationCell = {active: boolean};
+
+@validateRpc()
+class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
+  constructor(
+    private readonly impl: OverseerImpl,
+    private readonly session: AuthoritySessionBinding,
+    private readonly notifyClosed: NativeRpcStub<() => void>,
+    private readonly revocation: AuthorityRevocationCell = {active: true},
+  ) {
+    super();
+  }
+
+  [Symbol.dispose](): void {
+    this.revocation.active = false;
+    this.notifyClosed();
+    this.notifyClosed[Symbol.dispose]();
+  }
+
+  #requireLiveSession(): AuthoritySessionBinding {
+    if (!this.revocation.active) throw new Error("Authority unavailable.");
+    const current = this.impl.workspaceAuthority.openSession(
+      this.session.principalId,
+      this.session.permissionKind === "owner",
+    );
+    if (!current || current.authorityEpoch !== this.session.authorityEpoch ||
+        current.permissionGeneration !== this.session.permissionGeneration ||
+        current.permissionKind !== this.session.permissionKind) {
+      throw new Error("Authority unavailable.");
+    }
+    return current;
+  }
+
+  async getSessionSnapshot(): Promise<AuthoritySessionSnapshot> {
+    const current = this.#requireLiveSession();
+    return {
+      authorityEpoch: current.authorityEpoch,
+      permissionGeneration: current.permissionGeneration,
+    };
+  }
+
+  async beginOperation(request: BeginAuthorityOperation): Promise<AuthorityOperationView> {
+    const operation = this.impl.workspaceAuthority.beginOperation(
+      this.#requireLiveSession(),
+      request.idempotencyKey,
+      request.requestDigest,
+    );
+    return {
+      id: operation.id,
+      requestDigest: operation.requestDigest,
+      state: operation.state,
+      ...(operation.lastCompletedStep ? {lastCompletedStep: operation.lastCompletedStep} : {}),
+      ...(operation.result ? {result: structuredClone(operation.result)} : {}),
+    };
+  }
+
+  async getOperation(operationId: string): Promise<AuthorityOperationView | null> {
+    const operation = this.impl.workspaceAuthority.getOperation(
+      this.#requireLiveSession(),
+      operationId,
+    );
+    return operation ? {
+      id: operation.id,
+      requestDigest: operation.requestDigest,
+      state: operation.state,
+      ...(operation.lastCompletedStep ? {lastCompletedStep: operation.lastCompletedStep} : {}),
+      ...(operation.result ? {result: structuredClone(operation.result)} : {}),
+    } : null;
+  }
+
+  async openOwnerControl(): Promise<RpcStub<AuthorityOwnerApi> | null> {
+    const current = this.#requireLiveSession();
+    if (current.permissionKind !== "owner") return null;
+    // @ts-expect-error Cap'n Web wraps returned RpcTargets as wire-compatible RpcStubs.
+    return new AuthorityOwnerApiImpl(
+      this.impl,
+      current,
+      this.revocation,
+      () => this.#requireLiveSession(),
+    );
+  }
+
+  async openReviewEvidence(request: OpenReviewEvidenceRequest): Promise<RpcStub<ReviewEvidenceReader>> {
+    const session = this.#requireLiveSession();
+    if (!this.impl.workspaceAuthority.hasReviewEvidence(
+      session,
+      request.bundleHash,
+      request.comparisonHash,
+    )) {
+      throw new Error("Review evidence is unavailable.");
+    }
+    const store = new R2ContractReviewEvidenceStore(this.impl.env.BLUEPRINT_CONTENT);
+    const [bundle, comparison] = await Promise.all([
+      store.getBundle(request.bundleHash),
+      store.getComparison(request.comparisonHash),
+    ]);
+    if (!bundle || !comparison || comparison.candidateBundleHash !== request.bundleHash) {
+      throw new Error("Review evidence is unavailable.");
+    }
+    // @ts-expect-error Cap'n Web wraps returned RpcTargets as wire-compatible RpcStubs.
+    return new ReviewEvidenceReaderImpl(
+      this.impl,
+      request,
+      new Set([
+        bundle.artifact.authority.hash,
+        bundle.artifact.publicDeclaration.hash,
+        bundle.artifact.publicExportedSurface.hash,
+        ...bundle.artifact.emittedModules.map(item => item.blob.hash),
+        ...bundle.originalModules.map(item => item.blob.hash),
+        bundle.source.declaration.hash,
+        bundle.source.exportedSurface.hash,
+        bundle.build.dependencyLock.hash,
+        bundle.build.directDependencyRequests.hash,
+        bundle.build.toolchain.hash,
+        bundle.build.recipe.hash,
+        bundle.build.trace.hash,
+        bundle.build.policySnapshot.hash,
+      ]),
+      this.revocation,
+      () => this.#requireLiveSession(),
+    );
+  }
+
+  async execute(command: AuthorityCommand): Promise<AuthorityCommandResult> {
+    const session = this.#requireLiveSession();
+    const {requestDigest: _requestDigest, ...payload} = command;
+    const requestDigest = await hashAuthorityCommand(payload);
+    const proposal = this.impl.workspaceAuthority.query({
+      type: "artifactProposal",
+      id: command.evidence.proposalId as ArtifactProposalId,
+    });
+    if (proposal.type !== "artifactProposal" || !proposal.value ||
+        proposal.value.revision !== command.expectedProposalRevision) {
+      throw new Error("Artifact Proposal is unavailable or stale.");
+    }
+    if (command.decision === "approved") {
+      const {artifact} = await this.impl.loadContractProposalEvidence({
+        artifactHash: command.evidence.artifactHash,
+        reviewBundleHash: command.evidence.reviewBundleHash,
+        reviewComparisonHash: command.evidence.reviewComparisonHash,
+        policyHash: command.evidence.policyHash,
+        generatorIdentityHash: command.evidence.generatorIdentityHash,
+        baseline: structuredClone(command.evidence.baseline),
+      });
+      if (artifact.runtimeProfileHash !== proposal.value.runtimeProfileHash) {
+        throw new Error("Reviewed Contract request does not match its immutable Artifact.");
+      }
+    }
+    const result = this.impl.workspaceAuthority.decideArtifactProposal(
+      session,
+      command,
+      requestDigest,
+    );
+    const fresh = findContractRequest(this.impl, command.requestId);
+    if (fresh?.proposalId === command.evidence.proposalId) {
+      fresh.state = command.decision === "approved" ? "approved" : "denied";
+      fresh.artifactApprovalId = result.id;
+      fresh.artifactApprovalEpoch = result.approvalEpoch;
+      delete fresh.accepting;
+      fresh.timestamp = this.impl.getChatTimestamp();
+      this.impl.storage.chats.put(fresh);
+    }
+    return {
+      type: "artifactProposalDecided",
+      artifactApprovalId: result.id,
+      artifactApprovalEpoch: result.approvalEpoch,
+      decision: command.decision,
+    };
+  }
+}
+
+@validateRpc()
+class AuthorityOwnerApiImpl extends RpcTarget implements AuthorityOwnerApi {
+  constructor(
+    private readonly impl: OverseerImpl,
+    private readonly ownerSession: AuthoritySessionBinding,
+    private readonly revocation: AuthorityRevocationCell,
+    private readonly guard: () => AuthoritySessionBinding,
+  ) {
+    super();
+  }
+
+  async execute(command: AuthorityOwnerCommand): Promise<AuthorityOwnerCommandResult> {
+    if (!this.revocation.active || this.guard().permissionKind !== "owner") {
+      throw new Error("Authority unavailable.");
+    }
+    const {requestDigest: _requestDigest, ...payload} = command;
+    const requestDigest = await hashAuthorityRequest(payload);
+    const result = this.impl.workspaceAuthority.setManagerGrant(
+      this.ownerSession,
+      command,
+      requestDigest,
+    );
+    return {type: "managerGrantChanged", generation: result.generation, state: result.state};
+  }
+}
+
+@validateRpc()
+class ReviewEvidenceReaderImpl extends RpcTarget implements ReviewEvidenceReader {
+  constructor(
+    private readonly impl: OverseerImpl,
+    private readonly request: OpenReviewEvidenceRequest,
+    private readonly allowedBlobHashes: ReadonlySet<string>,
+    private readonly revocation: AuthorityRevocationCell,
+    private readonly guard: () => AuthoritySessionBinding,
+  ) {
+    super();
+  }
+
+  #store(): R2ContractReviewEvidenceStore {
+    if (!this.revocation.active) throw new Error("Authority unavailable.");
+    this.guard();
+    return new R2ContractReviewEvidenceStore(this.impl.env.BLUEPRINT_CONTENT);
+  }
+
+  async getBundleJson(): Promise<string> {
+    const bundle = await this.#store().getBundle(this.request.bundleHash);
+    this.guard();
+    if (!bundle) throw new Error("Review Bundle is unavailable.");
+    return canonicalReviewJson(bundle);
+  }
+
+  async getComparisonJson(): Promise<string> {
+    const comparison = await this.#store().getComparison(this.request.comparisonHash);
+    this.guard();
+    if (!comparison || comparison.candidateBundleHash !== this.request.bundleHash) {
+      throw new Error("Review Comparison is unavailable.");
+    }
+    return canonicalReviewJson(comparison);
+  }
+
+  async getBlob(reference: ReviewEvidenceBlobReference): Promise<Uint8Array> {
+    if (!this.allowedBlobHashes.has(reference.hash)) {
+      throw new Error("Review evidence blob is not cited by this Bundle.");
+    }
+    const blob = await this.#store().getBlob(reference as ReviewBlobReference);
+    this.guard();
+    if (!blob) throw new Error("Review evidence blob is unavailable.");
+    return blob;
+  }
+}
 
 @validateRpc()
 class OverseerClientInterface extends RpcTarget implements Overseer {
@@ -8418,12 +8698,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
     const profilePromise = this.#clientProfilePromise!;
     return profilePromise;
-  }
-
-  #requireArtifactDecisionAuthority(): void {
-    if (!this.isOwner || this.impl.ownerId === undefined) {
-      throw new Error("Authority unavailable.");
-    }
   }
 
   async getMetadata(): Promise<GadgetMetadata> {
@@ -9102,17 +9376,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     throw new Error(`No such connection request: ${requestId}`);
   }
 
-  #findContractRequest(requestId: string): AiChatMessage & {type: "contractRequest"} {
-    let colonIdx = requestId.indexOf(":");
-    if (colonIdx < 0) throw new Error(`Malformed Contract request id: ${requestId}`);
-    let chatId = Number(requestId.slice(0, colonIdx));
-    if (!Number.isFinite(chatId)) throw new Error(`Malformed Contract request id: ${requestId}`);
-    for (let msg of this.impl.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
-      if (msg.type === "contractRequest" && msg.requestId === requestId) return msg;
-    }
-    throw new Error(`No such Contract request: ${requestId}`);
-  }
-
   // Restart a suspended agent turn after its outcome is recorded in chat history (accepted
   // connection, or all awaited actions approved). Denials intentionally don't call this.
   async #resumeSuspendedAgent(chatId: number): Promise<void> {
@@ -9186,188 +9449,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // request; leaving it ended lets the user say what they want done instead, rather than forcing
     // the agent to guess from a bare "denied" signal. The denial is recorded in history and the
     // agent sees it the next time the user sends a message (see the connectionRequest history case).
-  }
-
-  async acceptContractRequest(requestId: string): Promise<void> {
-    this.#requireArtifactDecisionAuthority();
-    let msg = this.#findContractRequest(requestId);
-    if (msg.state === "approved" || msg.state === "accepted") return;
-    if (msg.state !== "pending") {
-      throw new Error(`Contract request is not pending: ${requestId}`);
-    }
-    const reference: ContractProposalEvidenceReference = {
-      artifactHash: msg.artifactHash,
-      reviewBundleHash: msg.reviewBundleHash,
-      reviewComparisonHash: msg.reviewComparisonHash,
-      policyHash: msg.policyHash,
-      generatorIdentityHash: msg.generatorIdentityHash,
-      baseline: structuredClone(msg.baseline),
-    };
-    const {artifact} = await this.impl.loadContractProposalEvidence(reference);
-    if (artifact.runtimeProfileHash !== msg.runtimeProfileHash) {
-      throw new Error("Reviewed Contract request does not match its immutable Artifact.");
-    }
-    const proposal = this.impl.workspaceAuthority.query({
-      type: "artifactProposal",
-      id: msg.proposalId as ArtifactProposalId,
-    });
-    if (proposal.type !== "artifactProposal" || !proposal.value ||
-        proposal.value.artifactHash !== msg.artifactHash ||
-        proposal.value.reviewBundleHash !== msg.reviewBundleHash ||
-        proposal.value.reviewComparisonHash !== msg.reviewComparisonHash ||
-        proposal.value.policyHash !== msg.policyHash ||
-        proposal.value.generatorIdentityHash !== msg.generatorIdentityHash ||
-        JSON.stringify(proposal.value.baseline) !== JSON.stringify(msg.baseline)) {
-      throw new Error("Contract request does not match its canonical Artifact Proposal.");
-    }
-    if (!msg.accepting) {
-      msg.accepting = true;
-      this.impl.storage.chats.put(msg);
-    }
-    let runs = contractApprovalRuns.get(this.impl);
-    if (!runs) {
-      runs = new Map();
-      contractApprovalRuns.set(this.impl, runs);
-    }
-    let run = runs.get(requestId);
-    if (!run) {
-      run = (async () => {
-        let approval = this.impl.workspaceAuthority.query({
-          type: "artifactApprovalByProposal",
-          proposalId: msg.proposalId as ArtifactProposalId,
-        });
-        if (approval.type !== "artifactApprovalByProposal") {
-          throw new Error("Workspace Authority Artifact Approval query is unavailable.");
-        }
-        if (!approval.value) {
-          const profile = await this.#getClientProfile();
-          const decided = this.impl.workspaceAuthority.execute({
-            type: "recordArtifactApproval",
-            operationId: `contract-approval:${requestId}`,
-            record: {
-              artifactHash: msg.artifactHash,
-              proposalId: msg.proposalId as ArtifactProposalId,
-              reviewBundleHash: msg.reviewBundleHash,
-              reviewComparisonHash: msg.reviewComparisonHash,
-              policyHash: msg.policyHash,
-              baseline: authorityProposalBaseline(msg.baseline),
-              generatorIdentityHash: msg.generatorIdentityHash,
-              evidence: "complete",
-              decision: "approved",
-              decidedBy: `${profile.type}:${profile.id}`,
-              permissionGeneration: 1,
-              lifecycle: "active",
-            },
-          });
-          if (decided.type !== "artifactApprovalRecorded") {
-            throw new Error("Workspace Authority did not record the Artifact Approval.");
-          }
-          approval = this.impl.workspaceAuthority.query({
-            type: "artifactApprovalByProposal",
-            proposalId: msg.proposalId as ArtifactProposalId,
-          });
-          if (approval.type !== "artifactApprovalByProposal" || !approval.value) {
-            throw new Error("Recorded Artifact Approval is unavailable.");
-          }
-        }
-        if (approval.value.decision !== "approved" || approval.value.lifecycle !== "active") {
-          throw new Error("Artifact Proposal does not have an active approval.");
-        }
-        const approvalMessage = this.#findContractRequest(requestId);
-        approvalMessage.artifactApprovalId = approval.value.id;
-        approvalMessage.artifactApprovalEpoch = approval.value.approvalEpoch;
-        this.impl.storage.chats.put(approvalMessage);
-      })();
-      runs.set(requestId, run);
-    }
-    try {
-      await run;
-      let fresh = this.#findContractRequest(requestId);
-      if (fresh.state === "denied") {
-        throw new Error("Contract request was denied while acceptance was in progress.");
-      }
-      fresh.state = "approved";
-      delete fresh.accepting;
-      fresh.timestamp = this.impl.getChatTimestamp();
-      this.impl.storage.chats.put(fresh);
-    } catch (error) {
-      let fresh = this.#findContractRequest(requestId);
-      if (fresh.state === "pending") {
-        delete fresh.accepting;
-        this.impl.storage.chats.put(fresh);
-      }
-      throw error;
-    } finally {
-      if (runs.get(requestId) === run) runs.delete(requestId);
-    }
-  }
-
-  async denyContractRequest(requestId: string): Promise<void> {
-    this.#requireArtifactDecisionAuthority();
-    let msg = this.#findContractRequest(requestId);
-    if (msg.state !== "pending") {
-      throw new Error(`Contract request is not pending: ${requestId}`);
-    }
-    if (msg.accepting) {
-      throw new Error(`Contract request acceptance is already in progress: ${requestId}`);
-    }
-    const proposal = this.impl.workspaceAuthority.query({
-      type: "artifactProposal",
-      id: msg.proposalId as ArtifactProposalId,
-    });
-    if (proposal.type !== "artifactProposal" || !proposal.value ||
-        proposal.value.artifactHash !== msg.artifactHash ||
-        proposal.value.reviewBundleHash !== msg.reviewBundleHash ||
-        proposal.value.reviewComparisonHash !== msg.reviewComparisonHash ||
-        proposal.value.policyHash !== msg.policyHash ||
-        proposal.value.generatorIdentityHash !== msg.generatorIdentityHash ||
-        JSON.stringify(proposal.value.baseline) !== JSON.stringify(msg.baseline)) {
-      throw new Error("Contract request does not match its canonical Artifact Proposal.");
-    }
-    let approval = this.impl.workspaceAuthority.query({
-      type: "artifactApprovalByProposal",
-      proposalId: msg.proposalId as ArtifactProposalId,
-    });
-    if (approval.type !== "artifactApprovalByProposal") {
-      throw new Error("Workspace Authority Artifact Approval query is unavailable.");
-    }
-    if (!approval.value) {
-      const profile = await this.#getClientProfile();
-      const decided = this.impl.workspaceAuthority.execute({
-        type: "recordArtifactApproval",
-        operationId: `contract-rejection:${requestId}`,
-        record: {
-          artifactHash: msg.artifactHash,
-          proposalId: msg.proposalId as ArtifactProposalId,
-          reviewBundleHash: msg.reviewBundleHash,
-          reviewComparisonHash: msg.reviewComparisonHash,
-          policyHash: msg.policyHash,
-          baseline: authorityProposalBaseline(msg.baseline),
-          generatorIdentityHash: msg.generatorIdentityHash,
-          evidence: "complete",
-          decision: "rejected",
-          decidedBy: `${profile.type}:${profile.id}`,
-          permissionGeneration: 1,
-          lifecycle: "revoked",
-        },
-      });
-      if (decided.type !== "artifactApprovalRecorded") {
-        throw new Error("Workspace Authority did not record the Artifact rejection.");
-      }
-      approval = this.impl.workspaceAuthority.query({
-        type: "artifactApprovalByProposal",
-        proposalId: msg.proposalId as ArtifactProposalId,
-      });
-    }
-    if (approval.type !== "artifactApprovalByProposal" ||
-        !approval.value || approval.value.decision !== "rejected") {
-      throw new Error("Artifact Proposal already has a different decision.");
-    }
-    msg.state = "denied";
-    msg.artifactApprovalId = approval.value.id;
-    msg.artifactApprovalEpoch = approval.value.approvalEpoch;
-    msg.timestamp = this.impl.getChatTimestamp();
-    this.impl.storage.chats.put(msg);
   }
 
   async listContractOperations(): Promise<ContractOperationSummary[]> {
@@ -10415,8 +10496,6 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
   }
   async acceptConnectionRequest(_requestId: string, _result: {gatekeeperId: number}): Promise<void> { this.#deny(); }
   async denyConnectionRequest(_requestId: string): Promise<void>  { this.#deny(); }
-  async acceptContractRequest(_requestId: string): Promise<void> { this.#deny(); }
-  async denyContractRequest(_requestId: string): Promise<void> { this.#deny(); }
   async listContractOperations(): Promise<ContractOperationSummary[]> { this.#deny(); }
   async approveContractOperation(_operationId: string): Promise<void> { this.#deny(); }
   async rejectContractOperation(_operationId: string): Promise<void> { this.#deny(); }
