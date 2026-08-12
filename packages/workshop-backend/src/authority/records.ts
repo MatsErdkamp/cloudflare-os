@@ -72,8 +72,7 @@ export type UpstreamAuthorityReference = {
   readonly sourceGeneration: number;
   readonly origin:
     | {readonly type: "workspaceAccount"; readonly id: string; readonly generation: number}
-    | {readonly type: "personalSourceGrant"; readonly id: string; readonly generation: number}
-    | {readonly type: "legacyGatekeeper"; readonly workpieceId: WorkpieceId};
+    | {readonly type: "personalSourceGrant"; readonly id: string; readonly generation: number};
 };
 
 /** Upstream Authority permitted for new placements after canonical cutover. */
@@ -86,8 +85,7 @@ export type LiveUpstreamAuthorityReference = Omit<UpstreamAuthorityReference, "o
 /** Exact verification evidence used by a Resolution. */
 export type BindingVerificationReference =
   | {readonly type: "notRequired"}
-  | {readonly type: "receipt"; readonly receiptId: string; readonly verifierGeneration: number}
-  | {readonly type: "legacyUnknown"};
+  | {readonly type: "receipt"; readonly receiptId: string; readonly verifierGeneration: number};
 
 /** Whether an instance owns isolated state or joins one explicitly selected shared state root. */
 export type SharedStateChoice =
@@ -138,26 +136,15 @@ type ArtifactApprovalRecordBase = Readonly<{
 }>;
 
 /** An Artifact decision, distinct from installation or possession. */
-export type ArtifactApprovalRecord = ArtifactApprovalRecordBase & Readonly<
-  | {
-      evidence: "complete";
-      proposalId: ArtifactProposalId;
-      reviewBundleHash: string;
-      reviewComparisonHash: string;
-      policyHash: string;
-      baseline: ArtifactProposalRecord["baseline"];
-      generatorIdentityHash: string;
-    }
-  | {
-      evidence: "legacyUnknown";
-      proposalId?: never;
-      reviewBundleHash?: never;
-      reviewComparisonHash?: never;
-      policyHash?: never;
-      baseline?: never;
-      generatorIdentityHash?: never;
-    }
->;
+export type ArtifactApprovalRecord = ArtifactApprovalRecordBase & Readonly<{
+  evidence: "complete";
+  proposalId: ArtifactProposalId;
+  reviewBundleHash: string;
+  reviewComparisonHash: string;
+  policyHash: string;
+  baseline: ArtifactProposalRecord["baseline"];
+  generatorIdentityHash: string;
+}>;
 
 /** A standing placement decision; it never represents Artifact review or task dispatch. */
 export type InstallationDecisionRecord = Readonly<{
@@ -435,7 +422,6 @@ export type BindingResolutionRecord = Readonly<{
 /** One prepared executable instance. Its authority tuple never changes after creation. */
 export type ContractInstanceRecord = Readonly<{
   id: ContractInstanceId;
-  legacyWorkpieceId?: WorkpieceId;
   /** Host transport locator; it is never evidence of authority or Binding possession. */
   runtimeWorkpieceId?: WorkpieceId;
   /** Host locator for the selected Gatekeeper Source; never exposed to the Consumer. */

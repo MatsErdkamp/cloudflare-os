@@ -87,7 +87,6 @@ function prepareProposalFixture(impl: any): void {
     title: "Target Gadget",
     created: new Date(0),
     bindingName: "TARGET",
-    bindings: {},
   });
   impl.getGatekeeperFacet = () => ({
     describe: async () => ({title: "Private Source", url: "https://source.example/17", tsType: "Source"}),
@@ -622,7 +621,6 @@ describe("Contract proposal compilation boundary", () => {
         expect(impl.visibleBindings(impl.storage.gadgets.get(9))).toEqual([
           ["R2_STORAGE", expect.objectContaining({target: expect.any(Number)})],
         ]);
-        expect(impl.storage.gadgets.get(9).bindings).toEqual({});
         await expect(authority.getOperation(operation.id)).resolves.toMatchObject({
           state: "completed",
           result: {type: "standingBindingInstalled", bindingGeneration: 1},

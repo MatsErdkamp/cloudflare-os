@@ -2,18 +2,18 @@ import {describe, expect, it, vi} from "vitest";
 
 import {
   createWorkspaceAuthorityModule,
-  type LegacyGadgetAuthorityRecord,
   type WorkspaceAuthority,
 } from "../src/authority/workspace-authority.js";
 import type {
   AuthorityDebtId,
+  ConsumerId,
+  RequirementId,
+  SourceId,
   TaskDispatchDecisionId,
   TaskTemplateId,
 } from "../src/authority/records.js";
 import {makeMockStorage} from "./mock-storage.js";
 import {createConsumerEnvironmentAuthority} from "../src/authority/consumer-environments.js";
-
-type TestGadget = LegacyGadgetAuthorityRecord & {title: string};
 
 function publishAcknowledgedBinding(authority: WorkspaceAuthority, input: any) {
   const planned = authority.execute({type: "planBindingPublication", ...input});
@@ -141,101 +141,15 @@ function recordArtifactDecision(
   return authority.decideArtifactProposal(session, command, operationId);
 }
 
-function makeModule({
-  legacyPlacement = false,
-  legacyTombstone = false,
-  durableStorage = makeMockStorage(),
-}: {
-  legacyPlacement?: boolean;
-  legacyTombstone?: boolean;
-  durableStorage?: ReturnType<typeof makeMockStorage>;
-} = {}) {
-  const gadgets = new Map<number, TestGadget>([
-    [1, {
-      id: 1,
-      title: "Consumer",
-      bindings: legacyPlacement ? {FILES: {target: 10}} : {},
-    }],
-    [2, {id: 2, title: "Other", bindings: {}}],
-  ]);
-  const contracts = new Set([10]);
-  const legacyContracts = new Map(legacyPlacement ? [[10, {
-    id: 10,
-    artifactHash: `sha256:${"a".repeat(64)}`,
-    runtimeProfileHash: `sha256:${"b".repeat(64)}`,
-    sourceGatekeeperId: 20,
-    approvedBy: "legacy-reviewer",
-  }]] : []);
-  const legacyContractTombstones = new Map(legacyTombstone ? [[11, {
-    id: 11,
-    artifactHash: `sha256:${"c".repeat(64)}`,
-    runtimeProfileHash: `sha256:${"d".repeat(64)}`,
-    sourceGatekeeperId: 20,
-    approvedBy: "legacy-reviewer",
-  }]] : []);
-  const gatekeepers = new Set([20]);
-  const bumped: number[][] = [];
-  const adapter = {
-    getGadget(id) {
-      return gadgets.get(id);
-    },
-    listGadgets() {
-      return gadgets.values();
-    },
-    putGadget(gadget) {
-      gadgets.set(gadget.id, structuredClone(gadget));
-    },
-    hasContract(id) {
-      return contracts.has(id);
-    },
-    hasGatekeeper(id) {
-      return gatekeepers.has(id);
-    },
-    getContract(id) {
-      return legacyContracts.get(id);
-    },
-    listContracts() {
-      return legacyContracts.values();
-    },
-    getContractTombstone(id) {
-      return legacyContractTombstones.get(id);
-    },
-    listContractTombstones() {
-      return legacyContractTombstones.values();
-    },
-    retractContract(id) {
-      const affected: number[] = [];
-      for (const gadget of gadgets.values()) {
-        const entries = Object.entries(gadget.bindings);
-        const retained = entries.filter(([, binding]) => binding.target !== id);
-        if (retained.length === entries.length) continue;
-        gadget.bindings = Object.fromEntries(retained);
-        gadgets.set(gadget.id, structuredClone(gadget));
-        affected.push(gadget.id);
-      }
-      const contract = legacyContracts.get(id);
-      if (contract) legacyContractTombstones.set(id, contract);
-      legacyContracts.delete(id);
-      contracts.delete(id);
-      return affected;
-    },
-    bumpConsumers(ids) {
-      bumped.push([...ids]);
-    },
-  };
-  const module = createWorkspaceAuthorityModule(durableStorage, adapter);
-  return {module, gadgets, bumped, durableStorage, adapter};
+function makeModule(durableStorage = makeMockStorage()) {
+  const module = createWorkspaceAuthorityModule(durableStorage);
+  return {module, durableStorage};
 }
 
 describe("Workspace Authority module", () => {
   it("rejects incomplete or malformed evidence for a new Artifact Approval", () => {
     const {module} = makeModule();
     module.authority.execute({type: "initialize"});
-    module.authority.execute({type: "beginBackfill", migrationId: "evidence-migration"});
-    const candidate = module.authority.query({type: "cutoverCandidate"});
-    if (candidate.type !== "cutoverCandidate") throw new Error("candidate unavailable");
-    module.authority.execute({type: "markReadyToCutover", expectedDigest: candidate.value.digest});
-    module.authority.execute({type: "cutover", expectedDigest: candidate.value.digest});
     const proposal = module.authority.execute({
       type: "recordArtifactProposal",
       operationId: "record-proposal-1",
@@ -361,7 +275,6 @@ describe("Workspace Authority module", () => {
         revision: 0,
         eventHighWatermark: 0,
         pendingEffects: 0,
-        pendingMigrationDeltas: 0,
       },
     });
 
@@ -378,115 +291,116 @@ describe("Workspace Authority module", () => {
     expect(module.authority.query({type: "status"})).toEqual({
       type: "status",
       value: {
-        state: "legacy",
+        state: "active",
         revision: 1,
         eventHighWatermark: 1,
         pendingEffects: 0,
-        pendingMigrationDeltas: 0,
       },
     });
     expect(module.authority.reconcile()).toEqual({attemptedEffects: 0});
   });
 
-  it("keeps existing binding behavior behind the explicit compatibility interface", () => {
-    const {module, gadgets, bumped} = makeModule();
-    module.authority.execute({type: "initialize"});
+  it("discards a persisted pre-cutover state and starts fresh canonical authority", () => {
+    const durableStorage = makeMockStorage();
+    durableStorage.kv.put("workspaceAuthorityState", {
+      state: "readyToCutover",
+      revision: 7,
+      nextEventSequence: 12,
+      authorityEpoch: 3,
+      ownerGeneration: 4,
+      migrationId: "obsolete-migration",
+      cutoverDigest: `sha256:${"9".repeat(64)}`,
+    });
+    const {module} = makeModule(durableStorage);
 
-    expect(() => module.compatibility.bindContract({
-      consumerId: 1,
-      name: "RAW_SOURCE",
-      contractId: 20,
-    })).toThrow("not raw Sources");
-
-    module.compatibility.bindContract({consumerId: 1, name: "REVIEWED", contractId: 10});
-    expect(module.compatibility.queryVisibleBindings({consumerId: 1})).toEqual([
-      ["REVIEWED", {target: 10}],
-    ]);
-    expect(() => module.compatibility.bindContract({
-      consumerId: 2,
-      name: "REUSED",
-      contractId: 10,
-    })).toThrow("separate Contract instance");
-
-    module.compatibility.renameBinding({consumerId: 1, oldName: "REVIEWED", newName: "FILES"});
-    module.compatibility.unbind({consumerId: 1, name: "FILES"});
-    expect(gadgets.get(1)?.bindings).toEqual({});
-    expect(bumped).toEqual([[1], [1], [1]]);
+    expect(module.authority.execute({type: "initialize"})).toEqual({
+      type: "initialized",
+      changed: true,
+      revision: 8,
+    });
+    expect(module.authority.query({type: "status"})).toEqual({
+      type: "status",
+      value: {
+        state: "active",
+        revision: 8,
+        eventHighWatermark: 1,
+        pendingEffects: 0,
+      },
+    });
+    expect(module.authority.ensureHostIdentity("consumer", 1)).toEqual(expect.any(String));
   });
 
-  it("guards and durably bounds legacy Manager Source telemetry", () => {
-    const {module} = makeModule();
+  it("rejects authority imported by the retired cutover instead of erasing live recovery", () => {
+    const durableStorage = makeMockStorage();
+    const first = makeModule(durableStorage).module;
+    first.authority.execute({type: "initialize"});
+    const proposal = first.authority.execute({
+      type: "recordArtifactProposal",
+      operationId: "legacy-import-proposal",
+      record: {
+        artifactHash: `sha256:${"7".repeat(64)}`,
+        runtimeProfileHash: `sha256:${"6".repeat(64)}`,
+        reviewBundleHash: `sha256:${"2".repeat(64)}`,
+        reviewComparisonHash: `sha256:${"3".repeat(64)}`,
+        policyHash: `sha256:${"4".repeat(64)}`,
+        baseline: {type: "none"},
+        generatorIdentityHash: `sha256:${"5".repeat(64)}`,
+        proposedBy: "legacy-owner",
+        proposedAt: 1,
+      },
+    });
+    if (proposal.type !== "artifactProposalRecorded") throw new Error("proposal unavailable");
+    const approval = recordArtifactDecision(first.authority, "legacy-import", {
+      artifactHash: `sha256:${"7".repeat(64)}`,
+      proposalId: proposal.id,
+      reviewBundleHash: `sha256:${"2".repeat(64)}`,
+      reviewComparisonHash: `sha256:${"3".repeat(64)}`,
+      policyHash: `sha256:${"4".repeat(64)}`,
+      baseline: {type: "none"},
+      generatorIdentityHash: `sha256:${"5".repeat(64)}`,
+      evidence: "complete",
+      decision: "approved" as const,
+      decidedBy: "legacy-owner",
+      lifecycle: "active" as const,
+    });
+    if (approval.type !== "artifactApprovalRecorded") throw new Error("approval unavailable");
+    const rawKey = `artifactApprovals:${approval.id}`;
+    const imported = durableStorage.kv.get<any>(rawKey);
+    durableStorage.kv.put(rawKey, {...imported, evidence: "legacyUnknown"});
+    const {module} = makeModule(durableStorage);
 
-    for (let chatId = 1; chatId <= 20; chatId++) {
-      const access = module.compatibility.authorizeLegacyManagerSource({
-        surface: "managerAgentAuthoring",
-        chatId,
-        gatekeeperId: 20,
-      });
-      expect(access.gatekeeperId).toBe(20);
-      expect(module.compatibility.consumeLegacyManagerSourceAccess(access)).toEqual({
-        chatId,
-        gatekeeperId: 20,
-      });
-      expect(() => module.compatibility.consumeLegacyManagerSourceAccess(access))
-        .toThrow("forged, reused, or issued before restart");
-    }
-
-    const telemetry = module.compatibility.queryLegacyManagerSourceTelemetry();
-    expect(telemetry.totalUses).toBe(20);
-    expect(telemetry.recentUses).toHaveLength(16);
-    expect(telemetry.recentUses[0]).toMatchObject({chatId: 5, gatekeeperId: 20});
-    expect(telemetry.recentUses[15]).toMatchObject({chatId: 20, gatekeeperId: 20});
+    expect(() => module.authority.execute({type: "initialize"}))
+      .toThrow("Legacy-imported Workspace Authority is unsupported");
+    expect(module.authority.query({
+      type: "artifactApproval",
+      id: approval.id,
+    })).toMatchObject({type: "artifactApproval", value: {id: approval.id}});
   });
 
   it("keeps Approval, Decision, Resolution, Instance, and Binding separate through CAS publication", () => {
     const {module} = makeModule();
     module.authority.execute({type: "initialize"});
-    const mappedConsumer = module.authority.execute({
-      type: "mapLegacyConsumer",
-      legacyWorkpieceId: 1,
-    });
-    const retriedConsumer = module.authority.execute({
-      type: "mapLegacyConsumer",
-      legacyWorkpieceId: 1,
-    });
-    const mappedSource = module.authority.execute({
-      type: "mapLegacySource",
-      legacyWorkpieceId: 20,
-    });
-    const mappedRequirement = module.authority.execute({
-      type: "mapLegacyRequirement",
-      legacyKey: "1:FILES",
-    });
-    if (mappedConsumer.type !== "legacyConsumerMapped" ||
-        retriedConsumer.type !== "legacyConsumerMapped" ||
-        mappedSource.type !== "legacySourceMapped" ||
-        mappedRequirement.type !== "legacyRequirementMapped") {
-      throw new Error("unexpected identity mapping result");
-    }
-    expect(retriedConsumer.id).toBe(mappedConsumer.id);
-    const consumer = {type: "standing" as const, consumerId: mappedConsumer.id, generation: 1};
+    const consumerId = module.authority.ensureHostIdentity("consumer", 1) as ConsumerId;
+    const retriedConsumerId = module.authority.ensureHostIdentity("consumer", 1) as ConsumerId;
+    const sourceId = module.authority.ensureHostIdentity("source", 20) as SourceId;
+    const requirementId = module.authority.ensureHostIdentity(
+      "requirement",
+      "1:FILES",
+    ) as RequirementId;
+    expect(retriedConsumerId).toBe(consumerId);
+    const consumer = {type: "standing" as const, consumerId, generation: 1};
     const requirement = {
       type: "environment" as const,
       bindingSetId: "binding-set-files",
       bindingSetVersion: 1,
-      requirementId: mappedRequirement.id,
+      requirementId,
       requirementVersion: 1,
     };
     const upstreamAuthority = {
-      sourceId: mappedSource.id,
+      sourceId,
       sourceGeneration: 1,
       origin: {type: "workspaceAccount" as const, id: "account-1", generation: 1},
     };
-
-    module.authority.execute({type: "beginBackfill", migrationId: "empty-migration"});
-    const candidate = module.authority.query({type: "cutoverCandidate"});
-    if (candidate.type !== "cutoverCandidate") throw new Error("candidate unavailable");
-    module.authority.execute({
-      type: "markReadyToCutover",
-      expectedDigest: candidate.value.digest,
-    });
-    module.authority.execute({type: "cutover", expectedDigest: candidate.value.digest});
 
     const standingProposal = module.authority.execute({
       type: "recordArtifactProposal",
@@ -807,7 +721,7 @@ describe("Workspace Authority module", () => {
         type: "binding",
         value: {status: "active", generation: 2, predecessorId: published.bindingId},
       });
-    expect(module.compatibility.queryBindingLineage({consumerId: 1})).toEqual([
+    expect(module.authority.listHostBindings(1, true)).toEqual([
       ["FILES", {target: 11}],
       ["FILES", {target: 10}],
     ]);
@@ -847,7 +761,7 @@ describe("Workspace Authority module", () => {
     expect(suspended).toMatchObject({type: "bindingSuspended", generation: 3});
     expect(module.authority.query({type: "contractInstance", id: replacementInstance.id}))
       .toMatchObject({type: "contractInstance", value: {lifecycle: "suspended", generation: 2}});
-    expect(module.compatibility.queryBindingLineage({consumerId: 1})).toEqual([
+    expect(module.authority.listHostBindings(1, true)).toEqual([
       ["FILES", {target: 11}],
       ["FILES", {target: 10}],
     ]);
@@ -898,30 +812,16 @@ describe("Workspace Authority module", () => {
   it("requires one approved durable Task Dispatch Decision for task placement", () => {
     const {module, durableStorage} = makeModule();
     module.authority.execute({type: "initialize"});
-    const mappedConsumer = module.authority.execute({
-      type: "mapLegacyConsumer",
-      legacyWorkpieceId: 1,
-    });
-    const mappedSource = module.authority.execute({type: "mapLegacySource", legacyWorkpieceId: 20});
-    const mappedRequirement = module.authority.execute({
-      type: "mapLegacyRequirement",
-      legacyKey: "task:FILES",
-    });
-    const mappedRequirementTwo = module.authority.execute({
-      type: "mapLegacyRequirement",
-      legacyKey: "task:CACHE",
-    });
-    if (mappedConsumer.type !== "legacyConsumerMapped" ||
-        mappedSource.type !== "legacySourceMapped" ||
-        mappedRequirement.type !== "legacyRequirementMapped" ||
-        mappedRequirementTwo.type !== "legacyRequirementMapped") {
-      throw new Error("task authority identities not mapped");
-    }
-    module.authority.execute({type: "beginBackfill", migrationId: "task-migration"});
-    const candidate = module.authority.query({type: "cutoverCandidate"});
-    if (candidate.type !== "cutoverCandidate") throw new Error("candidate unavailable");
-    module.authority.execute({type: "markReadyToCutover", expectedDigest: candidate.value.digest});
-    module.authority.execute({type: "cutover", expectedDigest: candidate.value.digest});
+    const mappedConsumer = module.authority.ensureHostIdentity("consumer", 1) as ConsumerId;
+    const mappedSource = module.authority.ensureHostIdentity("source", 20) as SourceId;
+    const mappedRequirement = module.authority.ensureHostIdentity(
+      "requirement",
+      "task:FILES",
+    ) as RequirementId;
+    const mappedRequirementTwo = module.authority.ensureHostIdentity(
+      "requirement",
+      "task:CACHE",
+    ) as RequirementId;
 
     const taskProposal = module.authority.execute({
       type: "recordArtifactProposal",
@@ -962,7 +862,7 @@ describe("Workspace Authority module", () => {
     const taskTemplateId = "task-template-files" as TaskTemplateId;
     const consumer = {
       type: "agentTask" as const,
-      consumerId: mappedConsumer.id,
+      consumerId: mappedConsumer,
       taskId: "task-1",
       taskGeneration: 1,
     };
@@ -970,18 +870,18 @@ describe("Workspace Authority module", () => {
       type: "taskTemplate" as const,
       taskTemplateId,
       taskTemplateVersion: 1,
-      requirementId: mappedRequirement.id,
+      requirementId: mappedRequirement,
     };
     const requirementTwo = {
       ...requirement,
-      requirementId: mappedRequirementTwo.id,
+      requirementId: mappedRequirementTwo,
     };
     const instanceRecord = {
       artifactApprovalId: approval.id,
       artifactHash: `sha256:${"6".repeat(64)}`,
       runtimeProfileHash: `sha256:${"7".repeat(64)}`,
       upstreamAuthority: {
-        sourceId: mappedSource.id,
+        sourceId: mappedSource,
         sourceGeneration: 1,
         origin: {type: "workspaceAccount" as const, id: "account-1", generation: 1},
       },
@@ -1129,14 +1029,14 @@ describe("Workspace Authority module", () => {
 
     const standingConsumer = {
       type: "standing" as const,
-      consumerId: mappedConsumer.id,
+      consumerId: mappedConsumer,
       generation: 1,
     };
     const standingRequirement = {
       type: "environment" as const,
       bindingSetId: "agent-service-bindings",
       bindingSetVersion: 1,
-      requirementId: mappedRequirement.id,
+      requirementId: mappedRequirement,
       requirementVersion: 1,
     };
     const installation = module.authority.execute({
@@ -1313,7 +1213,7 @@ describe("Workspace Authority module", () => {
         taskTemplateId,
         version: 1,
         requirements: [{
-          requirementId: mappedRequirement.id,
+          requirementId: mappedRequirement,
           name: "R2_STORAGE",
           required: true,
           artifactApprovalId: approval.id,
@@ -1756,166 +1656,4 @@ describe("Workspace Authority module", () => {
     })).toMatchObject({value: {state: "invalidated"}});
   });
 
-  it("replays a ready-state unbind before cutover instead of preserving removed authority", () => {
-    const {module} = makeModule({legacyPlacement: true});
-    module.authority.execute({type: "initialize"});
-    module.authority.execute({type: "beginBackfill", migrationId: "unbind-migration"});
-    module.authority.execute({type: "backfillLegacyContract", legacyContractId: 10});
-    const candidate = module.authority.query({type: "cutoverCandidate"});
-    if (candidate.type !== "cutoverCandidate") throw new Error("candidate unavailable");
-    module.authority.execute({type: "markReadyToCutover", expectedDigest: candidate.value.digest});
-    module.compatibility.unbind({consumerId: 1, name: "FILES"});
-    expect(module.authority.query({type: "status"})).toMatchObject({
-      type: "status",
-      value: {state: "backfilling", pendingMigrationDeltas: 1},
-    });
-    module.authority.execute({type: "backfillLegacyContract", legacyContractId: 10});
-    const replayed = module.authority.query({type: "cutoverCandidate"});
-    if (replayed.type !== "cutoverCandidate") throw new Error("candidate unavailable");
-    expect(replayed.value.bindingCount).toBe(0);
-    module.authority.execute({type: "markReadyToCutover", expectedDigest: replayed.value.digest});
-    module.authority.execute({type: "cutover", expectedDigest: replayed.value.digest});
-    expect(module.compatibility.queryVisibleBindings({consumerId: 1})).toEqual([]);
-  });
-
-  it("retracts the canonical Binding and Instance before a post-cutover legacy delete", () => {
-    const {module} = makeModule({legacyPlacement: true});
-    module.authority.execute({type: "initialize"});
-    module.authority.execute({type: "beginBackfill", migrationId: "delete-migration"});
-    const staged = module.authority.execute({
-      type: "backfillLegacyContract",
-      legacyContractId: 10,
-    });
-    if (staged.type !== "legacyContractBackfilled") throw new Error("Contract not staged");
-    const candidate = module.authority.query({type: "cutoverCandidate"});
-    if (candidate.type !== "cutoverCandidate") throw new Error("candidate unavailable");
-    module.authority.execute({type: "markReadyToCutover", expectedDigest: candidate.value.digest});
-    module.authority.execute({type: "cutover", expectedDigest: candidate.value.digest});
-
-    module.compatibility.retractContract(10);
-
-    expect(module.authority.query({type: "contractInstance", id: staged.instanceId}))
-      .toMatchObject({type: "contractInstance", value: {lifecycle: "retracted", generation: 2}});
-    expect(module.authority.query({
-      type: "authorityTombstoneBySubject",
-      subjectType: "contractInstance",
-      subjectId: staged.instanceId,
-    })).toMatchObject({
-      type: "authorityTombstoneBySubject",
-      value: {terminalReason: "legacy-contract-deleted", cleanup: "pending"},
-    });
-    expect(module.compatibility.queryVisibleBindings({consumerId: 1})).toEqual([]);
-    expect(module.compatibility.queryBindingLineage({consumerId: 1})).toEqual([
-      ["FILES", {target: 10}],
-    ]);
-  });
-
-  it("shadow-backfills byte-stable identities and atomically cuts legacy bindings over to projections", () => {
-    const {module, gadgets} = makeModule({legacyPlacement: true, legacyTombstone: true});
-    module.authority.execute({type: "initialize"});
-    module.authority.execute({type: "beginBackfill", migrationId: "migration-1"});
-    const staged = module.authority.execute({type: "backfillLegacyContract", legacyContractId: 10});
-    const retry = module.authority.execute({type: "backfillLegacyContract", legacyContractId: 10});
-    const stagedTombstone = module.authority.execute({
-      type: "backfillLegacyContract",
-      legacyContractId: 11,
-    });
-    if (staged.type !== "legacyContractBackfilled" ||
-        retry.type !== "legacyContractBackfilled") {
-      throw new Error("legacy Contract not staged");
-    }
-    expect(retry).toEqual({...staged, changed: false});
-    expect(module.authority.query({type: "contractInstance", id: staged.instanceId}))
-      .toEqual({type: "contractInstance", value: undefined});
-
-    const consumer = module.authority.execute({
-      type: "mapLegacyConsumer",
-      legacyWorkpieceId: 1,
-    });
-    if (consumer.type !== "legacyConsumerMapped") throw new Error("consumer not mapped");
-    const candidate = module.authority.query({type: "cutoverCandidate"});
-    if (candidate.type !== "cutoverCandidate") throw new Error("candidate unavailable");
-    expect(candidate.value).toMatchObject({contractCount: 2, bindingCount: 1});
-    module.authority.execute({
-      type: "markReadyToCutover",
-      expectedDigest: candidate.value.digest,
-    });
-    module.compatibility.renameBinding({
-      consumerId: 1,
-      oldName: "FILES",
-      newName: "DOCUMENTS",
-    });
-    expect(module.authority.query({type: "status"})).toMatchObject({
-      type: "status",
-      value: {state: "backfilling", pendingMigrationDeltas: 1},
-    });
-    expect(() => module.authority.execute({
-      type: "cutover",
-      expectedDigest: candidate.value.digest,
-    })).toThrow("Cannot cut over");
-    const replay = module.authority.execute({
-      type: "backfillLegacyContract",
-      legacyContractId: 10,
-    });
-    expect(replay).toMatchObject({type: "legacyContractBackfilled", changed: true});
-    const replayedCandidate = module.authority.query({type: "cutoverCandidate"});
-    if (replayedCandidate.type !== "cutoverCandidate") {
-      throw new Error("replayed candidate unavailable");
-    }
-    module.authority.execute({
-      type: "markReadyToCutover",
-      expectedDigest: replayedCandidate.value.digest,
-    });
-    module.authority.execute({
-      type: "cutover",
-      expectedDigest: replayedCandidate.value.digest,
-    });
-    expect(module.authority.query({type: "status"})).toMatchObject({
-      type: "status",
-      value: {
-        state: "active",
-        eventHighWatermark: 2,
-        pendingMigrationDeltas: 0,
-        cutoverDigest: replayedCandidate.value.digest,
-      },
-    });
-
-    expect(module.authority.query({type: "contractInstance", id: staged.instanceId}))
-      .toMatchObject({
-        type: "contractInstance",
-        value: {legacyWorkpieceId: 10, lifecycle: "ready"},
-      });
-    if (stagedTombstone.type !== "legacyContractBackfilled") {
-      throw new Error("legacy tombstone not staged");
-    }
-    expect(module.authority.query({
-      type: "authorityTombstoneBySubject",
-      subjectType: "contractInstance",
-      subjectId: stagedTombstone.instanceId,
-    })).toMatchObject({
-      type: "authorityTombstoneBySubject",
-      value: {terminalReason: "legacy-contract-retracted", cleanup: "complete"},
-    });
-    expect(module.authority.query({
-      type: "bindingByConsumerName",
-      consumerId: consumer.id,
-      name: "DOCUMENTS",
-    })).toMatchObject({
-      type: "bindingByConsumerName",
-      value: {status: "active", generation: 1, contractInstanceId: staged.instanceId},
-    });
-    expect(module.compatibility.queryVisibleBindings({consumerId: 1})).toEqual([
-      ["DOCUMENTS", {target: 10}],
-    ]);
-
-    gadgets.get(1)!.bindings.DOCUMENTS.target = 20;
-    expect(module.compatibility.queryVisibleBindings({consumerId: 1})).toEqual([
-      ["DOCUMENTS", {target: 10}],
-    ]);
-    expect(() => module.compatibility.bindContract({
-      consumerId: 1,
-      name: "RAW",
-      contractId: 20,
-    })).toThrow("disabled after canonical cutover");
-  });
 });

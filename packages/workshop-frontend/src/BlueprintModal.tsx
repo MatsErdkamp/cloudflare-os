@@ -1,13 +1,8 @@
 import {useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { ArrowsClockwise, Check, Copy, ImageSquare, Pencil, Plus, Trash, Warning, X } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
-import { BlueprintGadgetSummary, GadgetClient, GadgetMetadata, Overseer, BlueprintBindingAnnotation, BlueprintScreenshotUpload } from '@gadgets/workshop-shared/api'
+import { BlueprintGadgetSummary, GadgetClient, GadgetMetadata, Overseer, BlueprintScreenshotUpload } from '@gadgets/workshop-shared/api'
 import { copyToClipboard } from './clipboard'
-import {
-  BindingCardData,
-  BlueprintBindingCard,
-  loadBindingCardData,
-} from './components/BlueprintBindingCard'
 import { Dialog, useToast, DialogContent, DialogTitle, DialogDescription, DialogClose, Button, Input, Textarea} from '@matser/ui'
 const BLUEPRINT_SCREENSHOT_WIDTH = 1280
 const BLUEPRINT_SCREENSHOT_HEIGHT = 720
@@ -87,10 +82,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  const [bindings, setBindings] = useState<BindingCardData[]>([])
-  const [bindingsLoading, setBindingsLoading] = useState(false)
-  const [bindingsError, setBindingsError] = useState<string | null>(null)
-
   const loadBlueprints = useCallback(async () => {
     setLoading(true)
     try {
@@ -102,23 +93,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
       setLoading(false)
     }
   }, [overseer])
-
-  const loadBindings = useCallback(async () => {
-    setBindingsLoading(true)
-    setBindingsError(null)
-    try {
-      // No chat scope: a blueprint exports only the gadget's permanent bindings, never a chat's
-      // still-provisional additions.
-      const list = await gadget.listBindings()
-      const loaded = await Promise.all(list.map((b) => loadBindingCardData(gadget, b)))
-      setBindings(loaded.filter((b): b is BindingCardData => b !== null))
-    } catch (err) {
-      console.error('Failed to load bindings:', err)
-      setBindingsError('Could not load connections.')
-    } finally {
-      setBindingsLoading(false)
-    }
-  }, [gadget])
 
   useEffect(() => {
     if (open) {
@@ -132,16 +106,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
       setCreateError(null)
     }
   }, [open, loadBlueprints, metadata.title])
-
-  useEffect(() => {
-    if (formMode !== 'list') {
-      loadBindings()
-    } else {
-      setBindings([])
-      setBindingsError(null)
-      setCreateError(null)
-    }
-  }, [formMode, loadBindings])
 
   useEffect(() => {
     return () => {
@@ -176,20 +140,11 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
     }
   }
 
-  const updateBindingAnnotation = (bindingName: string, annotation: BlueprintBindingAnnotation) => {
-    setBindings((prev) =>
-      prev.map((b) => (b.bindingName === bindingName ? { ...b, annotation } : b)),
-    )
-  }
 
   const createBlueprint = async () => {
-    if (bindingsLoading) return
     setCreating(true)
     setCreateError(null)
     try {
-      await Promise.all(
-        bindings.map((b) => gadget.setBlueprintAnnotation(b.bindingName, b.annotation)),
-      )
 
       const screenshot: BlueprintScreenshotUpload | undefined = newScreenshotBlob
         ? {
@@ -219,13 +174,10 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
   }
 
   const saveBlueprintEdits = async () => {
-    if (!editingBlueprint || bindingsLoading) return
+    if (!editingBlueprint) return
     setCreating(true)
     setCreateError(null)
     try {
-      await Promise.all(
-        bindings.map((b) => gadget.setBlueprintAnnotation(b.bindingName, b.annotation)),
-      )
 
       const screenshot: BlueprintScreenshotUpload | null | undefined = clearScreenshot
         ? null
@@ -389,34 +341,6 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                       )}
                     </div>
                   </div>
-
-                  {bindingsLoading ? (
-                    <div className="rounded-xl border border-border bg-background px-4 py-6 text-center text-[13px] text-muted-foreground">
-                      Loading connections...
-                    </div>
-                  ) : bindingsError ? (
-                    <div className="rounded-xl border border-border bg-background px-4 py-3 text-[13px] text-muted-foreground">
-                      {bindingsError}
-                    </div>
-                  ) : bindings.length > 0 ? (
-                    <section>
-                      <h3 className="m-0 mb-1 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-foreground">
-                        Connections
-                      </h3>
-                      <p className="m-0 mb-3 text-[12px] leading-4 font-normal tracking-[-0.2px] text-muted-foreground">
-                        Name each connection and add guidance for people using this blueprint.
-                      </p>
-                      <div className="space-y-2">
-                        {bindings.map((b) => (
-                          <BlueprintBindingCard
-                            key={b.bindingName}
-                            data={b}
-                            onChange={(annotation) => updateBindingAnnotation(b.bindingName, annotation)}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  ) : null}
                 </div>
 
                 <div className="border-t border-border px-4 py-4 sm:px-6">
@@ -441,12 +365,11 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
 
                       className="inline-flex cursor-pointer items-center justify-center rounded-lg text-[13px] leading-[18px] font-medium tracking-[-0.25px] transition-[background-color,color,opacity,transform] duration-150 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:active:scale-100 !h-9 bg-foreground px-3 text-primary-foreground enabled:hover:bg-foreground disabled:opacity-50 min-w-[64px]"
                       onClick={formMode === 'create' ? createBlueprint : saveBlueprintEdits}
-                      disabled={creating || bindingsLoading || processingScreenshot}
+                      disabled={creating || processingScreenshot}
                      variant="primary">
                       {creating
                         ? formMode === 'create' ? 'Creating...' : 'Saving...'
                         : processingScreenshot ? 'Processing...'
-                          : bindingsLoading ? 'Loading...'
                             : formMode === 'create' ? 'Create' : 'Save'}
                     </Button>
                   </div>

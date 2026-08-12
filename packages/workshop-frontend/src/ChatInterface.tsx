@@ -590,17 +590,6 @@ function createCapsuleRemarkPlugin(mentionsByToken: Map<string, Mention>) {
   };
 }
 
-// Names the binding edge a gadget-binding tool call touched, as `GADGET.BINDING` when the record
-// says which gadget owns it. (Records written before named chat bindings carry only the binding
-// name, and a still-streaming call may not have either yet.)
-function formatGadgetBindingTarget(
-  gadget: string | undefined,
-  name: string | undefined,
-): string | undefined {
-  if (!name) return gadget;
-  return gadget ? `${gadget}.${name}` : name;
-}
-
 // Convert raw tool calls into user-facing transcript labels.
 // What a `createGadget` call produced. Read from the gadget's own stamped output rather than
 // re-derived from the blueprint, so any blueprint declaring a format counts, not just promoted
@@ -636,14 +625,6 @@ function getToolCallSummary(
           ? `${tc.input.bindingName} → ${tc.input.entrypoint}`
           : tc.input.bindingName,
       };
-    case "setGadgetBinding":
-      return {
-        verb: "Wired up",
-        target: formatGadgetBindingTarget(tc.input.gadget, tc.input.name ?? tc.input.source),
-      };
-    // Obsolete predecessor of `setGadgetBinding`; appears only in old chat logs.
-    case "saveCapsuleAsBinding":
-      return { verb: "Saved resource", target: tc.input.bindingName };
     case "createGadget": {
 
       const output = outputOf?.(tc);
@@ -749,10 +730,6 @@ function describeToolCallCount(toolName: AiToolCall["toolName"], count: number):
       return `Inspected ${pluralize(count, "binding")}`;
     case "setBindingHook":
       return `Connected ${pluralize(count, "binding")}`;
-    case "setGadgetBinding":
-      return `Wired up ${pluralize(count, "binding")}`;
-    case "saveCapsuleAsBinding":
-      return `Saved ${pluralize(count, "resource")}`;
     case "createGadget":
       return `Created ${pluralize(count, "gadget")}`;
     case "observeUserChanges":
@@ -791,8 +768,6 @@ function getToolIcon(
     case "describeBinding":
       return MagnifyingGlass;
     case "setBindingHook":
-    case "setGadgetBinding":
-    case "saveCapsuleAsBinding":
       return LinkSimple;
     case "createGadget":
       return Plus;
@@ -821,10 +796,6 @@ function getProvisionalToolLabel(toolName: AiToolCall["toolName"] | null | undef
       return "Inspecting binding";
     case "setBindingHook":
       return "Connecting binding";
-    case "setGadgetBinding":
-      return "Wiring up binding";
-    case "saveCapsuleAsBinding":
-      return "Saving resource";
     case "createGadget":
       return "Creating gadget";
     case "executeCode":
@@ -854,8 +825,6 @@ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
     case "editFile": return "Editing";
     case "describeBinding": return "Inspecting";
     case "setBindingHook": return "Connecting";
-    case "setGadgetBinding": return "Wiring up";
-    case "saveCapsuleAsBinding": return "Saving";
     case "createGadget": return "Creating gadget";
     case "executeCode": return "Running code";
     case "webFetch": return "Fetching";
@@ -881,8 +850,6 @@ function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: n
     case "executeCode": return count === 1 ? "Running code" : `Running code ${formatTimes(count)}`;
     case "describeBinding": return `Inspecting ${pluralize(count, "binding")}`;
     case "setBindingHook": return `Connecting ${pluralize(count, "binding")}`;
-    case "setGadgetBinding": return `Wiring up ${pluralize(count, "binding")}`;
-    case "saveCapsuleAsBinding": return `Saving ${pluralize(count, "resource")}`;
     case "createGadget": return `Creating ${pluralize(count, "gadget")}`;
     case "observeUserChanges": return `Observing ${pluralize(count, "change set")}`;
     case "giveUp": return "Stopping";

@@ -1706,7 +1706,6 @@ export default function GadgetEditor() {
                   key={selectedGadgetId}
                   overseer={overseer.stub}
                   gadget={selectedGadgetStub}
-                  chatId={effectiveSelectedChatId ?? undefined}
                   authenticatedApi={authenticatedApi}
                   onConnectionsChange={() => setUiReloadTrigger(t => t + 1)}
                   isVisible={activeTab === 'connections'}

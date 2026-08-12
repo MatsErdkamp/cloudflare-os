@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, ContractOperationSummary } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, ContractOperationSummary } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import type {
   AttachWorkload,
@@ -112,9 +112,7 @@ import { R2ContractReviewEvidenceStore } from "./contract-review-evidence";
 import {canonicalReviewJson, type ReviewBlobReference} from "@gadgets/contract-review-builder";
 import {
   createWorkspaceAuthorityModule,
-  type LegacyGadgetBindingRecord,
-  type LegacyManagerSourceAccess,
-  type LegacyWorkspaceAuthorityCompatibility,
+  type HostBindingTarget,
   type StandingInstallationEffect,
   type WorkspaceAuthority,
 } from "./authority/workspace-authority";
@@ -289,14 +287,6 @@ type GatekeeperClass = DurableObjectClass<Gatekeeper<any>>;
 // shape to call it — same optional-method-on-a-stub pattern as user.ts's SingletonAccountStub.
 type CatalogGatekeeperFacet =
     Fetcher<Gatekeeper<any> & Required<Pick<Gatekeeper<any>, "getAgentCatalog">>>;
-type LegacyBlueprintBindingAnnotation = BlueprintBindingAnnotation & {
-  included?: boolean;
-};
-
-function defaultBlueprintBindingTitle(record: GatekeeperRecord, bindingName?: string): string {
-  return record.resourceTitle || bindingName || "Connection";
-}
-
 // Storage key of a chat's compaction checkpoint. See the `chatCompactions` collection.
 function compactionKey(chatId: number, compactedTo: number): string {
   return `${keyString(chatId)}.${keyString(compactedTo)}`;
@@ -315,13 +305,9 @@ type GatekeeperRecord = {
   // Records how this gatekeeper was originally created, enabling blueprint metadata derivation.
   creationSpec?: GatekeeperCreationSpec;
 
-  // OBSOLETE: Before we had support for multiple gadgets per workspace, the binding name and
-  // blueprint annotation information lived on the GatekeeperRecord. These properties continue
-  // to be declared only to support migrating them away. The version 0 -> 1 migration copies
-  // these into `GadgetRecord.bindings` for the default gadget. (A later migration may delete the
-  // originals, or they may just be left around, but if so they are stale.)
+  // Optional chat-facing name for ambient and connected Sources. It is not persistent Gadget
+  // authority and is never projected into a canonical Consumer environment.
   bindingName?: string;
-  blueprintAnnotation?: BlueprintBindingAnnotation;
 };
 
 // Legacy combined Contract row retained as migration input and runtime locator until retirement.
@@ -334,9 +320,10 @@ type CanonicalBindingExecution = Readonly<{
   instance: CanonicalContractInstanceRecord;
 }>;
 
-type ContractExecutionMode =
-  | Readonly<{mode: "canonical"; execution: CanonicalBindingExecution}>
-  | Readonly<{mode: "legacy"}>;
+type ContractExecutionMode = Readonly<{
+  mode: "canonical";
+  execution: CanonicalBindingExecution;
+}>;
 
 type CanonicalSourceActivityRecord = Readonly<{
   id: string;
@@ -512,8 +499,7 @@ function gatekeeperVendorId(record: GatekeeperRecord | undefined): string | unde
   return spec && "vendorId" in spec ? spec.vendorId.toLowerCase() : undefined;
 }
 
-// Compatibility projection retained until canonical Binding cutover.
-type BindingRecord = LegacyGadgetBindingRecord;
+type BindingRecord = HostBindingTarget;
 
 // A gadget workpiece. IDs are allocated from the shared workpiece counter (see the
 // `nextGatekeeperId` singleton), so they never collide with gatekeeper IDs -- in particular the
@@ -536,10 +522,6 @@ type GadgetRecord = {
   // name in the unique index, preventing awkward conflicts if two chats were to try to create the
   // same-named gadget provisionally at the same time.
   bindingName: string;
-
-  // This gadget's bindings: binding name (as it appears in the gadget worker's `env`) -> binding
-  // edge. Expected to stay small, so it's a map on the record rather than a separate collection.
-  bindings: Record<string, BindingRecord>;
 
   // Present while the gadget is provisional: it was created within the given chat and follows
   // that chat's accept/reject lifecycle exactly like code changes (see mergeChanges() /
@@ -1317,7 +1299,6 @@ class OverseerImpl implements AgentHooks {
   public storage: OverseerStorage;
   readonly logger: ReturnType<typeof createWorkshopLogger>;
   readonly workspaceAuthority: WorkspaceAuthority;
-  readonly legacyWorkspaceAuthority: LegacyWorkspaceAuthorityCompatibility;
   readonly consumerEnvironments: ConsumerEnvironmentAuthority;
 
   // Identifies this DO instance. Sent to chat subscribers so they can detect a full server
@@ -1636,39 +1617,8 @@ class OverseerImpl implements AgentHooks {
     // agent-turn restoration below, hook deliveries, and [restore]()-based persistent callbacks.
     // The migration is fully synchronous, so nothing can observe pre-migration state.
     this.#migrateStorage();
-    const authorityModule = createWorkspaceAuthorityModule(ctx.storage, {
-      getGadget: id => this.storage.gadgets.get(id),
-      listGadgets: () => this.storage.gadgets.list(),
-      putGadget: gadget => this.storage.gadgets.put(gadget),
-      hasContract: id => this.storage.contracts.get(id) !== undefined,
-      hasGatekeeper: id => this.storage.gatekeepers.get(id) !== undefined,
-      getContract: id => this.storage.contracts.get(id),
-      listContracts: () => this.storage.contracts.list(),
-      getContractTombstone: id => this.storage.contractTombstones.get(id),
-      listContractTombstones: () => this.storage.contractTombstones.list(),
-      retractContract: id => {
-        const contract = this.storage.contracts.get(id);
-        if (!contract) return [];
-        const consumers: WorkpieceId[] = [];
-        for (const gadget of Array.from(this.storage.gadgets.list())) {
-          let changed = false;
-          for (const [name, edge] of Object.entries(gadget.bindings)) {
-            if (edge.target !== id) continue;
-            delete gadget.bindings[name];
-            changed = true;
-          }
-          if (!changed) continue;
-          this.storage.gadgets.put(gadget);
-          consumers.push(gadget.id);
-        }
-        this.storage.contracts.delete(id);
-        this.storage.contractTombstones.put({...contract, deletedAt: new Date()});
-        return consumers;
-      },
-      bumpConsumers: ids => this.bumpVersion([...ids]),
-    });
+    const authorityModule = createWorkspaceAuthorityModule(ctx.storage);
     this.workspaceAuthority = authorityModule.authority;
-    this.legacyWorkspaceAuthority = authorityModule.compatibility;
     this.workspaceAuthority.execute({type: "initialize"});
     this.consumerEnvironments = createConsumerEnvironmentAuthority(ctx.storage, consumerId => {
       const canonical = this.workspaceAuthority.query({
@@ -1786,80 +1736,19 @@ class OverseerImpl implements AgentHooks {
     // Run the whole migration in one transaction so that a mid-migration error can't leave the
     // workspace half-migrated.
     this.ctx.storage.transactionSync(() => {
-      // Version 0 -> 1: the workspace predates multi-gadget support. If it has any gadget content
-      // (code beyond the initial empty snapshot, or named bindings), register that content as the
-      // workspace's single gadget and record it as the default gadget; binding names and blueprint
-      // annotations move from the gatekeeper records onto the gadget's binding edges. (The stale
-      // originals are left on the gatekeeper records; see GatekeeperRecord.) A workspace with no
-      // gadget content migrates to zero gadgets.
+      // Version 0 -> 1 only registers existing code as the default Gadget. Named legacy
+      // Gatekeepers and spawner allowlists are intentionally ignored: they are obsolete authority,
+      // not inputs to the current canonical model.
       let hasCode = [...this.storage.code.list({limit: 1, start: 2})].length > 0;
-      let allGatekeepers = [...this.storage.gatekeepers.list()];
-      let namedGatekeepers = allGatekeepers.filter(gk => gk.bindingName !== undefined);
-
-      // The legacy flat env's named entries: each named gatekeeper, plus `GADGET -> the legacy
-      // gadget` when one is created below. Used to resolve spawner allowlists further down.
-      // (The workspace default binding list itself needs no migration step: it is derived on
-      // demand from the gadget record created below, whose bindingName and binding edges yield
-      // exactly this map -- so chats in old workspaces keep seeing `env.GADGET` and the same
-      // named bindings they always did.)
-      let legacyEnv: Record<string, WorkpieceId> = {};
-      for (let gk of namedGatekeepers) {
-        legacyEnv[gk.bindingName!] = gk.id;
-      }
-
-      if (hasCode || namedGatekeepers.length > 0) {
+      if (hasCode) {
         let id = this.allocateWorkpieceId();
-        // Set defaultGadgetId before putting the record so that gadgetRootName() (used by
-        // workpiece subscribers) resolves the legacy names.
         this.storage.defaultGadgetId.put(id);
-        let bindings: Record<string, BindingRecord> = {};
-        for (let gk of namedGatekeepers) {
-          bindings[gk.bindingName!] = {
-            target: gk.id,
-            ...(gk.blueprintAnnotation ? {blueprintAnnotation: gk.blueprintAnnotation} : {}),
-          };
-        }
         this.storage.gadgets.put({
           id,
           title: this.storage.title.get(),
           created: new Date(),
           bindingName: "GADGET",
-          bindings,
         });
-        legacyEnv["GADGET"] = id;
-      }
-
-      // Rewrite each agent-spawner gatekeeper's config from the old `env?: string[]` binding-name
-      // allowlist to the new `env: Record<name, WorkpieceId>` form (see AgentSpawnerConfig). The
-      // config lives in two places and both must be updated: the record's `creationSpec`, and the
-      // props baked into the record's `class` stub. Props can't be edited in place, so the stub
-      // is recreated the same way newAgentSpawnerGatekeeper() creates it -- except that
-      // `creatorUserId` isn't recoverable from the record, so it is omitted, relying on the
-      // documented legacy fallback to the workspace owner.
-      for (let gk of allGatekeepers) {
-        if (gk.creationSpec?.type !== "agentSpawner") continue;
-        // The stored (pre-migration) shape is derived from the real type, differing only in
-        // `env`; the conflicting `env` types force the cast through `unknown`.
-        let {env: legacyAllowlist, ...restConfig} = gk.creationSpec.config as
-            unknown as Omit<AgentSpawnerConfig, "env"> & {env?: string[]};
-        let env: Record<string, WorkpieceId>;
-        if (legacyAllowlist !== undefined) {
-          // Resolve each allowlisted name against the gatekeepers' binding names, dropping any
-          // that no longer resolve.
-          env = {};
-          for (let name of legacyAllowlist) {
-            if (Object.hasOwn(legacyEnv, name)) env[name] = legacyEnv[name];
-          }
-        } else {
-          // An absent allowlist historically meant "unrestricted": the spawned agent saw every
-          // named binding plus GADGET -- exactly the legacy env map built above.
-          env = {...legacyEnv};
-        }
-        let config: AgentSpawnerConfig = {...restConfig, env};
-        gk.creationSpec = {...gk.creationSpec, config};
-        let props: AgentSpawnerBindingProps = {overseerId: this.ctx.id.toString(), config};
-        gk.class = this.ctx.exports.AgentSpawnerGatekeeper({props});
-        this.storage.gatekeepers.put(gk);
       }
 
       this.storage.version.put(1);
@@ -1905,8 +1794,8 @@ class OverseerImpl implements AgentHooks {
     return record;
   }
 
-  // The only ordinary-runtime cutover decision: active workspaces must resolve a current
-  // canonical Binding; pre-cutover workspaces may still use their legacy Contract session.
+  // The only ordinary-runtime cutover decision: current workspaces must resolve a canonical
+  // Binding. Legacy runtime rows never authorize invocation or retraction.
   resolveContractExecution(
       runtimeWorkpieceId: WorkpieceId,
       purpose: "invoke" | "retract" = "invoke"): ContractExecutionMode {
@@ -1940,11 +1829,7 @@ class OverseerImpl implements AgentHooks {
       }
       if (canonical.value) return {mode: "canonical", execution: canonical.value};
     }
-    const status = this.workspaceAuthority.query({type: "status"});
-    if (status.type !== "status" || status.value.state === "active") {
-      throw new Error("Canonical Contract Binding is stale, invalidating, or unavailable.");
-    }
-    return {mode: "legacy"};
+    throw new Error("Canonical Contract Binding is stale, invalidating, or unavailable.");
   }
 
   // Name of the Y.Doc root map holding the given gadget's files. The default gadget keeps the
@@ -2022,7 +1907,6 @@ class OverseerImpl implements AgentHooks {
       title,
       created: new Date(),
       bindingName,
-      bindings: {},
     };
     if (output) {
       record.output = output;
@@ -2039,22 +1923,8 @@ class OverseerImpl implements AgentHooks {
     return [...this.storage.gadgets.list()].filter(g => g.pending?.chatId === chatId);
   }
 
-  // Reap crash-orphaned provisional gadgets and binding edges for the given chat. A pending
-  // record/edge with no stamped sequence means it hasn't yet been recorded by a flushed
-  // "changes" message; whether it ever will be is decided by the chat log, the source of truth:
-  //   - If a persisted createGadget (resp. setGadgetBinding) tool call references it, it is
-  //     a crashed turn's tail, exactly like an edit whose "changes" message never flushed: the
-  //     resumed turn re-adopts it during history replay (see replayedCreations /
-  //     replayedBindingAdditions in agent.ts) and stamps it with its next flush. Spare it.
-  //   - Otherwise nothing backs it (the worker died before the step persisted), so it must go;
-  //     the resumed turn then simply re-creates it (for a gadget, wasting only an ID, which is
-  //     fine -- workpiece IDs are never reused anyway).
-  // For edges, "references it" must be counted, not merely tested: (gadgetId, name) can recur
-  // when an earlier addition was removed or reverted and the name added again, so an old,
-  // already-recorded tool call must not vouch for a new unstamped edge that replay will never
-  // re-adopt. An unstamped edge is a re-adoptable tail iff persisted tool calls for its key
-  // outnumber agent-flushed `addedBindings` recordings -- exactly the condition under which the
-  // resumed turn's replay re-adopts (and thereby flushes and stamps) it.
+  // Reap crash-orphaned provisional gadgets. Pending legacy binding edges are never recovered:
+  // the hard canonical cutover makes chat binding history inert rather than authority.
   // Called at agent turn start (before history replay) and turn end, plus defensively from
   // merge/revert (which assert the chat has no active turn). The log scan runs only when an
   // unstamped record actually exists, so the common case costs one registry listing.
@@ -2063,35 +1933,15 @@ class OverseerImpl implements AgentHooks {
   async reconcilePendingGadgets(chatId: number): Promise<void> {
     let unstamped = this.listPendingGadgets(chatId)
         .filter(gadget => gadget.pending!.sequence === undefined);
-    let unstampedEdges: {gadget: GadgetRecord, name: string}[] = [];
-    for (let gadget of this.storage.gadgets.list()) {
-      for (let [name, edge] of Object.entries(gadget.bindings)) {
-        if (edge.pending?.chatId === chatId && edge.pending.sequence === undefined) {
-          unstampedEdges.push({gadget, name});
-        }
-      }
-    }
-    if (unstamped.length === 0 && unstampedEdges.length === 0) return;
+    if (unstamped.length === 0) return;
 
     let referenced = new Set<WorkpieceId>();
-    // Per (gadgetId, name): persisted setGadgetBinding tool calls minus agent-flushed
-    // `addedBindings` recordings (user-authored "changes" messages record UI-initiated binds,
-    // which have no tool call and are stamped synchronously, so they don't participate).
-    let additionBalance = new Map<string, number>();
-    let bump = (key: string, delta: number) =>
-        additionBalance.set(key, (additionBalance.get(key) ?? 0) + delta);
     for (let msg of this.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
       if (msg.type === "message") {
         for (let call of msg.toolCalls ?? []) {
           if (call.toolName === "createGadget" && call.output) {
             referenced.add(call.output.gadgetId);
-          } else if (call.toolName === "setGadgetBinding" && call.output) {
-            bump(`${call.output.gadgetId}:${call.output.name}`, 1);
           }
-        }
-      } else if (msg.type === "changes" && msg.author.type !== "user") {
-        for (let {gadgetId, name} of msg.addedBindings ?? []) {
-          bump(`${gadgetId}:${name}`, -1);
         }
       }
     }
@@ -2107,15 +1957,6 @@ class OverseerImpl implements AgentHooks {
       }
     }
 
-    for (let {gadget, name} of unstampedEdges) {
-      if ((additionBalance.get(`${gadget.id}:${name}`) ?? 0) > 0) continue;
-      // Re-read: the gadget may have been reaped just above (taking its edges with it).
-      let fresh = this.storage.gadgets.get(gadget.id);
-      if (!fresh || !fresh.bindings[name]) continue;
-      delete fresh.bindings[name];
-      this.storage.gadgets.put(fresh);
-      this.bumpVersion([fresh.id]);
-    }
   }
 
   // Auto-create the workspace's single gadget and record it as the default gadget. New workspaces
@@ -2135,7 +1976,6 @@ class OverseerImpl implements AgentHooks {
       created: new Date(),
       // This only runs in a fresh workspace with no gadgets, so the name can't conflict.
       bindingName: "GADGET",
-      bindings: {},
     });
   }
 
@@ -2160,47 +2000,14 @@ class OverseerImpl implements AgentHooks {
   // *other* chat belongs to that chat's proposed changes and is treated as nonexistent here.
   // With `forChatId` undefined, only permanent (non-pending) edges are visible (mainline loads,
   // blueprints, sharing, the Connections UI).
-  visibleBindings(gadget: GadgetRecord, forChatId?: number): [string, BindingRecord][] {
-    return this.legacyWorkspaceAuthority.queryVisibleBindings({
-      consumerId: gadget.id,
-      forChatId,
-    });
+  visibleBindings(gadget: GadgetRecord, _forChatId?: number): [string, BindingRecord][] {
+    return this.workspaceAuthority.listHostBindings(gadget.id) as [string, BindingRecord][];
   }
 
   // Lifecycle cleanup includes invalidating and terminal canonical Binding lineage that ordinary
   // executable visibility deliberately hides.
   bindingLineage(gadget: GadgetRecord): [string, BindingRecord][] {
-    return this.legacyWorkspaceAuthority.queryBindingLineage({consumerId: gadget.id});
-  }
-
-  // Bind a Contract instance into gadget `gadgetId`'s env under `name`. If `chatId` is
-  // given, the edge is provisional to that chat (see BindingRecord.pending); the caller is
-  // responsible for getting the addition recorded in the chat log so the pending edge gets
-  // sequence-stamped (see addChatMessages()).
-  bindWorkpiece(gadgetId: WorkpieceId, name: string, target: WorkpieceId,
-                chatId?: number): void {
-    this.legacyWorkspaceAuthority.bindContract({
-      consumerId: gadgetId,
-      name,
-      contractId: target,
-      chatId,
-    });
-  }
-
-  // Remove the named binding edge from the gadget. The target gatekeeper itself survives,
-  // possibly no longer bound by any gadget. `forChatId` scopes visibility: an edge pending in
-  // some other chat is treated as nonexistent (it isn't this caller's to remove).
-  unbindWorkpiece(gadgetId: WorkpieceId, name: string, forChatId?: number): void {
-    this.legacyWorkspaceAuthority.unbind({consumerId: gadgetId, name, forChatId});
-  }
-
-  // Rename a binding edge atomically, preserving edge metadata and restarting the gadget once.
-  renameBinding(gadgetId: WorkpieceId, oldName: string, newName: string): void {
-    this.legacyWorkspaceAuthority.renameBinding({
-      consumerId: gadgetId,
-      oldName,
-      newName,
-    });
+    return this.workspaceAuthority.listHostBindings(gadget.id, true) as [string, HostBindingTarget][];
   }
 
   // Permanently delete a gadget: its hooks, its files, its registry entry (which carries its
@@ -2496,19 +2303,6 @@ class OverseerImpl implements AgentHooks {
     return this.ctx.exports.BindingLoopback({props});
   }
 
-  makeManagerSourceLoopback(access: LegacyManagerSourceAccess, caller: GatekeeperCaller) {
-    if (caller.from !== "agent" || caller.chatId !== access.chatId) {
-      throw new Error("Legacy Manager Source access is bound to its authoring chat.");
-    }
-    const consumed = this.legacyWorkspaceAuthority.consumeLegacyManagerSourceAccess(access);
-    let props: ManagerSourceLoopbackProps = {
-      overseerId: this.ctx.id.toString(),
-      gatekeeperId: consumed.gatekeeperId,
-      caller,
-    };
-    return this.ctx.exports.ManagerSourceLoopback({props});
-  }
-
   makeContractCapabilityLoopback(
       contractId: WorkpieceId, restoration: ContractRestorationReference,
       caller: GatekeeperCaller) {
@@ -2529,7 +2323,7 @@ class OverseerImpl implements AgentHooks {
     let gadget = this.getGadgetRecord(gadgetId);
     const authorityStatus = this.workspaceAuthority.query({type: "status"});
     if (authorityStatus.type === "status" && authorityStatus.value.state === "active") {
-      const consumerId = this.workspaceAuthority.resolveLegacyIdentity("consumer", gadgetId);
+      const consumerId = this.workspaceAuthority.resolveHostIdentity("consumer", gadgetId);
       if (consumerId) {
         const readiness = this.workspaceAuthority.query({
           type: "consumerReadiness",
@@ -2577,12 +2371,9 @@ class OverseerImpl implements AgentHooks {
           } else if (this.storage.contracts.get(entry.id)) {
             env[name] = this.makeBindingLoopback({type: "contract", id: entry.id}, caller);
           } else if (this.storage.gatekeepers.get(entry.id)) {
-            const access = this.legacyWorkspaceAuthority.authorizeLegacyManagerSource({
-              surface: "managerAgentAuthoring",
-              chatId,
-              gatekeeperId: entry.id,
-            });
-            env[name] = this.makeManagerSourceLoopback(access, caller);
+            throw new Error(
+              `Raw Source binding ${name} is unsupported; install a reviewed Contract instead.`,
+            );
           }
           break;
         }
@@ -3657,10 +3448,8 @@ class OverseerImpl implements AgentHooks {
       }
     }
 
-    // Canonical retraction, legacy edge removal, Contract deletion, and the terminal legacy row
-    // commit in one storage transaction. A crash before it leaves the durable endpoint invalidated;
-    // a crash after it leaves a complete replayable terminal state.
-    this.legacyWorkspaceAuthority.retractContract(contractId);
+    this.storage.contracts.delete(contractId);
+    this.storage.contractTombstones.put({...contract, deletedAt: new Date()});
     this.ctx.facets.delete(`contract${contractId}`);
   }
 
@@ -3753,27 +3542,12 @@ class OverseerImpl implements AgentHooks {
     return new GatekeeperClientImpl<any>(this, id, facet);
   }
 
-  // Destroy a gatekeeper (connection) workpiece. Any binding edges pointing at it are severed so
-  // no gadget's env retains a dangling entry. (This is distinct from merely unbinding it from one
-  // gadget -- GadgetClient.unbind() -- which leaves the gatekeeper alive, possibly orphaned.)
+  // Destroy a workspace Source after retracting every dependent canonical Contract.
   async removeGatekeeper(id: number): Promise<void> {
     // Removing the private Source retracts every Contract instance whose authority depended on it.
     for (let contract of Array.from(this.storage.contracts.list())) {
       if (contract.sourceGatekeeperId === id) await this.deleteContract(contract.id);
     }
-    for (let gadget of Array.from(this.storage.gadgets.list())) {
-      let names = Object.entries(gadget.bindings)
-          .filter(([, edge]) => edge.target === id)
-          .map(([name]) => name);
-      if (names.length > 0) {
-        for (let name of names) {
-          delete gadget.bindings[name];
-        }
-        this.storage.gadgets.put(gadget);
-        this.bumpVersion([gadget.id]);
-      }
-    }
-
     this.ctx.facets.delete(`gatekeeper${id}`);
     this.storage.gatekeepers.delete(id);
   }
@@ -3793,46 +3567,17 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
-  // Privileged Manager-only raw Source access for Contract authoring and testing.
-  startManagerSourceSession(gatekeeperId: WorkpieceId, caller: GatekeeperCaller): Promise<any> {
-    let client = new GatekeeperClientImpl<any>(
-        this, gatekeeperId, this.getGatekeeperFacet(gatekeeperId), caller);
-    return client.openSession();
-  }
-
   async startContractSession(
       contractId: WorkpieceId, caller: GatekeeperCaller,
       methodName?: string): Promise<unknown> {
     let contract = this.requireContract(contractId);
     const executionMode = this.resolveContractExecution(contractId);
-    if (executionMode.mode === "canonical") {
-      return this.startCanonicalContractSession(
-        contract,
-        executionMode.execution,
-        caller,
-        methodName,
-      );
-    }
-    let call: ContractCallContext = {
-      callId: crypto.randomUUID(),
-      contractId,
-      artifactHash: contract.artifactHash,
-      sourceGatekeeperId: contract.sourceGatekeeperId,
+    return this.startCanonicalContractSession(
+      contract,
+      executionMode.execution,
       caller,
-      startedAt: new Date(),
-      ...(methodName ? {methodName} : {}),
-    };
-    let source = bridgeContractSource(
-        await this.openContractSourceSession(call, {type: "preapproved"}));
-    try {
-      let reachability = await this.getContractReachability(contract);
-      let facet = this.getContractFacet(contract);
-      await facet.install(reachability);
-      return await facet.startSession(
-          await this.makeContractLifecycleSession(contract, call, source, reachability));
-    } finally {
-      source[Symbol.dispose]?.();
-    }
+      methodName,
+    );
   }
 
   async startCanonicalContractSession(
@@ -4097,52 +3842,22 @@ class OverseerImpl implements AgentHooks {
       methodName: string, args: unknown[]): Promise<unknown> {
     let contract = this.requireContract(contractId);
     const executionMode = this.resolveContractExecution(contractId);
-    if (executionMode.mode === "canonical") {
-      let capability: unknown;
-      try {
-        capability = await this.withCanonicalContractSession(
-          contract,
-          executionMode.execution,
-          caller,
-          methodName,
-          (facet, session) => facet.restoreSession(session, restoration),
-        );
-        const method = Reflect.get(capability as object, methodName);
-        if (typeof method !== "function") {
-          throw new TypeError(`Restored Contract capability has no callable method ${methodName}.`);
-        }
-        return await Reflect.apply(method, capability, args);
-      } finally {
-        (capability as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
-      }
-    }
-    let call: ContractCallContext = {
-      callId: crypto.randomUUID(),
-      contractId,
-      artifactHash: contract.artifactHash,
-      sourceGatekeeperId: contract.sourceGatekeeperId,
-      caller,
-      startedAt: new Date(),
-      methodName,
-    };
-    let source = bridgeContractSource(
-        await this.openContractSourceSession(call, {type: "preapproved"}));
     let capability: unknown;
     try {
-      let reachability = await this.getContractReachability(contract);
-      let facet = this.getContractFacet(contract);
-      await facet.install(reachability);
-      capability = await facet.restoreSession(
-          await this.makeContractLifecycleSession(contract, call, source, reachability),
-          restoration);
-      let method = Reflect.get(capability as object, methodName);
+      capability = await this.withCanonicalContractSession(
+        contract,
+        executionMode.execution,
+        caller,
+        methodName,
+        (facet, session) => facet.restoreSession(session, restoration),
+      );
+      const method = Reflect.get(capability as object, methodName);
       if (typeof method !== "function") {
         throw new TypeError(`Restored Contract capability has no callable method ${methodName}.`);
       }
       return await Reflect.apply(method, capability, args);
     } finally {
       (capability as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
-      source[Symbol.dispose]?.();
     }
   }
 
@@ -5146,8 +4861,8 @@ class OverseerImpl implements AgentHooks {
         seed).proposed;
   }
 
-  // Whether the chat still owns a provisional gadget or binding edge recorded before `compactedTo`.
-  // Those carry no Y.Doc update, so this is how a creation-only compacted prefix stays visible as a
+  // Whether the chat still owns a provisional gadget recorded before `compactedTo`.
+  // It carries no Y.Doc update, so this is how a creation-only compacted prefix stays visible as a
   // proposed change.
   #hasPendingStructure(chatId: number, compactedTo: number): boolean {
     for (let gadget of this.storage.gadgets.list()) {
@@ -5155,9 +4870,6 @@ class OverseerImpl implements AgentHooks {
           pending?.chatId === chatId && pending.sequence !== undefined &&
           pending.sequence < compactedTo;
       if (stamped(gadget.pending)) return true;
-      for (let edge of Object.values(gadget.bindings)) {
-        if (stamped(edge.pending)) return true;
-      }
     }
     return false;
   }
@@ -5622,21 +5334,6 @@ class OverseerImpl implements AgentHooks {
         `\`\`\`\n` +
         `${types}\n` +
         `\`\`\`\n`;
-  }
-
-  // Add a binding edge to a gadget on behalf of the agent's setGadgetBinding tool. The edge is
-  // provisional to the chat (see BindingRecord.pending); the agent loop records the addition in
-  // the chat log via `addedBindings`, which sequence-stamps it (see addChatMessages()).
-  addGadgetBinding(gadgetId: WorkpieceId, name: string, target: WorkpieceId,
-                   chatId: number): void {
-    if (!this.storage.contracts.get(target)) {
-      throw new Error(
-          "Only an installed Contract can be bound into a Gadget; raw Sources are Manager-only.");
-    }
-    // Validate the gadget exists and is visible to this chat.
-    let gadget = this.getGadgetRecord(
-        this.resolveWorkpieceRoot(gadgetId, true, chatId).workpieceId);
-    this.bindWorkpiece(gadget.id, name, target, chatId);
   }
 
   // Returns the checkpoint named by `chatMeta.compactedTo`.
@@ -6219,9 +5916,8 @@ class OverseerImpl implements AgentHooks {
   // Ensure every singleton account the gadget owner has (e.g. the Context Library) is provisioned
   // for this gadget as an ambient gatekeeper record, folded into each chat's env (named by the
   // gatekeeper's suggested binding name; see prepareChatBindings) so the agent can read it in
-  // executeCode — search/list/read recorded as observations — and optionally wire into a gadget
-  // via setGadgetBinding if the gadget's persistent code needs it. (Most gadgets never call the
-  // library programmatically, so a gadget binding would just be noise.) Idempotent:
+  // executeCode — search/list/read recorded as observations. Persistent gadget access requires a
+  // separately reviewed Contract installation. Idempotent:
   // provisioned once per gadget and re-added if missing. Called on open(), before any agent turn.
   //
   // The session is reached through the owner's stored connected account, not by asserting the owner's
@@ -6736,185 +6432,19 @@ class OverseerImpl implements AgentHooks {
   // Blueprint helpers
   // =======================================================================================
 
-  // Collect binding metadata from the given gadget's binding edges for blueprint creation/update.
+  // Canonical Contract installations cannot be serialized into blueprint authority.
   collectBindingMetadata(gadgetId: WorkpieceId): Record<string, BlueprintBinding> {
-    let bindings: Record<string, BlueprintBinding> = {};
-
-    let gadget = this.getGadgetRecord(gadgetId);
-    // Only permanent edges: a pending edge belongs to some chat's unaccepted proposal.
-    let edges = this.visibleBindings(gadget);
-
-    // For symbolic spawner env references: target workpiece -> the blueprint binding name that
-    // will map to it -- the (first) edge name bound to it, or a spawner-only binding once one is
-    // synthesized below -- so spawner env entries sharing a target share one blueprint binding
-    // (and thus one gatekeeper after instantiation). Only edges that the blueprint actually
-    // exports are registered (see the loop below), so an env entry never names a binding missing
-    // from `bindings`. Plus the set of all names claimed so far (every edge name up front, even
-    // ones the blueprint drops, so a synthesized spawner-only binding can never collide with an
-    // edge processed later).
-    let edgeNameByTarget = new Map<WorkpieceId, string>();
-    let takenNames = new Set(edges.map(([name]) => name));
-
-    // Agent spawners are processed after all other edges (see below) so their synthesized
-    // bindings dedupe against the complete real set.
-    let spawnerEdges: Array<{
-      bindingName: string,
-      spec: GatekeeperCreationSpec & {type: "agentSpawner"},
-      base: {title: string, description: string},
-      suggestValue: boolean,
-    }> = [];
-
-    for (let [bindingName, edge] of edges) {
-      if (this.storage.contracts.get(edge.target)) {
-        throw new Error(
-          `Cannot create a blueprint while binding "${bindingName}" points to an installed ` +
-          `Contract. Blueprints cannot yet represent the reviewed artifact and private Source ` +
-          `installation ceremony.`,
-        );
-      }
-      let gk = this.storage.gatekeepers.get(edge.target);
-      if (!gk) continue;  // dangling edge (gatekeeper destroyed)
-
-      // Singleton gatekeepers (e.g. the Context Library) are auto-provided to every gadget, not
-      // user-configured, so they're excluded from blueprints (re-added automatically on open). This
-      // also covers an ambient capsule the agent promoted to a named binding via setGadgetBinding.
-      if (gk.creationSpec?.type === "ambient") continue;
-
-      // Annotation is optional. When absent, the binding is included with an empty
-      // description and no resource suggestion. Legacy records may carry an `included:
-      // false` flag; honor it for backwards compatibility, but the current UI no longer
-      // surfaces an exclusion control.
-      let annotation = edge.blueprintAnnotation as LegacyBlueprintBindingAnnotation | undefined;
-      if (annotation?.included === false) continue;
-
-      let spec = gk.creationSpec;
-
-      if (!spec) {
-        throw new Error(
-          `Binding "${bindingName}" has no creation spec (created before blueprint support).`
-        );
-      }
-
-      // This edge is exported, so it can serve as the blueprint binding for its target in spawner
-      // env references. Registered here rather than in a pass over all edges, so that a dropped
-      // edge (dangling, ambient, or legacy `included: false`) never lends its name to an env entry.
-      if (!edgeNameByTarget.has(edge.target)) edgeNameByTarget.set(edge.target, bindingName);
-
-      let base = {
-        title: annotation?.title || defaultBlueprintBindingTitle(gk, bindingName),
-        description: annotation?.description ?? "",
-      };
-      let suggestValue = annotation?.suggestValue ?? false;
-
-      if (spec.type === "gatekeeper") {
-        bindings[bindingName] = {
-          ...base,
-          type: "gatekeeper",
-          gatekeeperName: spec.vendorId,
-          // Use the vendor's URL pattern, not the specific resource URL.
-          // Fall back to resourceUrl for gatekeepers created before typeUrlPattern was stored.
-          typeUrlPattern: spec.typeUrlPattern || spec.resourceUrl,
-          ...(suggestValue ? {resourceUrl: spec.resourceUrl} : {}),
-        };
-      } else if (spec.type === "aiModel") {
-        bindings[bindingName] = {
-          ...base,
-          type: "aiModel",
-          ...(suggestValue
-            ? {suggestedModel: {provider: spec.provider, modelName: spec.modelName}}
-            : {}),
-        };
-      } else if (spec.type === "agentSpawner") {
-        spawnerEdges.push({bindingName, spec, base, suggestValue});
-      }
+    const gadget = this.getGadgetRecord(gadgetId);
+    const binding = this.visibleBindings(gadget)[0];
+    if (binding) {
+      throw new Error(
+        `Cannot create a blueprint while binding "${binding[0]}" is installed; blueprints do not ` +
+        `serialize canonical Contract authority.`,
+      );
     }
-
-    // Agent spawner bindings: workpiece IDs are workspace-local, so a spawner's env transfers
-    // symbolically (see SpawnerEnvTarget). Each env entry references the exporting gadget
-    // itself, one of the gadget's own bindings by name, or -- for a target bound by no edge --
-    // an additional top-level binding synthesized just to feed the spawner (marked
-    // `spawnerOnly`), which the user fills at instantiation time like any other binding.
-    for (let {bindingName, spec, base, suggestValue} of spawnerEdges) {
-      let env: Record<string, SpawnerEnvTarget> = {};
-      for (let [envName, target] of Object.entries(spec.config.env)) {
-        if (target === gadgetId) {
-          env[envName] = {type: "gadget"};
-          continue;
-        }
-        let edgeName = edgeNameByTarget.get(target);
-        if (edgeName !== undefined) {
-          env[envName] = {type: "binding", name: edgeName};
-          continue;
-        }
-        if (this.storage.gadgets.get(target)) {
-          throw new Error(`Cannot create a blueprint: agent spawner binding "${bindingName}" ` +
-              `gives its agents access to another gadget ("${envName}"), which blueprints ` +
-              `cannot express yet.`);
-        }
-        if (this.storage.contracts.get(target)) {
-          throw new Error(`Cannot create a blueprint: agent spawner binding "${bindingName}" ` +
-              `gives its agents access to an installed Contract ("${envName}"), whose reviewed ` +
-              `artifact and private Source installation blueprints cannot express yet.`);
-        }
-        let targetGk = this.storage.gatekeepers.get(target);
-        if (!targetGk) {
-          throw new Error(`Cannot create a blueprint: agent spawner binding "${bindingName}" ` +
-              `gives its agents access to a resource ("${envName}") that no longer exists. ` +
-              `Remove it from the spawner's configuration first.`);
-        }
-        let targetSpec = targetGk.creationSpec;
-        if (targetSpec?.type === "gatekeeper" || targetSpec?.type === "aiModel") {
-          // Synthesize a spawner-only binding, named after the spawner env name (suffixed if an
-          // edge already claims it), described from the target's own creation spec.
-          let synthName = envName;
-          for (let i = 2; takenNames.has(synthName); i++) synthName = `${envName}_${i}`;
-          takenNames.add(synthName);
-          let synthBase = {
-            title: defaultBlueprintBindingTitle(targetGk, synthName),
-            description: "",
-            spawnerOnly: true as const,
-          };
-          bindings[synthName] = targetSpec.type === "gatekeeper"
-              ? {
-                  ...synthBase,
-                  type: "gatekeeper",
-                  gatekeeperName: targetSpec.vendorId,
-                  typeUrlPattern: targetSpec.typeUrlPattern || targetSpec.resourceUrl,
-                }
-              : {...synthBase, type: "aiModel"};
-          // Register the synthesized binding so any later env entry (in this or another spawner)
-          // targeting the same workpiece references it instead of synthesizing a duplicate.
-          edgeNameByTarget.set(target, synthName);
-          env[envName] = {type: "binding", name: synthName};
-        } else {
-          throw new Error(`Cannot create a blueprint: agent spawner binding "${bindingName}" ` +
-              `gives its agents access to a resource ("${envName}") of a kind that blueprints ` +
-              `cannot express.`);
-        }
-      }
-
-      let binding: BlueprintBinding = {
-        ...base,
-        type: "agentSpawner",
-        env,
-      };
-      if (suggestValue) {
-        if (spec.config.modelId === null) {
-          binding.suggestedModel = null;
-        } else if (spec.modelProvider && spec.modelName) {
-          binding.suggestedModel = {provider: spec.modelProvider, modelName: spec.modelName};
-        }
-      }
-      bindings[bindingName] = binding;
-    }
-
-    return bindings;
+    return {};
   }
 
-  // Create a minimal Yjs doc snapshot (no edit history) of one gadget's files at the given code
-  // version. Returns a gzip-compressed Yjs V2 encoded state update. The snapshot always uses the
-  // unnamed root "" (the canonical archive root), regardless of which root holds the gadget's
-  // files in the workspace doc, so archives stay compatible across gadgets.
   async snapshotCode(gadgetId: WorkpieceId,
                      version: number | "current" = "current"): Promise<Uint8Array> {
     let {ydoc} = this.buildYDoc(version);
@@ -7168,9 +6698,9 @@ class OverseerImpl implements AgentHooks {
 
       let sequence = this.nextChatSequence(chatId);
 
-      // Stamp provisional gadget creations and binding additions recorded by this "changes"
-      // message with its sequence: merge/revert compare it to decide promotion/deletion, and an
-      // unstamped pending record/edge whose chat has no active turn is a crash orphan (see
+      // Stamp provisional gadget creations recorded by this "changes" message with its sequence:
+      // merge/revert compare it to decide promotion/deletion, and an unstamped pending record
+      // whose chat has no active turn is a crash orphan (see
       // reconcilePendingGadgets()). The stamp happens in the same synchronous step as the
       // message write, so the log and the registry can never disagree.
       if (msg.type === "changes") {
@@ -7178,15 +6708,6 @@ class OverseerImpl implements AgentHooks {
           let gadget = this.storage.gadgets.get(gadgetId);
           if (gadget?.pending?.chatId === chatId && gadget.pending.sequence === undefined) {
             gadget.pending.sequence = sequence;
-            this.storage.gadgets.put(gadget);
-          }
-        }
-        for (let {gadgetId, name} of msg.addedBindings ?? []) {
-          let gadget = this.storage.gadgets.get(gadgetId);
-          let edge = gadget?.bindings[name];
-          if (gadget && edge?.pending?.chatId === chatId &&
-              edge.pending.sequence === undefined) {
-            edge.pending.sequence = sequence;
             this.storage.gadgets.put(gadget);
           }
         }
@@ -7584,22 +7105,15 @@ class OverseerImpl implements AgentHooks {
   }>): void {
     let status = this.workspaceAuthority.query({type: "status"});
     if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
-    if (status.value.state === "active") {
-      for (const hostId of seed?.consumerIds ?? []) {
-        this.workspaceAuthority.ensureHostIdentity("consumer", hostId);
-      }
-      for (const hostId of seed?.sourceIds ?? []) {
-        this.workspaceAuthority.ensureHostIdentity("source", hostId);
-      }
-      for (const hostId of seed?.requirementKeys ?? []) {
-        this.workspaceAuthority.ensureHostIdentity("requirement", hostId);
-      }
-      return;
-    }
     if (status.value.state === "uninitialized") {
       this.workspaceAuthority.execute({type: "initialize"});
       status = this.workspaceAuthority.query({type: "status"});
       if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
+    }
+    if (status.value.state !== "active") {
+      throw new Error(
+        `Legacy Workspace Authority state ${status.value.state} is unsupported after hard cutover.`,
+      );
     }
     for (const hostId of seed?.consumerIds ?? []) {
       this.workspaceAuthority.ensureHostIdentity("consumer", hostId);
@@ -7610,41 +7124,6 @@ class OverseerImpl implements AgentHooks {
     for (const hostId of seed?.requirementKeys ?? []) {
       this.workspaceAuthority.ensureHostIdentity("requirement", hostId);
     }
-    if (status.value.state === "legacy") {
-      this.workspaceAuthority.execute({
-        type: "beginBackfill",
-        migrationId: "canonical-workspace-authority",
-      });
-      status = this.workspaceAuthority.query({type: "status"});
-      if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
-    }
-    if (status.value.state === "backfilling") {
-      const contractIds = new Set<WorkpieceId>([
-        ...Array.from(this.storage.contracts.list(), contract => contract.id),
-        ...Array.from(this.storage.contractTombstones.list(), contract => contract.id),
-      ]);
-      for (const legacyContractId of contractIds) {
-        this.workspaceAuthority.execute({type: "backfillLegacyContract", legacyContractId});
-      }
-      const candidate = this.workspaceAuthority.query({type: "cutoverCandidate"});
-      if (candidate.type !== "cutoverCandidate") {
-        throw new Error("Workspace Authority cutover candidate is unavailable.");
-      }
-      this.workspaceAuthority.execute({
-        type: "markReadyToCutover",
-        expectedDigest: candidate.value.digest,
-      });
-      status = this.workspaceAuthority.query({type: "status"});
-      if (status.type !== "status") throw new Error("Workspace Authority status is unavailable.");
-    }
-    if (status.value.state !== "readyToCutover") {
-      throw new Error(`Workspace Authority cannot activate from ${status.value.state}.`);
-    }
-    const candidate = this.workspaceAuthority.query({type: "cutoverCandidate"});
-    if (candidate.type !== "cutoverCandidate") {
-      throw new Error("Workspace Authority cutover candidate is unavailable.");
-    }
-    this.workspaceAuthority.execute({type: "cutover", expectedDigest: candidate.value.digest});
   }
 
   async loadContractProposalEvidence(reference: ContractProposalEvidenceReference) {
@@ -7716,7 +7195,7 @@ class OverseerImpl implements AgentHooks {
       sourceIds: [input.sourceGatekeeperId],
       requirementKeys: [`${input.targetGadgetId}:${input.bindingName}`],
     });
-    const canonicalConsumerId = this.workspaceAuthority.resolveLegacyIdentity(
+    const canonicalConsumerId = this.workspaceAuthority.resolveHostIdentity(
       "consumer",
       input.targetGadgetId,
     ) as ConsumerId | undefined;
@@ -7727,10 +7206,6 @@ class OverseerImpl implements AgentHooks {
           name: input.bindingName,
         })
       : undefined;
-    if (gadget.bindings[input.bindingName] &&
-        !(currentBinding?.type === "bindingByConsumerName" && currentBinding.value)) {
-      throw new Error(`The target Gadget already has a binding named ${input.bindingName}.`);
-    }
     if (currentBinding?.type === "bindingByConsumerName" && currentBinding.value) {
       const currentInstance = this.workspaceAuthority.query({
         type: "contractInstance",
@@ -8009,11 +7484,9 @@ class OverseerImpl implements AgentHooks {
     } else {
       lines.push("",
           `The blueprint's code expects the following bindings, which the new gadget does not ` +
-          `have yet. Wire up each one under the exact binding name given. For external ` +
-          `resources, use setGadgetBinding on the new gadget (first requesting a connection via ` +
-          `requestConnection if your env doesn't already hold a suitable resource). AI-model ` +
-          `and agent-spawner bindings cannot be created from chat; ask the user to add those ` +
-          `from the gadget's Connections panel.`);
+          `have yet. External resources now require a reviewed Contract proposal and canonical ` +
+          `installation under the exact binding name. AI-model and agent-spawner bindings cannot ` +
+          `be created from chat; ask the user to add those from the gadget's Connections panel.`);
       for (let [name, binding] of bindings) {
         let details: string;
         switch (binding.type) {
@@ -8895,11 +8368,6 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return this.impl.startBindingSession(target, caller);
   }
 
-  async startManagerSourceSession(
-      gatekeeperId: WorkpieceId, caller: GatekeeperCaller): Promise<any> {
-    return this.impl.startManagerSourceSession(gatekeeperId, caller);
-  }
-
   async invokeRestoredContractMethod(
       contractId: WorkpieceId, restoration: ContractRestorationReference,
       caller: GatekeeperCaller,
@@ -9466,34 +8934,6 @@ export class CloudflareWorkloadEntrypoint extends
   }
 }
 
-type ManagerSourceLoopbackProps = {
-  overseerId: string;
-  gatekeeperId: WorkpieceId;
-  caller: GatekeeperCaller;
-};
-
-// Separate privileged path used only in the Manager agent's authoring environment.
-export class ManagerSourceLoopback
-    extends WorkerEntrypoint<Cloudflare.Env, ManagerSourceLoopbackProps> {
-  constructor(ctx: ExecutionContext<ManagerSourceLoopbackProps>, env: Cloudflare.Env) {
-    super(ctx, env);
-    let ns = ctx.exports.OverseerDurableObject;
-    let stub: DurableObjectStub<OverseerDurableObject> =
-        ns.get(ns.idFromString(ctx.props.overseerId));
-    let session = stub.startManagerSourceSession(ctx.props.gatekeeperId, ctx.props.caller);
-    return new Proxy(session, {
-      get(target, prop) {
-        return Reflect.get(target, prop, target);
-      },
-      getPrototypeOf() {
-        return WorkerEntrypoint.prototype;
-      },
-    });
-  }
-
-  dummyMethodToWorkAroundValidatorBug() {}
-}
-
 type GatekeeperHookLoopbackProps = {
   overseerId: string;
   hookId: number;
@@ -9905,15 +9345,15 @@ class AuthorityApiImpl extends RpcTarget implements AuthorityApi {
     this.impl.getGadgetRecord(command.targetGadgetId);
     const sourceRecord = this.impl.storage.gatekeepers.get(command.sourceGatekeeperId);
     if (!sourceRecord) throw new Error("The selected canonical Source is unavailable.");
-    const consumerId = this.impl.workspaceAuthority.resolveLegacyIdentity(
+    const consumerId = this.impl.workspaceAuthority.resolveHostIdentity(
       "consumer",
       command.targetGadgetId,
     ) as ConsumerId | undefined;
-    const sourceId = this.impl.workspaceAuthority.resolveLegacyIdentity(
+    const sourceId = this.impl.workspaceAuthority.resolveHostIdentity(
       "source",
       command.sourceGatekeeperId,
     ) as SourceId | undefined;
-    const requirementId = this.impl.workspaceAuthority.resolveLegacyIdentity(
+    const requirementId = this.impl.workspaceAuthority.resolveHostIdentity(
       "requirement",
       `${command.targetGadgetId}:${command.bindingName}`,
     ) as RequirementId | undefined;
@@ -10856,11 +10296,12 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async listPreApprovableActions(): Promise<PreApprovableAction[]> {
-    // Surface actions from every gatekeeper bound by some gadget (the connections the UI shows).
+    // Surface actions from Sources behind canonically installed Contracts.
     let boundIds = new Set<WorkpieceId>();
     for (let gadget of this.impl.storage.gadgets.list()) {
-      for (let edge of Object.values(gadget.bindings)) {
-        boundIds.add(edge.target);
+      for (let [, edge] of this.impl.visibleBindings(gadget)) {
+        const contract = this.impl.storage.contracts.get(edge.target);
+        if (contract) boundIds.add(contract.sourceGatekeeperId);
       }
     }
 
@@ -11363,22 +10804,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       }
     }
 
-    // Likewise promote provisional binding edges covered by this merge; this is also the moment
-    // an edge becomes visible to mainline loads and the derived workspace default binding list.
-    for (let gadget of this.impl.storage.gadgets.list()) {
-      let promoted = false;
-      for (let edge of Object.values(gadget.bindings)) {
-        if (edge.pending?.chatId === chatId && edge.pending.sequence !== undefined &&
-            edge.pending.sequence <= mergeThrough) {
-          delete edge.pending;
-          promoted = true;
-        }
-      }
-      if (promoted) {
-        this.impl.storage.gadgets.put(gadget);
-      }
-    }
-
     // Get unmerged updates for the thread.
     let updates = this.impl.getProposedChanges(chatId);
 
@@ -11460,24 +10885,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       }
     }
 
-    // Likewise delete provisional binding edges whose addition falls within the reverted range.
-    // (Edges on a gadget deleted just above are already gone with it; this loop only sees
-    // surviving gadgets.)
-    for (let gadget of this.impl.storage.gadgets.list()) {
-      let removed = false;
-      for (let [name, edge] of Object.entries(gadget.bindings)) {
-        if (edge.pending?.chatId === chatId && edge.pending.sequence !== undefined &&
-            edge.pending.sequence >= revertFrom) {
-          delete gadget.bindings[name];
-          removed = true;
-        }
-      }
-      if (removed) {
-        this.impl.storage.gadgets.put(gadget);
-        this.impl.bumpVersion([gadget.id]);
-      }
-    }
-
     let unmerged: number[] = [];
     for (let msg of this.impl.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
       if (msg.type === "changes") {
@@ -11523,23 +10930,9 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       this.impl.deliverExternalMessageResponse(response, "The chat was deleted before the agent responded.");
     }
 
-    // Delete any gadgets and binding edges still provisional to this chat (stamped or not):
-    // deleting the chat discards its proposed changes, and these were never accepted.
+    // Delete any gadgets still provisional to this chat (stamped or not).
     for (let gadget of this.impl.listPendingGadgets(chatId)) {
       await this.impl.removeGadget(gadget.id);
-    }
-    for (let gadget of this.impl.storage.gadgets.list()) {
-      let removed = false;
-      for (let [name, edge] of Object.entries(gadget.bindings)) {
-        if (edge.pending?.chatId === chatId) {
-          delete gadget.bindings[name];
-          removed = true;
-        }
-      }
-      if (removed) {
-        this.impl.storage.gadgets.put(gadget);
-        this.impl.bumpVersion([gadget.id]);
-      }
     }
     this.impl.storage.chatMeta.delete(chatId);
     this.impl.storage.chatContext.delete(chatId);
@@ -12193,114 +11586,18 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
     return renderGadgetPdf(browser, bundle.jsCode, title, gadget);
   }
 
-  async listBindings(chatId?: number): Promise<GadgetBindingInfo[]> {
+  async listBindings(): Promise<GadgetBindingInfo[]> {
     let record = this.impl.getGadgetRecord(this.id);
-    // Edges pending in other chats are those chats' unaccepted proposals, so they aren't listed.
-    return this.impl.visibleBindings(record, chatId).map(([name, edge]) => {
-      let gatekeeper = this.impl.storage.gatekeepers.get(edge.target);
+    return this.impl.visibleBindings(record).flatMap(([name, edge]) => {
       let contract = this.impl.storage.contracts.get(edge.target);
-      return {
+      if (!contract) return [];
+      return [{
         name,
         target: edge.target,
-        targetType: contract ? "contract" as const : "source" as const,
-        resourceTitle: contract?.title || gatekeeper?.resourceTitle || "(title unavailable)",
-        vendorId: gatekeeper?.creationSpec?.type === "gatekeeper"
-            ? gatekeeper.creationSpec.vendorId
-            : undefined,
-        ...(edge.pending ? {chatId: edge.pending.chatId} : {}),
-      };
+        targetType: "contract" as const,
+        resourceTitle: contract.title,
+      }];
     });
-  }
-
-  async getBinding(name: string): Promise<GatekeeperClient<any> | null> {
-    let record = this.impl.getGadgetRecord(this.id);
-    let edge = record.bindings[name];
-    if (!edge || edge.pending || !this.impl.storage.gatekeepers.get(edge.target)) return null;
-    return new GatekeeperClientImpl(
-        this.impl, edge.target, this.impl.getGatekeeperFacet(edge.target));
-  }
-
-  async bind(name: string, target: WorkpieceId, chatId?: number): Promise<void> {
-    if (chatId === undefined) {
-      this.impl.bindWorkpiece(this.id, name, target);
-      return;
-    }
-
-    // Binding with a chat open is provisional to that chat, like code edits: write the pending
-    // edge and the "changes" message that records (and sequence-stamps) it in one synchronous
-    // step, so this path has no crash window (mirroring user-initiated gadget creation).
-    if (!this.impl.storage.chatMeta.get(chatId)) {
-      throw new Error(`No such chat: ${chatId}`);
-    }
-    let author = await this.clientUser.whoami();
-    this.impl.bindWorkpiece(this.id, name, target, chatId);
-    this.impl.addChatMessages(chatId, author, [{
-      type: "changes",
-      addedBindings: [{gadgetId: this.id, name, target}],
-    }]);
-  }
-
-  async bindWithSuggestedName(target: WorkpieceId, chatId?: number): Promise<string> {
-    let record = this.impl.getGadgetRecord(this.id);
-    let existing = this.impl.visibleBindings(record, chatId)
-        .find(([, edge]) => edge.target === target);
-    if (existing) {
-      return existing[0];
-    }
-
-    let contract = this.impl.requireContract(target);
-    let suggestedName = fallbackBindingName(
-        contract.title || "CONTRACT", name => record.bindings[name] !== undefined);
-    await this.bind(suggestedName, target, chatId);
-    return suggestedName;
-  }
-
-  async unbind(name: string): Promise<void> {
-    const record = this.impl.getGadgetRecord(this.id);
-    let edge = this.impl.bindingLineage(record).find(([candidate]) => candidate === name)?.[1];
-    if (!edge) throw new Error(`No such binding: ${name}`);
-    if (this.impl.storage.contracts.get(edge.target)) {
-      await this.impl.deleteContract(edge.target);
-    } else {
-      this.impl.unbindWorkpiece(this.id, name);
-    }
-  }
-
-  async renameBinding(oldName: string, newName: string): Promise<void> {
-    this.impl.renameBinding(this.id, oldName, newName);
-  }
-
-  #getBindingEdge(name: string): {record: GadgetRecord, edge: BindingRecord} {
-    let record = this.impl.getGadgetRecord(this.id);
-    let edge = record.bindings[name];
-    if (!edge) throw new Error(`No such binding: ${name}`);
-    return {record, edge};
-  }
-
-  async getBlueprintAnnotation(name: string): Promise<BlueprintBindingAnnotation | null> {
-    let {edge} = this.#getBindingEdge(name);
-    let annotation = edge.blueprintAnnotation;
-    if (!annotation) return null;
-    let gatekeeper = this.impl.storage.gatekeepers.get(edge.target);
-    return {
-      title: annotation.title ||
-          (gatekeeper ? defaultBlueprintBindingTitle(gatekeeper, name) : name),
-      description: annotation.description ?? "",
-      suggestValue: annotation.suggestValue,
-    };
-  }
-
-  async setBlueprintAnnotation(name: string, annotation: BlueprintBindingAnnotation)
-      : Promise<void> {
-    let {record, edge} = this.#getBindingEdge(name);
-    let gatekeeper = this.impl.storage.gatekeepers.get(edge.target);
-    edge.blueprintAnnotation = {
-      title: annotation.title.trim() ||
-          (gatekeeper ? defaultBlueprintBindingTitle(gatekeeper, name) : name),
-      description: annotation.description,
-      suggestValue: annotation.suggestValue,
-    };
-    this.impl.storage.gadgets.put(record);
   }
 
   async createBlueprint(title?: string, description?: string,
@@ -12449,16 +11746,6 @@ class UseGadgetClientInterface extends RpcTarget implements GadgetClient {
   async setTitle(_title: string): Promise<void> { this.#deny(); }
   async remove(): Promise<void> { this.#deny(); }
   async listBindings(): Promise<GadgetBindingInfo[]> { this.#deny(); }
-  async getBinding(_name: string): Promise<GatekeeperClient<any> | null> { this.#deny(); }
-  async bind(_name: string, _target: WorkpieceId): Promise<void> { this.#deny(); }
-  async bindWithSuggestedName(_target: WorkpieceId): Promise<string> { this.#deny(); }
-  async unbind(_name: string): Promise<void> { this.#deny(); }
-  async renameBinding(_oldName: string, _newName: string): Promise<void> { this.#deny(); }
-  async getBlueprintAnnotation(_name: string): Promise<BlueprintBindingAnnotation | null> {
-    this.#deny();
-  }
-  async setBlueprintAnnotation(_name: string, _annotation: BlueprintBindingAnnotation)
-      : Promise<void> { this.#deny(); }
   async createBlueprint(_title?: string, _description?: string,
                         _screenshot?: BlueprintScreenshotUpload): Promise<BlueprintGadgetSummary> {
     this.#deny();

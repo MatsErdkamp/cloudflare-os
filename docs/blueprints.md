@@ -150,14 +150,11 @@ When someone opens a blueprint link (`/blueprint/<id>`), they see the **Blueprin
 1. The page fetches metadata via `PublicApi.getBlueprint()` (unauthenticated -- knowing the ID is sufficient since a blueprint is just data).
 2. It displays the title, description, optional screenshot, author, version, and a summary of required bindings.
 3. If the user is not logged in, they see a "Log in to create a gadget" button.
-4. Once authenticated, the user enters **configure mode**, where they assign each required binding:
-   - For gatekeeper bindings: pick a connected account and configure the matching resource.
-   - For AI model bindings: pick from their configured models.
-   - For agent spawner bindings: pick a model (or none).
+4. Blueprints with required bindings are rejected before a workspace or Source is created. Binding
+   assignment cannot bypass the canonical Contract review and installation ceremony.
 5. Clicking "Create Gadget" calls `AuthenticatedApi.newGadgetFromBlueprint()`, which:
    - Reads the blueprint from KV and its code from R2.
    - Creates a new Overseer DO and initializes it with the blueprint's code via `initializeFromBlueprint`.
-   - Creates gatekeepers from the user's binding assignments (pipelined for performance).
    - Returns the new Overseer stub, and the UI redirects to the new gadget.
 
 The new gadget is independent from the blueprint source: it has its own storage, chat history, and bindings. There is currently no mechanism for automatic updates from the blueprint to existing instances (though the Yjs-based storage format could support this in the future).
@@ -168,7 +165,7 @@ The AI agent can also instantiate a blueprint as an *additional* gadget within a
 
 - The `listBlueprints` tool lists the blueprints available to the workspace owner (the deployment's standard formats, listed first and marked as preferred, then their own published blueprints, their library, and the deployment's featured set) as formatted text; there is no search index, so the model scans the list itself.
 - Passing a `blueprintId` to the `createGadget` tool creates the new gadget from the blueprint's code instead of empty. The gadget is provisional to the chat like any agent-created gadget, and the blueprint's files are copied into the chat's proposed changes (recorded in the same `changes` message as the creation), so accepting or reverting the chat's changes covers the files and the creation together.
-- Bindings are not auto-assigned on this path: the tool result describes the bindings the blueprint expects, and the agent wires them up itself under the same names (via `setGadgetBinding`, requesting connections as needed), or asks the user to add AI-model / agent-spawner bindings from the Connections panel.
+- Bindings are not auto-assigned on this path. External resources require a reviewed Contract proposal and canonical installation under the expected name. AI-model and agent-spawner bindings must be added by the user from the Connections panel.
 
 When a `.gadget` file is uploaded, the target instance creates a new local blueprint ID, stores the uploaded code snapshot in its own R2 bucket, writes the imported metadata to its own KV namespace, and records the blueprint under the importing user's account. The original blueprint author metadata is preserved, but ownership of the imported copy belongs to the importing user on the new instance.
 

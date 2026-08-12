@@ -519,12 +519,12 @@ export interface AuthenticatedApi extends RpcTarget {
   // Returns null if not in library, or { uploaded } if it is.
   isBlueprintInLibrary(blueprintId: string): Promise<{ uploaded: boolean } | null>;
 
-  // Create a new gadget from a blueprint. Reads the blueprint from KV, downloads code from
-  // R2, creates a new Overseer DO, initializes it with the blueprint's code, and creates
-  // gatekeepers from the provided binding assignments.
+  // Create a new gadget from a capability-free blueprint. Reads the blueprint from KV, downloads
+  // code from R2, creates a new Overseer DO, and initializes it with the blueprint's code.
   //
-  // Every required binding in the blueprint must have a corresponding entry in `bindings`,
-  // keyed by binding name. Throws if any are missing or if accountId/modelId are invalid.
+  // `bindings` is a fail-closed compatibility parameter while older clients are retired. It must
+  // be empty, and the referenced blueprint must declare no bindings; otherwise the call throws
+  // before creating a workspace or Source. Authority must be installed through Workspace Authority.
   //
   // The returned Overseer can be used immediately (pipelining-friendly).
   newGadgetFromBlueprint(
@@ -1468,8 +1468,8 @@ export interface Overseer extends RpcTarget {
   // appropriate account, use `subscribeConnectedAccounts()` with a `filter` for this URL, then
   // let the user choose one.
   //
-  // The new gatekeeper is a workspace-level workpiece; it is not bound into any gadget's `env` by
-  // default. Use GadgetClient.bind() / bindWithSuggestedName() to expose it to a gadget.
+  // The new gatekeeper is a workspace-level Source. Persistent Gadget access requires a reviewed
+  // Contract installation through Workspace Authority.
   newGatekeeper(accountId: number, resourceUrl: string): Promise<GatekeeperClient<any> | null>;
 
   // Create a new gatekeeper for an AI model binding. The model can be any returned by
@@ -1940,13 +1940,6 @@ export type AiChatMessageBody = {
   // up on replay.
   createdGadgets?: {gadgetId: WorkpieceId, title: string, bindingName: string}[];
 
-  // Binding edges added to gadgets as part of this batch of changes (by the agent's
-  // setGadgetBinding tool, or by the user binding a connection with a chat open -- in the latter
-  // case `update` is omitted). Like `createdGadgets`, the additions are
-  // provisional: the edge is visible only from this chat until a merge through this message
-  // makes it permanent, and a revert covering it deletes the edge. `name` is the binding's name
-  // within the gadget identified by `gadgetId`; `target` is the bound workpiece.
-  addedBindings?: {gadgetId: WorkpieceId, name: string, target: WorkpieceId}[];
 } | {
   // Indicates that at this point in the chat, the user chose to merge all (non-reverted) changes
   // in this chat up to and including the given sequence number.
@@ -2044,9 +2037,8 @@ export type AiChatMessageBody = {
   // Lifecycle state. Starts "pending"; set by the user's accept/deny.
   state: "pending" | "accepted" | "denied";
 
-  // Once accepted, the id of the created gatekeeper. The resource is surfaced to the agent as a
-  // named binding in the chat's env; the agent can additionally bind it into a gadget via
-  // setGadgetBinding if its gadget code needs it.
+  // Once accepted, the id of the created gatekeeper. This connection does not grant persistent
+  // gadget authority; persistent access requires a separately reviewed Contract installation.
   gatekeeperId?: WorkpieceId;
 
   // The name under which the resource will appear in the chat's env (`env.NAME` in executeCode)
@@ -2214,33 +2206,6 @@ export type AiToolCall = {
   input: {
     bindingName: string;
     entrypoint: string | null;
-  };
-} | {
-  // Wire one of the chat's bindings into a gadget's own binding list. The addition is provisional
-  // to the chat, recorded by a "changes" message (see `addedBindings`).
-  toolName: "setGadgetBinding";
-  input: {
-    // Chat binding name of the target gadget.
-    gadget: string;
-    // Chat binding name of the resource to wire into the gadget.
-    source: string;
-    // Name to bind the resource under within the gadget; defaults to `source`.
-    name?: string;
-  };
-
-  // The added binding edge as resolved when the tool ran, recorded so crash recovery can re-adopt
-  // an addition whose "changes" message never flushed (see `addedBindings`), mirroring
-  // createGadget's recorded output. `changeId` is the change number of the batch that records the
-  // addition. Absent only when the call failed (`error` is set).
-  output?: {gadgetId: WorkpieceId, name: string, target: WorkpieceId, changeId: number};
-} | {
-  // Obsolete predecessor of `setGadgetBinding`, from before named chat bindings; appears only in
-  // old chat logs. Its additions were immediate and permanent (nothing provisional to recover),
-  // so replay is a recorded no-op.
-  toolName: "saveCapsuleAsBinding";
-  input: {
-    capsuleId: number;
-    bindingName: string;
   };
 } | {
   // Create a new gadget workpiece in the workspace, either empty or instantiated from a blueprint.
@@ -2663,18 +2628,13 @@ export type GadgetBindingInfo = {
   // The workpiece that the binding points at.
   target: WorkpieceId;
 
-  /** Kind of workpiece referenced, including read-only legacy Source metadata. */
-  targetType: "gadget" | "source" | "contract";
+  /** Canonical installed capability kind. */
+  targetType: "contract";
 
   // Denormalized display info about the target.
   resourceTitle: string;
   vendorId?: string;
 
-  // If present, this binding is still provisional to the given chat (which is necessarily the
-  // `chatId` passed to listBindings(); edges pending in other chats are never listed). It becomes
-  // permanent when the user accepts that chat's changes through the message that recorded it, and
-  // is deleted if those changes are reverted.
-  chatId?: number;
 };
 
 // An auto-approvable action kind offered by a specific connection. Aggregated from each bound
@@ -2895,9 +2855,10 @@ export type BlueprintLibrarySummary = {
   pinned?: boolean;
 };
 
-// Binding assignment (input to newGadgetFromBlueprint).
-// When instantiating a blueprint, the user provides a Record mapping binding name ->
-// assignment. Every required binding in the blueprint must have a corresponding entry.
+/**
+ * Retired blueprint-binding assignment shape accepted only so older clients fail closed at the
+ * current `newGadgetFromBlueprint` boundary. Supplying any assignment creates no workspace or Source.
+ */
 export type BlueprintBindingAssignment = {
   type: "gatekeeper";
   accountId: number;      // user's connected account ID
@@ -2930,10 +2891,8 @@ export interface WorkpieceClient extends RpcTarget {
 
   // Permanently remove this workpiece from the workspace.
   //
-  // For a gadget, this deletes its registry entry (including its binding map) and hooks and
-  // clears its files; gatekeepers it bound survive, possibly no longer bound by any gadget. For
-  // a gatekeeper, this destroys the connection itself -- distinct from merely unbinding it from
-  // one gadget (GadgetClient.unbind()).
+  // For a gadget, this deletes its registry entry, hooks, and files. For a gatekeeper, this
+  // destroys the workspace Source itself.
   remove(): Promise<void>;
 }
 
@@ -2965,48 +2924,11 @@ export interface GadgetClient extends WorkpieceClient {
 
   // --- Binding management ---
   //
-  // A gadget's bindings are edges mapping a name (as it appears in the gadget worker's `env`) to
-  // an installed Contract. Legacy Source edges remain visible as management metadata but cannot
-  // be newly installed into Consumer environments.
+  // A gadget's bindings are canonical installed Contracts.
 
   // List this gadget's bindings.
   //
-  // If `chatId` is specified, bindings which have been proposed but not yet accepted in the given
-  // chat thread will be included.
-  listBindings(chatId?: number): Promise<GadgetBindingInfo[]>;
-
-  // Get the gatekeeper bound under the given name, or null if there is no such binding.
-  getBinding(name: string): Promise<GatekeeperClient<any> | null>;
-
-  // Bind an unplaced installed Contract into this gadget's `env` under `name`. A Contract instance
-  // may have only one binding placement; another Gadget requires a separately approved instance.
-  // Throws if the name is invalid (see validateBindingName()), reserved, or already occupied.
-  //
-  // If `chatId` is provided, the binding is treated like an edit made in the given chat -- it is
-  // proposed, but someone needs to click "accept changes" (call `mergeChanges()`) to make it
-  // final. Until then it exists only in the given chat.
-  bind(name: string, target: WorkpieceId, chatId?: number): Promise<void>;
-
-  // Like bind(), but if the target isn't already bound in this gadget, choose a name based on the
-  // resource's own suggestion (deduplicated against this gadget's existing binding names). If the
-  // target is already bound, does nothing. Either way, returns the target's binding name.
-  bindWithSuggestedName(target: WorkpieceId, chatId?: number): Promise<string>;
-
-  // Remove the binding with the given name. For a Contract edge this retracts the Contract instance
-  // globally, including its facet, callbacks, state, and any other legacy edges. For a legacy raw
-  // Source edge, only the edge is removed and the Source survives.
-  unbind(name: string): Promise<void>;
-
-  // Rename a binding while preserving its target and blueprint annotation. Throws if `oldName`
-  // does not exist or `newName` is reserved or already bound in this gadget.
-  renameBinding(oldName: string, newName: string): Promise<void>;
-
-  // Get the blueprint annotation for the named binding, if one has been set. Annotations live on
-  // the binding edge, not on the target gatekeeper (see BlueprintBindingAnnotation).
-  getBlueprintAnnotation(name: string): Promise<BlueprintBindingAnnotation | null>;
-
-  // Set the blueprint annotation for the named binding.
-  setBlueprintAnnotation(name: string, annotation: BlueprintBindingAnnotation): Promise<void>;
+  listBindings(): Promise<GadgetBindingInfo[]>;
 
   // Create a new blueprint from this gadget's current committed code.
   // `title` defaults to the gadget's title if omitted.

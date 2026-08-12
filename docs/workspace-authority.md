@@ -284,21 +284,18 @@ only bounded tombstone metadata remains.
 Authority Operation ID, Task Authority Correlation, invocation ID, and evidence/result references join
 the families. Bodies, prompts, credentials, headers, tokens, and Protected Observations appear in none.
 
-## Storage, compatibility, and rollout
+## Storage and hard cutover
 
 The existing Workspace Durable Object and typed-storage mechanism remain the only database. The deep
 authority module hides schema and command/query mechanics. New canonical Artifact Approval,
 Installation Decision, Task Dispatch Decision, Binding Resolution, Contract Instance, Binding,
-runtime Approval, Task, Environment, Ratchet, event, and Effect records are additive before cutover.
-Legacy `ContractRecord` and Gadget binding maps are not extended into a second authority model.
-
-Migration follows `legacy -> backfilling -> readyToCutover -> active`. Before cutover, bounded staging
-and transactional deltas are disposable. One local transaction validates the complete digest and
-publishes canonical records. Afterwards, canonical collections are the only authority; legacy APIs and
-Gadget binding maps are projections/compatibility facades, and old writers fail closed. There is no
-permanent dual read/write model and no switch back to legacy semantics. Contracts use the sole
-current content-addressed executable format from ADR 0024; unsupported pre-launch formats fail closed
-and cannot authorize Project, Workload, or Agent Task placement.
+runtime Approval, Task, Environment, Ratchet, event, and Effect records are the only authority model.
+Legacy `ContractRecord`, raw Manager Source access, pending chat bindings, and Gadget binding maps are
+not migrated or interpreted as authority. Workspace Authority initializes directly as canonical and
+active; legacy-only callers and data fail closed and must be recreated through the current review and
+installation flow. There is no fallback, compatibility projection, telemetry gate, dual read/write
+model, or switch back to legacy semantics. Contracts use the sole current content-addressed executable
+format from ADR 0024. ADR 0026 supersedes ADR 0017's preservation and migration mechanics.
 
 ## Package and interface plan
 
@@ -306,7 +303,7 @@ and cannot authorize Project, Workload, or Agent Task placement.
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `packages/contractors`             | one current authoring/runtime interface, generic lifecycle membrane and conformance, exact executable hashes                                                          |
 | `packages/workshop-shared`         | fully doc-commented real RPC/domain types and validators; no hand-written mirrors or unsafe bridge casts                                                           |
-| `packages/workshop-backend`        | one deep authority module, canonical storage/commands/queries, publication/revocation, task adapter, protected-result service/mediator interface, migration facade |
+| `packages/workshop-backend`        | one deep authority module, canonical storage/commands/queries, publication/revocation, task adapter, protected-result service/mediator interface |
 | `packages/gatekeeper-r2`           | task-neutral authority protocol identity/health/resource/evidence/lifecycle implementation                                                                         |
 | `packages/contract-review-builder` | isolated reproducible evidence production with no authority capability                                                                                             |
 | `packages/contractors-cli`         | authenticated leased-development transport and local proxy, no durable authority                                                                                   |
@@ -356,7 +353,7 @@ failure. The final gate runs root `pnpm lint`, `pnpm test`, and `pnpm build`.
 | protected results               | task-neutral provider evidence; exact Workspace wrapper; every participant acks new generation; pause/terminal/revocation block; declassification cannot bypass gates                                                                                                 | #25, #35, #36, #40, #41 |
 | audit/operations                | Authority/Source/Agent/log separation; bounded correlation/no bodies; cancellation records durable/local outcome and never infers it from transport; keyboard-operable review; missing-ack, stale-parallel-work, reconciliation, dead-letter, and cleanup diagnostics | #29, #37, #41           |
 | end-to-end R2                   | canonical standing slice, Development/Workload migration, exact task dispatch, protected release, Ratchet replacement, restart and cleanup recovery                                                                                                                   | #31, #33, #37, #40      |
-| compatibility                   | historical Gadget semantics; one current Contract executable format; #28 rollout guard and bounded telemetry proving no new `ManagerSourceLoopback`/raw-source use; compatibility projection; raw legacy paths unreachable; retirement                                  | #26, #28, #29, #31, #38 |
+| hard cutover                    | one current Contract executable format; no legacy backfill, fallback, raw Manager Source access, pending-chat authority, or compatibility projection; old callers fail closed and legacy storage is removed | #26, #28, #29, #31, #38 |
 | future Template proposals       | Agent Activity is evidence only; review creates a new immutable Template Version/Approval path and never mutates or widens an active task                                                                                                                             | #42                     |
 | external tenant authority       | external Principal/tenant/account/source ownership, cross-tenant isolation, and aggregate protocol are explicit and cannot reinterpret Repository Claims or application scope                                                                                         | #43                     |
 | additional runtime adapters     | one tracer bullet per adapter; complete no-ambient-egress, coverage, stale-generation, invalidation/ack, protected-result, restart, and cleanup proof before enablement                                                                                               | #44                     |

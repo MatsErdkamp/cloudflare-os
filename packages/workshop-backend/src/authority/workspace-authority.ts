@@ -1,7 +1,6 @@
 import {collection, createTypedStorage} from "@gadgets/typed-storage";
 import {
   validateBindingName,
-  type BlueprintBindingAnnotation,
   type WorkpieceId,
 } from "@gadgets/workshop-shared/api";
 import type {
@@ -54,15 +53,12 @@ import type {
   RuntimeApprovalDecisionRecord,
   RuntimeApprovalRequestId,
   RuntimeApprovalRequestRecord,
-  SourceId,
   TaskDispatchDecisionId,
   TaskDispatchDecisionRecord,
   TaskEnvironmentRecord,
   TaskTemplateApprovalId,
   TaskTemplateApprovalRecord,
   TaskTemplateVersionRecord,
-  RequirementId,
-  UpstreamAuthorityReference,
   WorkspacePrincipalRecord,
 } from "./records";
 import {createConsumerEnvironmentAuthority} from "./consumer-environments";
@@ -81,9 +77,7 @@ import {
   type RatchetBindingAuthority,
 } from "./trust-ratchet";
 
-const LEGACY_MANAGER_SOURCE_SAMPLE_LIMIT = 16;
 const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
-const legacyManagerSourceAccessBrand: unique symbol = Symbol("legacyManagerSourceAccess");
 
 function requireContentHash(value: string, field: string): void {
   if (!CONTENT_HASH.test(value)) throw new TypeError(`${field} must be a sha256 content hash.`);
@@ -167,11 +161,9 @@ function digestText(value: string): string {
 }
 
 type WorkspaceAuthorityState = {
-  state: "legacy" | "backfilling" | "readyToCutover" | "active";
+  state: "active";
   revision: number;
   nextEventSequence: number;
-  migrationId?: string;
-  cutoverDigest?: string;
   authorityEpoch?: number;
   ownerGeneration?: number;
 };
@@ -256,19 +248,12 @@ type WorkspaceAuthorityEvent = {
     | "developmentGrantChanged"
     | "developmentSessionChanged"
     | "workloadChanged"
-    | "workloadRegistrationChanged"
-    | "migrationBaseline";
+    | "workloadRegistrationChanged";
   revision: number;
   subjectId?: string;
   operationId?: string;
   beforeGeneration?: number;
   afterGeneration?: number;
-  migrationBaseline?: {
-    digest: string;
-    contractCount: number;
-    bindingCount: number;
-    unknownHistory: true;
-  };
 };
 
 type WorkspaceAuthorityEffectBase = {
@@ -377,22 +362,6 @@ function isStandingInstallationEffect(
     effect?.kind === "invalidatePredecessorEndpoint";
 }
 
-type LegacyManagerSourceUse = {
-  chatId: number;
-  gatekeeperId: WorkpieceId;
-  observedAt: number;
-};
-
-type LegacyManagerSourceTelemetry = {
-  totalUses: number;
-  recentUses: LegacyManagerSourceUse[];
-};
-
-type LegacyIdentityMapRecord = {
-  key: string;
-  canonicalId: string;
-};
-
 type HostAuthorityIdentityRecord = {
   key: string;
   kind: "consumer" | "source" | "requirement";
@@ -401,21 +370,10 @@ type HostAuthorityIdentityRecord = {
   createdSequence: number;
 };
 
-type AuthorityMigrationDelta = {
-  sequence: number;
-  legacyContractId: WorkpieceId;
-  kind: "bindingAdded" | "bindingRemoved" | "bindingRenamed" | "contractRetracted";
-};
-
 function makeAuthorityStorage(storage: DurableObjectStorage) {
   return createTypedStorage(storage, {
     singletons: {
       workspaceAuthorityState: <WorkspaceAuthorityState | undefined>undefined,
-      legacyManagerSourceTelemetry: <LegacyManagerSourceTelemetry>{
-        totalUses: 0,
-        recentUses: [],
-      },
-      nextAuthorityMigrationDeltaSequence: 1,
     },
     collections: {
       workspaceAuthorityEvents: collection<WorkspaceAuthorityEvent>()({
@@ -543,9 +501,6 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
       contractInstances: collection<ContractInstanceRecord>()({
         primaryKey: "id",
         uniqueIndexes: {
-          byLegacyWorkpieceId(record: ContractInstanceRecord) {
-            return record.legacyWorkpieceId ?? null;
-          },
           byRuntimeWorkpieceId(record: ContractInstanceRecord) {
             return record.runtimeWorkpieceId ?? null;
           },
@@ -633,17 +588,6 @@ function makeAuthorityStorage(storage: DurableObjectStorage) {
           },
         },
       }),
-      legacyIdentityMap: collection<LegacyIdentityMapRecord>()({
-        primaryKey: "key",
-      }),
-      authorityMigrationDeltas: collection<AuthorityMigrationDelta>()({
-        primaryKey: "sequence",
-        nonUniqueIndexes: {
-          byContract(record: AuthorityMigrationDelta) {
-            return record.legacyContractId;
-          },
-        },
-      }),
     },
   });
 }
@@ -678,7 +622,6 @@ export type LiveInstallationDecisionInput = Omit<
 type LiveContractInstanceInput = Omit<
   ContractInstanceRecord,
   | "id"
-  | "legacyWorkpieceId"
   | "upstreamAuthority"
   | "lifecycle"
   | "generation"
@@ -686,7 +629,7 @@ type LiveContractInstanceInput = Omit<
   | "createdSequence"
 > & {upstreamAuthority: LiveUpstreamAuthorityReference};
 
-type LiveBindingVerification = Exclude<BindingVerificationReference, {type: "legacyUnknown"}>;
+type LiveBindingVerification = BindingVerificationReference;
 
 /** Exact, capability-free request to materialize one bounded Agent Task dispatch. */
 export type MaterializeAgentTaskDispatchInput = Readonly<{
@@ -714,10 +657,6 @@ export type MaterializeAgentTaskDispatchInput = Readonly<{
 /** A closed mutation accepted by the in-process Workspace Authority module. */
 export type WorkspaceAuthorityCommand =
   | {type: "initialize"}
-  | {type: "beginBackfill"; migrationId: string}
-  | {type: "backfillLegacyContract"; legacyContractId: WorkpieceId}
-  | {type: "markReadyToCutover"; expectedDigest: string}
-  | {type: "cutover"; expectedDigest: string}
   | {
       type: "recordArtifactProposal";
       operationId: string;
@@ -896,18 +835,11 @@ export type WorkspaceAuthorityCommand =
       type: "recordAuthorityDebt";
       operationId: string;
       record: Omit<AuthorityDebtRecord, "id" | "revision">;
-    }
-  | {type: "mapLegacyConsumer"; legacyWorkpieceId: WorkpieceId}
-  | {type: "mapLegacySource"; legacyWorkpieceId: WorkpieceId}
-  | {type: "mapLegacyRequirement"; legacyKey: string};
+    };
 
 /** The result of a Workspace Authority mutation. */
 export type WorkspaceAuthorityCommandResult =
   | {type: "initialized"; changed: boolean; revision: number}
-  | {type: "backfillStarted"; changed: boolean; revision: number}
-  | {type: "legacyContractBackfilled"; instanceId: ContractInstanceId; changed: boolean}
-  | {type: "readyToCutover"; digest: string; revision: number}
-  | {type: "cutoverCompleted"; digest: string; sequence: number; revision: number}
   | {type: "artifactProposalRecorded"; id: ArtifactProposalId; sequence: number}
   | {
       type: "artifactApprovalRecorded";
@@ -963,15 +895,11 @@ export type WorkspaceAuthorityCommandResult =
   | {type: "bindingSuspended" | "bindingRetracted"; generation: number; sequence: number}
   | {type: "runtimeApprovalRequested"; id: RuntimeApprovalRequestId; sequence: number}
   | {type: "runtimeApprovalDecided"; id: RuntimeApprovalDecisionId; sequence: number}
-  | {type: "authorityDebtRecorded"; id: AuthorityDebtId; sequence: number}
-  | {type: "legacyConsumerMapped"; id: ConsumerId}
-  | {type: "legacySourceMapped"; id: SourceId}
-  | {type: "legacyRequirementMapped"; id: RequirementId};
+  | {type: "authorityDebtRecorded"; id: AuthorityDebtId; sequence: number};
 
 /** A closed read accepted by the in-process Workspace Authority module. */
 export type WorkspaceAuthorityQuery =
   | {type: "status"}
-  | {type: "cutoverCandidate"}
   | {type: "artifactProposal"; id: ArtifactProposalId}
   | {type: "artifactApproval"; id: ArtifactApprovalId}
   | {type: "artifactApprovalByProposal"; proposalId: ArtifactProposalId}
@@ -1014,14 +942,11 @@ export type WorkspaceAuthorityStatus = {
   revision: number;
   eventHighWatermark: number;
   pendingEffects: number;
-  pendingMigrationDeltas: number;
-  cutoverDigest?: string;
 };
 
 /** A discriminated bounded query result. */
 export type WorkspaceAuthorityQueryResult =
   | {type: "status"; value: WorkspaceAuthorityStatus}
-  | {type: "cutoverCandidate"; value: {digest: string; contractCount: number; bindingCount: number}}
   | {type: "artifactProposal"; value?: ArtifactProposalRecord}
   | {type: "artifactApproval"; value?: ArtifactApprovalRecord}
   | {type: "artifactApprovalByProposal"; value?: ArtifactApprovalRecord}
@@ -1072,7 +997,7 @@ export type WorkspaceAuthorityReconciliationResult = {attemptedEffects: number};
 /**
  * The small in-process seam used by the Workspace aggregate host and its tests.
  *
- * Storage layout, event sequencing, effect records, migrations, and readiness transitions stay
+ * Storage layout, event sequencing, effect records, and readiness transitions stay
  * inside the implementation. RPC adapters must translate into these closed commands and queries.
  */
 export interface WorkspaceAuthority {
@@ -1131,14 +1056,19 @@ export interface WorkspaceAuthority {
   completeEffect(effectId: string, claimToken: string): void;
   retryEffect(effectId: string, claimToken: string, now: number): void;
   nextEffectDueAt(): number | undefined;
-  resolveLegacyIdentity(
+  resolveHostIdentity(
     kind: "consumer" | "source" | "requirement",
-    legacyId: WorkpieceId | string,
+    hostId: WorkpieceId | string,
   ): string | undefined;
   ensureHostIdentity(
     kind: "consumer" | "source" | "requirement",
     hostId: WorkpieceId | string,
   ): string;
+  /** Projects canonical Binding runtime locators for one host Consumer. */
+  listHostBindings(
+    consumerHostId: WorkpieceId,
+    includeRetracted?: boolean,
+  ): readonly [string, HostBindingTarget][];
   recordConsumerLifecycleEvent(event: Readonly<{
     type: "developmentGrantChanged" | "developmentSessionChanged" |
       "workloadChanged" | "workloadRegistrationChanged";
@@ -1196,104 +1126,14 @@ export interface WorkspaceAuthority {
   ): Readonly<{principalId: string; generation: number; state: "active" | "revoked"}>;
 }
 
-/** One legacy Gadget binding edge retained only until canonical Binding cutover. */
-export type LegacyGadgetBindingRecord = {
+/** Capability-free host locator projected from one canonical Binding and Contract Instance. */
+export type HostBindingTarget = {
   target: WorkpieceId;
-  blueprintAnnotation?: BlueprintBindingAnnotation;
-  pending?: {chatId: number; sequence?: number};
 };
 
-/** The minimum legacy Gadget record used by the compatibility adapter. */
-export type LegacyGadgetAuthorityRecord = {
-  id: WorkpieceId;
-  title: string;
-  bindings: Record<string, LegacyGadgetBindingRecord>;
-};
-
-/** Existing Workspace storage behavior required by the temporary Gadget compatibility adapter. */
-export interface LegacyWorkspaceAuthorityAdapter<
-  Gadget extends LegacyGadgetAuthorityRecord = LegacyGadgetAuthorityRecord,
-> {
-  getGadget(id: WorkpieceId): Gadget | undefined;
-  listGadgets(): Iterable<Gadget>;
-  putGadget(gadget: Gadget): void;
-  hasContract(id: WorkpieceId): boolean;
-  hasGatekeeper(id: WorkpieceId): boolean;
-  getContract(id: WorkpieceId): LegacyContractAuthorityRecord | undefined;
-  listContracts(): Iterable<LegacyContractAuthorityRecord>;
-  getContractTombstone(id: WorkpieceId): LegacyContractAuthorityRecord | undefined;
-  listContractTombstones(): Iterable<LegacyContractAuthorityRecord>;
-  retractContract(id: WorkpieceId): readonly WorkpieceId[];
-  bumpConsumers(ids: readonly WorkpieceId[]): void;
-}
-
-/** The legacy combined Contract row consumed only by shadow backfill. */
-export type LegacyContractAuthorityRecord = Readonly<{
-  id: WorkpieceId;
-  artifactHash: string;
-  runtimeProfileHash: string;
-  sourceGatekeeperId: WorkpieceId;
-  approvedBy: string;
-  sharedStateKey?: string;
-}>;
-
-/** An opaque proof that the legacy Manager authoring path passed its rollout guard. */
-export interface LegacyManagerSourceAccess {
-  readonly gatekeeperId: WorkpieceId;
-  readonly chatId: number;
-  readonly [legacyManagerSourceAccessBrand]: true;
-}
-
-/** Bounded durable telemetry for the legacy Manager Source path. */
-export type LegacyManagerSourceTelemetryView = Readonly<{
-  totalUses: number;
-  recentUses: readonly Readonly<LegacyManagerSourceUse>[];
-}>;
-
-/**
- * Temporary adapter for pre-cutover Gadget bindings and Manager authoring Sources.
- *
- * This interface is intentionally separate from {@link WorkspaceAuthority}; no Authority Session,
- * Consumer Environment, Task Template, Task Dispatch, or Agent Task adapter may receive it.
- */
-export interface LegacyWorkspaceAuthorityCompatibility {
-  queryVisibleBindings(request: {
-    consumerId: WorkpieceId;
-    forChatId?: number;
-  }): [string, LegacyGadgetBindingRecord][];
-  /** Lists canonical lifecycle lineage, including invalidating and terminal Bindings, for cleanup. */
-  queryBindingLineage(request: {
-    consumerId: WorkpieceId;
-  }): [string, LegacyGadgetBindingRecord][];
-  bindContract(request: {
-    consumerId: WorkpieceId;
-    name: string;
-    contractId: WorkpieceId;
-    chatId?: number;
-  }): void;
-  unbind(request: {consumerId: WorkpieceId; name: string; forChatId?: number}): void;
-  renameBinding(request: {
-    consumerId: WorkpieceId;
-    oldName: string;
-    newName: string;
-  }): void;
-  retractContract(contractId: WorkpieceId): void;
-  authorizeLegacyManagerSource(request: {
-    surface: "managerAgentAuthoring";
-    chatId: number;
-    gatekeeperId: WorkpieceId;
-  }): LegacyManagerSourceAccess;
-  consumeLegacyManagerSourceAccess(access: LegacyManagerSourceAccess): Readonly<{
-    chatId: number;
-    gatekeeperId: WorkpieceId;
-  }>;
-  queryLegacyManagerSourceTelemetry(): LegacyManagerSourceTelemetryView;
-}
-
-/** Both deliberately disjoint interfaces implemented inside the Workspace aggregate. */
+/** The in-process Workspace Authority module. */
 export type WorkspaceAuthorityModule = {
   authority: WorkspaceAuthority;
-  compatibility: LegacyWorkspaceAuthorityCompatibility;
 };
 
 function status(storage: AuthorityStorage): WorkspaceAuthorityStatus {
@@ -1307,9 +1147,103 @@ function status(storage: AuthorityStorage): WorkspaceAuthorityStatus {
     revision: state?.revision ?? 0,
     eventHighWatermark: state ? state.nextEventSequence - 1 : 0,
     pendingEffects,
-    pendingMigrationDeltas: [...storage.authorityMigrationDeltas.list()].length,
-    ...(state?.cutoverDigest ? {cutoverDigest: state.cutoverDigest} : {}),
   };
+}
+
+function discardPreCutoverAuthority(storage: AuthorityStorage): void {
+  for (const record of Array.from(storage.workspaceAuthorityEvents.list())) {
+    storage.workspaceAuthorityEvents.delete(record.sequence);
+  }
+  for (const record of Array.from(storage.hostAuthorityIdentities.list())) {
+    storage.hostAuthorityIdentities.delete(record.key);
+  }
+  for (const record of Array.from(storage.workspaceAuthorityEffects.list())) {
+    storage.workspaceAuthorityEffects.delete(record.id);
+  }
+  for (const record of Array.from(storage.authorityManagerGrants.list())) {
+    storage.authorityManagerGrants.delete(record.principalId);
+  }
+  for (const record of Array.from(storage.authorityCommandReceipts.list())) {
+    storage.authorityCommandReceipts.delete(record.key);
+  }
+  for (const record of Array.from(storage.authorityOperations.list())) {
+    storage.authorityOperations.delete(record.id);
+  }
+  for (const record of Array.from(storage.authorityOwnerCommandReceipts.list())) {
+    storage.authorityOwnerCommandReceipts.delete(record.key);
+  }
+  for (const record of Array.from(storage.artifactApprovals.list())) {
+    storage.artifactApprovals.delete(record.id);
+  }
+  for (const record of Array.from(storage.artifactProposals.list())) {
+    storage.artifactProposals.delete(record.id);
+  }
+  for (const record of Array.from(storage.installationDecisions.list())) {
+    storage.installationDecisions.delete(record.id);
+  }
+  for (const record of Array.from(storage.taskDispatchDecisions.list())) {
+    storage.taskDispatchDecisions.delete(record.id);
+  }
+  for (const record of Array.from(storage.agentServiceProfiles.list())) {
+    storage.agentServiceProfiles.delete(record.id);
+  }
+  for (const record of Array.from(storage.workspacePrincipals.list())) {
+    storage.workspacePrincipals.delete(record.id);
+  }
+  for (const record of Array.from(storage.taskTemplateVersions.list())) {
+    storage.taskTemplateVersions.delete(record.id);
+  }
+  for (const record of Array.from(storage.taskTemplateApprovals.list())) {
+    storage.taskTemplateApprovals.delete(record.id);
+  }
+  for (const record of Array.from(storage.agentTasks.list())) {
+    storage.agentTasks.delete(record.id);
+  }
+  for (const record of Array.from(storage.agentTaskCancellations.list())) {
+    storage.agentTaskCancellations.delete(record.taskId);
+  }
+  for (const record of Array.from(storage.agentTaskCancellationReceipts.list())) {
+    storage.agentTaskCancellationReceipts.delete(record.key);
+  }
+  for (const record of Array.from(storage.agentTaskOperationalState.list())) {
+    storage.agentTaskOperationalState.delete(record.taskId);
+  }
+  for (const record of Array.from(storage.agentTaskTerminalIntents.list())) {
+    storage.agentTaskTerminalIntents.delete(record.id);
+  }
+  for (const record of Array.from(storage.agentTaskRatchetReceipts.list())) {
+    storage.agentTaskRatchetReceipts.delete(record.operationId);
+  }
+  for (const record of Array.from(storage.taskEnvironments.list())) {
+    storage.taskEnvironments.delete(record.id);
+  }
+  for (const record of Array.from(storage.bindingResolutions.list())) {
+    storage.bindingResolutions.delete(record.id);
+  }
+  for (const record of Array.from(storage.contractInstances.list())) {
+    storage.contractInstances.delete(record.id);
+  }
+  for (const record of Array.from(storage.bindings.list())) {
+    storage.bindings.delete(record.id);
+  }
+  for (const record of Array.from(storage.bindingPublicationPlans.list())) {
+    storage.bindingPublicationPlans.delete(record.id);
+  }
+  for (const record of Array.from(storage.invalidationIntents.list())) {
+    storage.invalidationIntents.delete(record.id);
+  }
+  for (const record of Array.from(storage.runtimeApprovalRequests.list())) {
+    storage.runtimeApprovalRequests.delete(record.id);
+  }
+  for (const record of Array.from(storage.runtimeApprovalDecisions.list())) {
+    storage.runtimeApprovalDecisions.delete(record.id);
+  }
+  for (const record of Array.from(storage.authorityDebts.list())) {
+    storage.authorityDebts.delete(record.id);
+  }
+  for (const record of Array.from(storage.authorityTombstones.list())) {
+    storage.authorityTombstones.delete(record.id);
+  }
 }
 
 function effectRetryDelay(effectId: string, attempt: number): number {
@@ -1423,101 +1357,6 @@ function validatePlacementDecision(
   }
 }
 
-function mapLegacyIdentity<Kind extends string>(
-  storage: AuthorityStorage,
-  kind: Kind,
-  legacyId: string | number,
-): AuthorityId<Kind> {
-  const key = compositeKey(kind, legacyId);
-  const existing = storage.legacyIdentityMap.get(key);
-  if (existing) return existing.canonicalId as AuthorityId<Kind>;
-  const canonicalId = issueAuthorityId<Kind>();
-  storage.legacyIdentityMap.put({key, canonicalId});
-  return canonicalId;
-}
-
-function findMappedLegacyIdentity<Kind extends string>(
-  storage: AuthorityStorage,
-  kind: Kind,
-  legacyId: string | number,
-): AuthorityId<Kind> | undefined {
-  const existing = storage.legacyIdentityMap.get(compositeKey(kind, legacyId));
-  return existing?.canonicalId as AuthorityId<Kind> | undefined;
-}
-
-function migrationSnapshot(storage: AuthorityStorage): {
-  digest: string;
-  contractCount: number;
-  bindingCount: number;
-} {
-  const records = [
-    ...storage.artifactApprovals.list(),
-    ...storage.installationDecisions.list(),
-    ...storage.taskDispatchDecisions.list(),
-    ...storage.contractInstances.list(),
-    ...storage.bindingResolutions.list(),
-    ...storage.bindings.list(),
-    ...storage.legacyIdentityMap.list(),
-  ];
-  return {
-    digest: digestText(JSON.stringify(records)),
-    contractCount: [...storage.contractInstances.list()].length,
-    bindingCount: [...storage.bindings.list()].filter(binding => binding.status !== "retracted").length,
-  };
-}
-
-function findLegacyPlacement<Gadget extends LegacyGadgetAuthorityRecord>(
-  adapter: LegacyWorkspaceAuthorityAdapter<Gadget>,
-  contractId: WorkpieceId,
-): {gadget: Gadget; name: string; edge: LegacyGadgetBindingRecord} | undefined {
-  let result: {gadget: Gadget; name: string; edge: LegacyGadgetBindingRecord} | undefined;
-  for (const gadget of adapter.listGadgets()) {
-    for (const [name, edge] of Object.entries(gadget.bindings)) {
-      if (edge.target !== contractId) continue;
-      if (edge.pending) {
-        throw new Error(`Cannot backfill pending legacy Binding ${gadget.id}.${name}.`);
-      }
-      if (result) throw new Error(`Legacy Contract ${contractId} has more than one placement.`);
-      result = {gadget, name, edge};
-    }
-  }
-  return result;
-}
-
-function appendMigrationDelta(
-  storage: AuthorityStorage,
-  legacyContractId: WorkpieceId,
-  kind: AuthorityMigrationDelta["kind"],
-): void {
-  const state = requireAuthorityState(storage);
-  if (state.state !== "backfilling" && state.state !== "readyToCutover") return;
-  const sequence = storage.nextAuthorityMigrationDeltaSequence.get();
-  storage.nextAuthorityMigrationDeltaSequence.put(sequence + 1);
-  storage.authorityMigrationDeltas.put({sequence, legacyContractId, kind});
-  if (state.state === "readyToCutover") {
-    const {cutoverDigest: _cutoverDigest, ...withoutDigest} = state;
-    storage.workspaceAuthorityState.put({
-      ...withoutDigest,
-      state: "backfilling",
-      revision: state.revision + 1,
-    });
-  }
-}
-
-function discardStagedContract(storage: AuthorityStorage, instance: ContractInstanceRecord): void {
-  const stagedBindings = Array.from(storage.bindings.byInstance.get(instance.id));
-  for (const binding of stagedBindings) {
-    storage.bindingResolutions.delete(binding.resolutionId);
-    storage.bindings.delete(binding.id);
-  }
-  storage.authorityTombstones.bySubject.delete(compositeKey("contractInstance", instance.id));
-  storage.contractInstances.delete(instance.id);
-  storage.artifactApprovals.delete(instance.artifactApprovalId);
-  if (instance.placementDecision.type === "installation") {
-    storage.installationDecisions.delete(instance.placementDecision.decisionId);
-  }
-}
-
 function transitionContractInstance(
   storage: AuthorityStorage,
   instanceId: ContractInstanceId,
@@ -1623,210 +1462,6 @@ function succeedAuthorityEffect(
     claimToken: undefined, claimUntil: undefined, reason: undefined});
 }
 
-function backfillLegacyContract<Gadget extends LegacyGadgetAuthorityRecord>(
-  storage: AuthorityStorage,
-  adapter: LegacyWorkspaceAuthorityAdapter<Gadget>,
-  legacy: LegacyContractAuthorityRecord,
-  terminal: boolean,
-): {instanceId: ContractInstanceId; changed: boolean} {
-  const existingId = mapLegacyIdentity(storage, "contractInstance", legacy.id);
-  const existing = storage.contractInstances.get(existingId);
-  if (existing) {
-    if (existing.artifactHash !== legacy.artifactHash ||
-        existing.runtimeProfileHash !== legacy.runtimeProfileHash) {
-      throw new Error(`Legacy Contract ${legacy.id} changed after it was staged.`);
-    }
-    const deltas = [...storage.authorityMigrationDeltas.byContract.get(legacy.id)];
-    if (deltas.length === 0) return {instanceId: existingId, changed: false};
-    discardStagedContract(storage, existing);
-  }
-  const sourceId = mapLegacyIdentity(storage, "source", legacy.sourceGatekeeperId);
-  const approvalId = mapLegacyIdentity(storage, "artifactApproval", legacy.id);
-  const decisionId = mapLegacyIdentity(storage, "installationDecision", legacy.id);
-  const upstreamAuthority: UpstreamAuthorityReference = {
-    sourceId,
-    sourceGeneration: 1,
-    origin: {type: "legacyGatekeeper", workpieceId: legacy.sourceGatekeeperId},
-  };
-  const placement = terminal ? undefined : findLegacyPlacement(adapter, legacy.id);
-  const consumer: ConsumerReference | undefined = placement
-    ? {
-        type: "standing",
-        consumerId: mapLegacyIdentity(storage, "consumer", placement.gadget.id),
-        generation: 1,
-      }
-    : undefined;
-  const requirement: BindingRequirementReference | undefined = placement
-    ? {
-        type: "environment",
-        bindingSetId: mapLegacyIdentity(storage, "bindingSet", placement.gadget.id),
-        bindingSetVersion: 1,
-        requirementId: mapLegacyIdentity(
-          storage,
-          "requirement",
-          compositeKey(placement.gadget.id, placement.name),
-        ),
-        requirementVersion: 1,
-      }
-    : undefined;
-  let approvalEpoch = 1;
-  while (storage.artifactApprovals.byArtifactEpoch.get(
-    compositeKey(legacy.artifactHash, approvalEpoch),
-  )) {
-    approvalEpoch++;
-  }
-  storage.artifactApprovals.put({
-    id: approvalId,
-    artifactHash: legacy.artifactHash,
-    approvalEpoch,
-    evidence: "legacyUnknown",
-    decision: "approved",
-    decidedBy: legacy.approvedBy,
-    decisionSequence: 0,
-    lifecycle: "active",
-    revision: 1,
-  });
-  storage.installationDecisions.put({
-    id: decisionId,
-    operationId: `legacy-contract:${legacy.id}`,
-    proposalDigest: digestText(`legacy-contract:${legacy.id}`),
-    decision: "approved",
-    decidedBy: legacy.approvedBy,
-    decisionSequence: 0,
-    ...(consumer ? {consumer} : {}),
-    ...(requirement ? {requirement} : {}),
-    ...(placement ? {intendedBindingName: placement.name, expectedBindingGeneration: 0} : {}),
-  });
-  const instance: ContractInstanceRecord = {
-    id: existingId,
-    legacyWorkpieceId: legacy.id,
-    runtimeWorkpieceId: legacy.id,
-    artifactApprovalId: approvalId,
-    artifactHash: legacy.artifactHash,
-    runtimeProfileHash: legacy.runtimeProfileHash,
-    upstreamAuthority,
-    sourceGatekeeperId: legacy.sourceGatekeeperId,
-    placementDecision: {type: "installation", decisionId},
-    ...(consumer ? {intendedConsumer: consumer} : {}),
-    ...(requirement ? {intendedRequirement: requirement} : {}),
-    sharedState: legacy.sharedStateKey
-      ? {type: "shared", key: legacy.sharedStateKey}
-      : {type: "isolated"},
-    lifecycle: terminal ? "retracted" : placement ? "ready" : "prepared",
-    generation: 1,
-    revision: 1,
-    createdSequence: 0,
-  };
-  storage.contractInstances.put(instance);
-  if (terminal) {
-    storage.authorityTombstones.put({
-      id: mapLegacyIdentity(storage, "authorityTombstone", legacy.id),
-      subject: {type: "contractInstance", id: instance.id},
-      terminalReason: "legacy-contract-retracted",
-      terminalSequence: 0,
-      cleanup: "complete",
-    });
-  }
-  if (placement && consumer && requirement) {
-    const bindingId = mapLegacyIdentity(
-      storage,
-      "binding",
-      compositeKey(placement.gadget.id, placement.name),
-    );
-    const resolutionId = mapLegacyIdentity(
-      storage,
-      "bindingResolution",
-      compositeKey(placement.gadget.id, placement.name),
-    );
-    storage.bindingResolutions.put({
-      id: resolutionId,
-      consumer,
-      requirement,
-      upstreamAuthority,
-      verification: {type: "legacyUnknown"},
-      artifactApprovalId: approvalId,
-      artifactApprovalEpoch: approvalEpoch,
-      placementDecision: {type: "installation", decisionId},
-      contractInstanceId: instance.id,
-      bindingId,
-      sharedState: instance.sharedState,
-      expectedBindingGeneration: 0,
-      evaluatorPolicyHash: "legacy:unknown",
-      createdSequence: 0,
-    });
-    storage.bindings.put({
-      id: bindingId,
-      consumer,
-      name: placement.name,
-      requirement,
-      contractInstanceId: instance.id,
-      resolutionId,
-      status: "active",
-      generation: 1,
-      revision: 1,
-      installedSequence: 0,
-    });
-  }
-  storage.authorityMigrationDeltas.byContract.delete(legacy.id);
-  return {instanceId: instance.id, changed: true};
-}
-
-function validateBackfill<Gadget extends LegacyGadgetAuthorityRecord>(
-  storage: AuthorityStorage,
-  adapter: LegacyWorkspaceAuthorityAdapter<Gadget>,
-): void {
-  if ([...storage.authorityMigrationDeltas.list()].length !== 0) {
-    throw new Error("Legacy migration deltas must be replayed before cutover.");
-  }
-  // Durable Object KV permits only one live list iterator. Snapshot both legacy collections
-  // before validation opens canonical indexes or scans Gadget placements.
-  const liveContracts = Array.from(adapter.listContracts());
-  const contractTombstones = Array.from(adapter.listContractTombstones());
-  for (const legacy of liveContracts) {
-    const instance = storage.contractInstances.byLegacyWorkpieceId.get(legacy.id);
-    if (!instance) throw new Error(`Legacy Contract ${legacy.id} has not been backfilled.`);
-    const placement = findLegacyPlacement(adapter, legacy.id);
-    if (!placement) continue;
-    const consumerId = mapLegacyIdentity(storage, "consumer", placement.gadget.id);
-    const binding = storage.bindings.currentByConsumerName.get(
-      compositeKey(consumerId, placement.name),
-    );
-    if (!binding || binding.contractInstanceId !== instance.id) {
-      throw new Error(`Legacy Binding ${placement.gadget.id}.${placement.name} is not canonical.`);
-    }
-  }
-  for (const legacy of contractTombstones) {
-    const instance = storage.contractInstances.byLegacyWorkpieceId.get(legacy.id);
-    if (!instance || instance.lifecycle !== "retracted") {
-      throw new Error(`Legacy Contract tombstone ${legacy.id} has not been backfilled.`);
-    }
-    const tombstone = storage.authorityTombstones.bySubject.get(
-      compositeKey("contractInstance", instance.id),
-    );
-    if (!tombstone) {
-      throw new Error(`Legacy Contract tombstone ${legacy.id} has no canonical lineage.`);
-    }
-  }
-}
-
-function requireGadget<Gadget extends LegacyGadgetAuthorityRecord>(
-  adapter: LegacyWorkspaceAuthorityAdapter<Gadget>,
-  id: WorkpieceId,
-): Gadget {
-  const gadget = adapter.getGadget(id);
-  if (!gadget) throw new Error(`No such Gadget: ${id}`);
-  return gadget;
-}
-
-function visibleBindings(
-  gadget: LegacyGadgetAuthorityRecord,
-  forChatId?: number,
-): [string, LegacyGadgetBindingRecord][] {
-  return Object.entries(gadget.bindings).filter(
-    ([, edge]) => !edge.pending || edge.pending.chatId === forChatId,
-  );
-}
-
 function requireAuthorityCommandContext(
   storage: AuthorityStorage,
   session: AuthoritySessionBinding,
@@ -1856,18 +1491,13 @@ function requireAuthorityCommandContext(
 }
 
 /** Creates the sole in-process Workspace Authority module over the existing Workspace storage. */
-export function createWorkspaceAuthorityModule<
-  Gadget extends LegacyGadgetAuthorityRecord = LegacyGadgetAuthorityRecord,
->(
+export function createWorkspaceAuthorityModule(
   durableStorage: DurableObjectStorage,
-  adapter: LegacyWorkspaceAuthorityAdapter<Gadget>,
 ): WorkspaceAuthorityModule {
   const storage = makeAuthorityStorage(durableStorage);
   const consumerFacts = createConsumerEnvironmentAuthority(durableStorage, () => {
     throw new Error("Task fact reads never resolve a capability environment.");
   });
-  const issuedLegacyManagerSourceAccess = new WeakSet<object>();
-
   const authority: WorkspaceAuthority = {
     openSession(principalId, isOwner) {
       return storage.transaction(() => {
@@ -2437,15 +2067,24 @@ export function createWorkspaceAuthorityModule<
         case "initialize":
           return storage.transaction(() => {
             const current = storage.workspaceAuthorityState.get();
-            if (current) {
+            if (current && (current as {state: string}).state === "active") {
+              const imported = Array.from(storage.artifactApprovals.list()).some(
+                approval => (approval as {evidence: string}).evidence === "legacyUnknown",
+              );
+              if (imported) {
+                throw new Error(
+                  "Legacy-imported Workspace Authority is unsupported after hard cutover.",
+                );
+              }
               return {type: "initialized", changed: false, revision: current.revision};
             }
+            if (current) discardPreCutoverAuthority(storage);
             const initial: WorkspaceAuthorityState = {
-              state: "legacy",
-              revision: 1,
+              state: "active",
+              revision: (current?.revision ?? 0) + 1,
               nextEventSequence: 2,
-              authorityEpoch: 1,
-              ownerGeneration: 1,
+              authorityEpoch: (current?.authorityEpoch ?? 0) + 1,
+              ownerGeneration: (current?.ownerGeneration ?? 0) + 1,
             };
             storage.workspaceAuthorityState.put(initial);
             storage.workspaceAuthorityEvents.put({
@@ -2454,82 +2093,6 @@ export function createWorkspaceAuthorityModule<
               revision: initial.revision,
             });
             return {type: "initialized", changed: true, revision: initial.revision};
-          });
-        case "beginBackfill":
-          return storage.transaction(() => {
-            const current = requireAuthorityState(storage);
-            if (current.state === "backfilling" && current.migrationId === command.migrationId) {
-              return {type: "backfillStarted", changed: false, revision: current.revision};
-            }
-            if (current.state !== "legacy") {
-              throw new Error(`Cannot begin backfill while authority is ${current.state}.`);
-            }
-            const next = {
-              ...current,
-              state: <const>"backfilling",
-              revision: current.revision + 1,
-              migrationId: command.migrationId,
-            };
-            storage.workspaceAuthorityState.put(next);
-            return {type: "backfillStarted", changed: true, revision: next.revision};
-          });
-        case "backfillLegacyContract":
-          return storage.transaction(() => {
-            if (requireAuthorityState(storage).state !== "backfilling") {
-              throw new Error("Legacy backfill is not active.");
-            }
-            const live = adapter.getContract(command.legacyContractId);
-            const legacy = live ?? adapter.getContractTombstone(command.legacyContractId);
-            if (!legacy) throw new Error(`No such legacy Contract: ${command.legacyContractId}`);
-            const result = backfillLegacyContract(storage, adapter, legacy, !live);
-            return {type: "legacyContractBackfilled", ...result};
-          });
-        case "markReadyToCutover":
-          return storage.transaction(() => {
-            const current = requireAuthorityState(storage);
-            if (current.state !== "backfilling") {
-              throw new Error(`Cannot prepare cutover while authority is ${current.state}.`);
-            }
-            validateBackfill(storage, adapter);
-            const snapshot = migrationSnapshot(storage);
-            if (snapshot.digest !== command.expectedDigest) {
-              throw new Error("Cutover candidate digest changed.");
-            }
-            const next = {
-              ...current,
-              state: <const>"readyToCutover",
-              revision: current.revision + 1,
-              cutoverDigest: snapshot.digest,
-            };
-            storage.workspaceAuthorityState.put(next);
-            return {type: "readyToCutover", digest: snapshot.digest, revision: next.revision};
-          });
-        case "cutover":
-          return storage.transaction(() => {
-            const current = requireAuthorityState(storage);
-            if (current.state !== "readyToCutover") {
-              throw new Error(`Cannot cut over while authority is ${current.state}.`);
-            }
-            validateBackfill(storage, adapter);
-            const snapshot = migrationSnapshot(storage);
-            if (snapshot.digest !== command.expectedDigest ||
-                current.cutoverDigest !== command.expectedDigest) {
-              throw new Error("Cutover candidate digest changed.");
-            }
-            const sequence = appendAuthorityEvent(storage, {
-              type: "migrationBaseline",
-              operationId: current.migrationId,
-              migrationBaseline: {...snapshot, unknownHistory: true},
-            });
-            const afterEvent = requireAuthorityState(storage);
-            const next = {...afterEvent, state: <const>"active"};
-            storage.workspaceAuthorityState.put(next);
-            return {
-              type: "cutoverCompleted",
-              digest: snapshot.digest,
-              sequence,
-              revision: next.revision,
-            };
           });
         case "recordArtifactProposal":
           return storage.transaction(() => {
@@ -3623,7 +3186,6 @@ export function createWorkspaceAuthorityModule<
             if (existing) {
               const {
                 id: _id,
-                legacyWorkpieceId: _legacyWorkpieceId,
                 providerBacking: _providerBacking,
                 lifecycle: _lifecycle,
                 generation: _generation,
@@ -3670,7 +3232,6 @@ export function createWorkspaceAuthorityModule<
                 command.result.contractInstance.generation !== instance.generation ||
                 command.result.state !== "prepared" ||
                 command.result.cleanup !== "not-required" ||
-                instance.upstreamAuthority.origin.type === "legacyGatekeeper" ||
                 instance.upstreamAuthority.origin.id !== command.result.provider.accountId ||
                 instance.upstreamAuthority.origin.generation !==
                   command.result.provider.sourceGeneration) {
@@ -4246,43 +3807,12 @@ export function createWorkspaceAuthorityModule<
             storage.authorityDebts.put({...structuredClone(command.record), id, revision: 1});
             return {type: "authorityDebtRecorded", id, sequence};
           });
-        case "mapLegacyConsumer":
-          if (requireAuthorityState(storage).state === "active") {
-            throw new Error("Legacy identity mapping is closed after cutover.");
-          }
-          return {
-            type: "legacyConsumerMapped",
-            id: mapLegacyIdentity(storage, "consumer", command.legacyWorkpieceId),
-          };
-        case "mapLegacySource":
-          if (requireAuthorityState(storage).state === "active") {
-            throw new Error("Legacy identity mapping is closed after cutover.");
-          }
-          return {
-            type: "legacySourceMapped",
-            id: mapLegacyIdentity(storage, "source", command.legacyWorkpieceId),
-          };
-        case "mapLegacyRequirement":
-          if (requireAuthorityState(storage).state === "active") {
-            throw new Error("Legacy identity mapping is closed after cutover.");
-          }
-          return {
-            type: "legacyRequirementMapped",
-            id: mapLegacyIdentity(storage, "requirement", command.legacyKey),
-          };
       }
     },
     query(query) {
       switch (query.type) {
         case "status":
           return {type: "status", value: status(storage)};
-        case "cutoverCandidate": {
-          const state = requireAuthorityState(storage);
-          if (state.state !== "backfilling" && state.state !== "readyToCutover") {
-            throw new Error(`No cutover candidate while authority is ${state.state}.`);
-          }
-          return {type: "cutoverCandidate", value: migrationSnapshot(storage)};
-        }
         case "artifactApproval":
           return {
             type: "artifactApproval",
@@ -4380,8 +3910,7 @@ export function createWorkspaceAuthorityModule<
           return {
             type: "contractInstanceByRuntimeWorkpiece",
             value: requireAuthorityState(storage).state === "active"
-              ? storage.contractInstances.byRuntimeWorkpieceId.get(query.runtimeWorkpieceId) ??
-                storage.contractInstances.byLegacyWorkpieceId.get(query.runtimeWorkpieceId)
+              ? storage.contractInstances.byRuntimeWorkpieceId.get(query.runtimeWorkpieceId)
               : undefined,
           };
         case "binding":
@@ -4478,7 +4007,7 @@ export function createWorkspaceAuthorityModule<
           }
           const instance = storage.contractInstances.byRuntimeWorkpieceId.get(
             query.runtimeWorkpieceId,
-          ) ?? storage.contractInstances.byLegacyWorkpieceId.get(query.runtimeWorkpieceId);
+          );
           if (!instance || instance.lifecycle !== "ready") {
             return {type: "bindingExecutionByRuntimeWorkpiece", value: undefined};
           }
@@ -5098,9 +4627,8 @@ export function createWorkspaceAuthorityModule<
         ? next.claimUntil ?? next.nextAttemptAt
         : next?.nextAttemptAt;
     },
-    resolveLegacyIdentity(kind, legacyId) {
-      return storage.hostAuthorityIdentities.get(compositeKey(kind, legacyId))?.canonicalId ??
-        findMappedLegacyIdentity(storage, kind, legacyId);
+    resolveHostIdentity(kind, hostId) {
+      return storage.hostAuthorityIdentities.get(compositeKey(kind, hostId))?.canonicalId;
     },
     ensureHostIdentity(kind, hostId) {
       requireAuthorityState(storage);
@@ -5108,8 +4636,7 @@ export function createWorkspaceAuthorityModule<
         const key = compositeKey(kind, hostId);
         const existing = storage.hostAuthorityIdentities.get(key);
         if (existing) return existing.canonicalId;
-        const canonicalId = findMappedLegacyIdentity(storage, kind, hostId) ??
-          issueAuthorityId<typeof kind>();
+        const canonicalId = issueAuthorityId<typeof kind>();
         const createdSequence = appendAuthorityEvent(storage, {
           type: "hostAuthorityIdentityIssued",
           subjectId: canonicalId,
@@ -5117,6 +4644,31 @@ export function createWorkspaceAuthorityModule<
         storage.hostAuthorityIdentities.put({key, kind, hostId, canonicalId, createdSequence});
         return canonicalId;
       });
+    },
+    listHostBindings(consumerHostId, includeRetracted = false) {
+      requireActiveAuthority(storage);
+      const canonicalConsumerId = storage.hostAuthorityIdentities.get(
+        compositeKey("consumer", consumerHostId),
+      )?.canonicalId;
+      if (!canonicalConsumerId) return [];
+      return Array.from(storage.bindings.byConsumer.get(canonicalConsumerId as ConsumerId))
+        .filter(binding => includeRetracted || binding.status === "active")
+        .filter(binding => includeRetracted ||
+          !Array.from(storage.invalidationIntents.byBinding.get(binding.id))
+            .some(intent => intent.state !== "committed"))
+        .toSorted((left, right) => {
+          const terminalOrder = Number(left.status === "retracted") -
+            Number(right.status === "retracted");
+          return terminalOrder || right.generation - left.generation;
+        })
+        .flatMap(binding => {
+          const instance = storage.contractInstances.get(binding.contractInstanceId);
+          if (instance?.runtimeWorkpieceId === undefined) return [];
+          return [[
+            binding.name,
+            {target: instance.runtimeWorkpieceId},
+          ] as [string, HostBindingTarget]];
+        });
     },
     recordConsumerLifecycleEvent(event) {
       storage.transaction(() => {
@@ -5126,246 +4678,5 @@ export function createWorkspaceAuthorityModule<
     },
   };
 
-  const compatibility: LegacyWorkspaceAuthorityCompatibility = {
-    queryVisibleBindings({consumerId, forChatId}) {
-      const gadget = requireGadget(adapter, consumerId);
-      if (requireAuthorityState(storage).state !== "active") {
-        return visibleBindings(gadget, forChatId);
-      }
-      const canonicalConsumerId =
-        storage.hostAuthorityIdentities.get(compositeKey("consumer", consumerId))?.canonicalId ??
-        findMappedLegacyIdentity(storage, "consumer", consumerId);
-      if (!canonicalConsumerId) return [];
-      const projected: [string, LegacyGadgetBindingRecord][] = [];
-      for (const binding of storage.bindings.byConsumer.get(canonicalConsumerId as ConsumerId)) {
-        if (binding.status !== "active" ||
-            [...storage.invalidationIntents.byBinding.get(binding.id)]
-              .some(intent => intent.state !== "committed")) continue;
-        const instance = storage.contractInstances.get(binding.contractInstanceId);
-        const runtimeWorkpieceId = instance?.runtimeWorkpieceId ?? instance?.legacyWorkpieceId;
-        if (runtimeWorkpieceId === undefined) continue;
-        const metadata = gadget.bindings[binding.name];
-        projected.push([
-          binding.name,
-          {
-            target: runtimeWorkpieceId,
-            ...(metadata?.blueprintAnnotation
-              ? {blueprintAnnotation: metadata.blueprintAnnotation}
-              : {}),
-          },
-        ]);
-      }
-      return projected;
-    },
-    queryBindingLineage({consumerId}) {
-      const gadget = requireGadget(adapter, consumerId);
-      if (requireAuthorityState(storage).state !== "active") {
-        return Object.entries(gadget.bindings);
-      }
-      const canonicalConsumerId =
-        storage.hostAuthorityIdentities.get(compositeKey("consumer", consumerId))?.canonicalId ??
-        findMappedLegacyIdentity(storage, "consumer", consumerId);
-      if (!canonicalConsumerId) return [];
-      return Array.from(storage.bindings.byConsumer.get(canonicalConsumerId as ConsumerId))
-        .toSorted((left, right) => {
-          const terminalOrder = Number(left.status === "retracted") -
-            Number(right.status === "retracted");
-          return terminalOrder || right.generation - left.generation;
-        })
-        .flatMap(binding => {
-          const instance = storage.contractInstances.get(binding.contractInstanceId);
-          const runtimeWorkpieceId = instance?.runtimeWorkpieceId ?? instance?.legacyWorkpieceId;
-          if (runtimeWorkpieceId === undefined) return [];
-          const metadata = gadget.bindings[binding.name];
-          return [[
-            binding.name,
-            {
-              target: runtimeWorkpieceId,
-              ...(metadata?.blueprintAnnotation
-                ? {blueprintAnnotation: metadata.blueprintAnnotation}
-                : {}),
-            },
-          ] as [string, LegacyGadgetBindingRecord]];
-        });
-    },
-    bindContract({consumerId, name, contractId, chatId}) {
-      storage.transaction(() => {
-        if (requireAuthorityState(storage).state === "active") {
-          throw new Error("Legacy Binding writes are disabled after canonical cutover.");
-        }
-        validateBindingName(name);
-        if (name === "GADGET") throw new Error("The binding name `GADGET` is reserved.");
-        const gadget = requireGadget(adapter, consumerId);
-        const existing = gadget.bindings[name];
-        if (existing) {
-          if (existing.pending && existing.pending.chatId !== chatId) {
-            throw new Error(`The binding name "${name}" is already proposed by another chat. ` +
-              "Accept or revert that chat's changes first, or choose a different name.");
-          }
-          throw new Error(`There is already a binding named "${name}".`);
-        }
-        if (!adapter.hasContract(contractId)) {
-          if (adapter.getGadget(contractId)) {
-            throw new Error("Gadget-to-gadget bindings are not supported yet.");
-          }
-          if (adapter.hasGatekeeper(contractId)) {
-            throw new Error("Gadgets can only bind installed Contracts, not raw Sources.");
-          }
-          throw new Error(`No such Contract: ${contractId}`);
-        }
-        for (const other of adapter.listGadgets()) {
-          const placement = Object.entries(other.bindings).find(
-            ([, edge]) => edge.target === contractId,
-          );
-          if (placement) {
-            throw new Error(`Contract ${contractId} is already installed as ` +
-              `${other.title}.${placement[0]}; create and approve a separate Contract instance ` +
-              "for another binding placement.");
-          }
-        }
-        gadget.bindings[name] = {
-          target: contractId,
-          ...(chatId === undefined ? {} : {pending: {chatId}}),
-        };
-        adapter.putGadget(gadget);
-        appendMigrationDelta(storage, contractId, "bindingAdded");
-      });
-      adapter.bumpConsumers([consumerId]);
-    },
-    unbind({consumerId, name, forChatId}) {
-      storage.transaction(() => {
-        if (requireAuthorityState(storage).state === "active") {
-          throw new Error("Legacy Binding writes are disabled after canonical cutover.");
-        }
-        const gadget = requireGadget(adapter, consumerId);
-        const edge = gadget.bindings[name];
-        if (!edge || (edge.pending && edge.pending.chatId !== forChatId && forChatId !== undefined)) {
-          throw new Error(`No such binding: ${name}`);
-        }
-        delete gadget.bindings[name];
-        adapter.putGadget(gadget);
-        appendMigrationDelta(storage, edge.target, "bindingRemoved");
-      });
-      adapter.bumpConsumers([consumerId]);
-    },
-    renameBinding({consumerId, oldName, newName}) {
-      storage.transaction(() => {
-        if (requireAuthorityState(storage).state === "active") {
-          throw new Error("Legacy Binding writes are disabled after canonical cutover.");
-        }
-        const gadget = requireGadget(adapter, consumerId);
-        const edge = gadget.bindings[oldName];
-        if (!edge) throw new Error(`No such binding: ${oldName}`);
-        if (oldName === newName) return;
-        validateBindingName(newName);
-        if (newName === "GADGET") throw new Error("The binding name `GADGET` is reserved.");
-        if (gadget.bindings[newName]) {
-          throw new Error(`There is already a binding named "${newName}".`);
-        }
-        delete gadget.bindings[oldName];
-        gadget.bindings[newName] = edge;
-        adapter.putGadget(gadget);
-        appendMigrationDelta(storage, edge.target, "bindingRenamed");
-      });
-      adapter.bumpConsumers([consumerId]);
-    },
-    retractContract(contractId) {
-      const consumers = storage.transaction(() => {
-        const state = requireAuthorityState(storage);
-        if (state.state !== "active") {
-          appendMigrationDelta(storage, contractId, "contractRetracted");
-        } else {
-          const instance = storage.contractInstances.byLegacyWorkpieceId.get(contractId);
-          if (instance && instance.lifecycle !== "retracted") {
-            const bindings = Array.from(storage.bindings.byInstance.get(instance.id))
-              .filter(binding => binding.status !== "retracted");
-            let terminalSequence: number | undefined;
-            for (const binding of bindings) {
-              const generation = binding.generation + 1;
-              const sequence = appendAuthorityEvent(storage, {
-                type: "bindingRetracted",
-                subjectId: binding.id,
-                operationId: `legacy-contract-delete:${contractId}`,
-                beforeGeneration: binding.generation,
-                afterGeneration: generation,
-              });
-              terminalSequence = sequence;
-              storage.bindings.put({
-                ...binding,
-                status: "retracted",
-                generation,
-                revision: binding.revision + 1,
-              });
-              storage.authorityTombstones.put({
-                id: issueAuthorityId<"authorityTombstone">(),
-                subject: {type: "binding", id: binding.id},
-                lineage: binding.predecessorId,
-                terminalReason: "legacy-contract-deleted",
-                terminalSequence: sequence,
-                cleanup: "pending",
-              });
-            }
-            terminalSequence ??= appendAuthorityEvent(storage, {
-              type: "contractInstanceRetracted",
-              subjectId: instance.id,
-              operationId: `legacy-contract-delete:${contractId}`,
-              beforeGeneration: instance.generation,
-              afterGeneration: instance.generation + 1,
-            });
-            transitionContractInstance(
-              storage,
-              instance.id,
-              "retracted",
-              terminalSequence,
-              "legacy-contract-deleted",
-            );
-          }
-        }
-        return adapter.retractContract(contractId);
-      });
-      adapter.bumpConsumers(consumers);
-    },
-    authorizeLegacyManagerSource({surface, chatId, gatekeeperId}) {
-      if (surface !== "managerAgentAuthoring") {
-        throw new Error("Legacy Manager Sources are restricted to Manager agent authoring.");
-      }
-      if (!adapter.hasGatekeeper(gatekeeperId)) {
-        throw new Error(`No such legacy Source: ${gatekeeperId}`);
-      }
-      const access: LegacyManagerSourceAccess = {
-        gatekeeperId,
-        chatId,
-        [legacyManagerSourceAccessBrand]: true,
-      };
-      issuedLegacyManagerSourceAccess.add(access);
-      return access;
-    },
-    consumeLegacyManagerSourceAccess(access) {
-      if (!issuedLegacyManagerSourceAccess.delete(access)) {
-        throw new Error("Legacy Manager Source access was forged, reused, or issued before restart.");
-      }
-      storage.transaction(() => {
-        const current = storage.legacyManagerSourceTelemetry.get();
-        const nextUse = {
-          chatId: access.chatId,
-          gatekeeperId: access.gatekeeperId,
-          observedAt: Date.now(),
-        };
-        storage.legacyManagerSourceTelemetry.put({
-          totalUses: Math.min(Number.MAX_SAFE_INTEGER, current.totalUses + 1),
-          recentUses: [...current.recentUses, nextUse].slice(-LEGACY_MANAGER_SOURCE_SAMPLE_LIMIT),
-        });
-      });
-      return {
-        gatekeeperId: access.gatekeeperId,
-        chatId: access.chatId,
-      };
-    },
-    queryLegacyManagerSourceTelemetry() {
-      const telemetry = storage.legacyManagerSourceTelemetry.get();
-      return structuredClone(telemetry);
-    },
-  };
-
-  return {authority, compatibility};
+  return {authority};
 }

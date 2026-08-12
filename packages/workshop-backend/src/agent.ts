@@ -259,11 +259,6 @@ export interface AgentHooks {
   // incorporated into the returned description.)
   describeBinding(envName: string, id: WorkpieceId): Promise<string>;
 
-  // Add a binding to the given gadget, pointing at the given workpiece. The binding is provisional
-  // to the chat. The caller is responsible for getting the addition recorded in the chat log (see
-  // `addedBindings` on the "changes" message) so the pending edge gets sequence-stamped.
-  addGadgetBinding(gadgetId: WorkpieceId, name: string, target: WorkpieceId, chatId: number): void;
-
   // Prepare (seeding/naming lazily as needed) and return the chat's seed binding layer, including
   // the always-available (ambient) resources with their discovery catalogs. Called at turn start,
   // before history replay; this is also the chokepoint that stamps binding names onto any
@@ -405,7 +400,7 @@ When the user asks for a new Gadget, ALWAYS consider starting from a blueprint. 
 
 Note that users rarely ask for "a Gadget" in those words. They ask for a thing: a doc, a deck, a tracker, a tool that does X. Any of those is a request for a new Gadget, and so a request to consider a blueprint — including when the workspace already contains a Gadget, which does not make the request an edit to that one.
 
-Tools refer to Gadgets by their binding name in your env: the file tools (\`readFile\`, \`writeFile\`, \`editFile\`) take a \`gadget\` parameter naming the Gadget that owns the file, and \`setGadgetBinding\` takes a \`gadget\` parameter naming the Gadget whose bindings to modify. Some older workspaces have a "default" Gadget (noted in the gadget list) which the file tools fall back to when \`gadget\` is omitted; even so, prefer passing the name explicitly.
+Tools refer to Gadgets by their binding name in your env: the file tools (\`readFile\`, \`writeFile\`, \`editFile\`) take a \`gadget\` parameter naming the Gadget that owns the file. Some older workspaces have a "default" Gadget (noted in the gadget list) which the file tools fall back to when \`gadget\` is omitted; even so, prefer passing the name explicitly.
 
 # Writing Gadgets
 
@@ -608,16 +603,6 @@ Sometimes user messages may contain text like \`[Resource Title](env.SOME_NAME)\
 IMPORTANT: The objects found in \`env\` most likely do NOT implement any API you are familiar with from your training. DO NOT try to guess what API they implement, and DO NOT use executeCode to try to enumerate them programmatically (this will not work, as they are RPC interfaces). Use the describeBinding tool to learn what interface they provide before writing any code.
 `.trim();
 
-let SET_GADGET_BINDING_TOOL_DESCRIPTION = `
-Wire an installed Contract from your \`env\` into a Gadget's own \`env\`, so the Gadget's code can use it.
-
-The bindings in your \`env\` belong to this chat; a Gadget's code sees only the Gadget's own bindings, which are listed in the system prompt. Use this tool to add one of your bindings to a Gadget: \`gadget\` names the target Gadget (by its name in your env), \`source\` names the resource binding to wire in, and \`name\` is the name the Gadget's code will see it as (\`env.<name>\` in server.js), defaulting to the same name as \`source\`.
-
-Raw Source/Gatekeeper bindings are Manager-only and cannot be wired into Consumer Gadget code. A normal Contract proposal already installs its new instance on the exact Gadget and binding reviewed by the human, so do not call this tool after approval. One Contract instance cannot be reused or moved to another binding; propose a separately reviewed instance instead. This tool exists only for an installed Contract record that has no binding placement. The addition is part of your proposed changes: like code edits, it takes permanent effect when the user accepts your changes.
-
-NOTE: You do NOT need this tool to use a resource yourself with \`executeCode\` — your own bindings are already available there. ONLY use it when a Gadget's code needs the resource.
-`.trim();
-
 let EXECUTE_CODE_TOOL_DESCRIPTION = `
 Executes one-off JavaScript code, returning the output it logs to the console. The code runs in a sandbox where it cannot talk to the internet, except through the bindings in its 'env' object; fetch() will not work. Otherwise, the code can call any built-in APIs available in Cloudflare Workers.
 
@@ -625,7 +610,7 @@ The 'env' object contains this chat's named bindings:
 * An entry for each Gadget in the workspace, under the name given in the system prompt's gadget list (or the name you passed to \`createGadget\`): an RPC stub pointing at the Gadget's server-side Durable Object. If the user asks you to interact with a Gadget directly, or asks if you can "see" it, use this stub (read the Gadget's server code to learn what RPC methods it exposes).
 * An entry for each external resource available to this chat: those listed in the system prompt, those the user grants in messages (shown as \`[Resource Title](env.SOME_NAME)\`), and those you obtain with \`requestConnection\`.
 
-Note that this differs from the \`env\` a Gadget's own code sees: a Gadget's server.js sees only installed Contract bindings. Your Manager env may also contain private raw Sources. Never wire a raw Source into Gadget code. A Contract proposal installs its new instance on the exact reviewed target automatically; never reuse that instance for another binding.
+Note that this differs from the \`env\` a Gadget's own code sees: a Gadget's server.js sees only installed Contract bindings. A Contract proposal installs its new instance on the exact reviewed target automatically; never reuse that instance for another binding.
 
 When the user asks you to just do a task that can be done with these bindings, you should use executeCode to perform the task, instead of adding code to a gadget to do it.
 
@@ -1120,12 +1105,6 @@ export async function runAgent(
   // replayedCreations/recordedCreations below).
   let pendingCreatedGadgets: {gadgetId: WorkpieceId, title: string, bindingName: string}[] = [];
 
-  // Binding edges added this turn (via the setGadgetBinding tool), likewise awaiting attachment
-  // to the next flushed "changes" message (see `addedBindings`), which sequence-stamps the
-  // pending edge. Crash recovery mirrors creations: replayed additions not listed in any
-  // "changes" message are re-added here (see replayedBindingAdditions/recordedBindingAdditions).
-  let pendingAddedBindings: {gadgetId: WorkpieceId, name: string, target: WorkpieceId}[] = [];
-
   // The chat's binding map: what each name in the agent's executeCode `env` resolves to. Starts
   // from the seed layer (see AgentHooks.prepareChatBindings) and accumulates chat-local entries
   // during history replay (pasted resources, accepted connections, created gadgets, agent
@@ -1278,19 +1257,6 @@ export async function runAgent(
   // their stamp -- which is why replay of createGadget itself never re-creates anything.)
   let replayedCreations: {gadgetId: WorkpieceId, title: string, bindingName: string}[] = [];
   let recordedCreations = new Set<WorkpieceId>();
-
-  // And the same again for binding additions (setGadgetBinding), recorded by `addedBindings`.
-  // Unlike creations, additions have no unique id: (gadgetId, name) can legitimately recur when
-  // an earlier addition is removed or reverted and the same name is added again. So instead of a
-  // set difference, count per key -- recordings consume the *earliest* replayed additions (an
-  // addition is recorded no later than any subsequent same-name addition, which requires the
-  // earlier edge to be gone first) and the excess tail is re-adopted. Only agent-flushed
-  // recordings count: a user-authored "changes" message records a UI-initiated bind
-  // (GadgetClient.bind), which has no tool call, and counting it would mask an agent addition of
-  // the same name.
-  let replayedBindingAdditions: {gadgetId: WorkpieceId, name: string, target: WorkpieceId}[] = [];
-  let recordedBindingAdditions = new Map<string, number>();
-  let bindingAdditionKey = (gadgetId: WorkpieceId, name: string) => `${gadgetId}:${name}`;
 
   // Track which files have been read in this session, keyed by (workpieceId, filename). Edits
   // aren't allowed before reading. Deliberately not carried across a compaction boundary: an
@@ -1645,27 +1611,9 @@ export async function runAgent(
                   };
                   break;
                 case "setBindingHook":
-                case "saveCapsuleAsBinding":
-                  // Obsolete tools, which may appear in old chat logs. Their effects were
-                  // immediate and permanent (nothing provisional to recover), so replay is a
-                  // recorded no-op.
+                  // Binding hooks are permanent rather than provisional, so replay does not
+                  // apply them to the editing session.
                   toolOutput = {text: jsonToolResultText({success: true})};
-                  break;
-                case "setGadgetBinding":
-                  // The addition is provisional and the recorded output identifies the edge so a
-                  // crashed turn's unrecorded addition can be re-adopted, exactly like
-                  // createGadget.
-                  if (toolCall.output === undefined) {
-                    throw new Error("setGadgetBinding tool call in log is missing its result");
-                  }
-                  replayedBindingAdditions.push({
-                    gadgetId: toolCall.output.gadgetId,
-                    name: toolCall.output.name,
-                    target: toolCall.output.target,
-                  });
-                  toolOutput = {
-                    text: jsonToolResultText({success: true, changeId: toolCall.output.changeId}),
-                  };
                   break;
                 case "createGadget": {
                   // A creation tool can't be re-run: the created workpiece ID was persisted as
@@ -1776,27 +1724,19 @@ export async function runAgent(
         }
 
         if (chatMessageStatus[msg.sequence - firstSequence] !== "reverted") {
-          // A batch with no `update` records only creations/binding additions; there is nothing
-          // to apply to the session doc (and no diff), but user-authored creations/additions
-          // are still surfaced as observations below.
+          // A batch with no `update` records only creations; there is nothing to apply to the
+          // session doc (and no diff), but user-authored creations are still surfaced below.
           let diff = msg.update !== undefined
               ? applyReplayedChanges(msg.update, msg.author.type === "user")
               : undefined;
           if (msg.author.type === "user") {
             // Surface everything the user did in this batch as one synthetic observation:
-            // gadgets they created and bindings they added from the workspace UI
-            // (agent-initiated creations/additions need no note -- the model already sees its
-            // own tool calls and recorded results), followed by the diff of their file edits. A
-            // creation-only batch has a no-op update and thus no diff.
+            // gadgets they created from the workspace UI (agent-initiated creations need no
+            // note -- the model already sees its own tool calls and recorded results), followed
+            // by the diff of their file edits. A creation-only batch has no diff.
             let observations = (msg.createdGadgets ?? []).map(({title, bindingName}) =>
                 `Created new gadget ${JSON.stringify(title)}, available in your env as ` +
                 `\`env.${bindingName}\`.`);
-            for (let {gadgetId, name} of msg.addedBindings ?? []) {
-              let gadgetName = chatNameFor(gadgetId);
-              observations.push(
-                  `Added binding "${name}" to ` +
-                  (gadgetName !== undefined ? `gadget ${gadgetName}` : `a gadget`) + `.`);
-            }
             if (diff !== undefined) {
               observations.push(diff);
             }
@@ -1829,12 +1769,6 @@ export async function runAgent(
         }
         for (let {gadgetId} of msg.createdGadgets ?? []) {
           recordedCreations.add(gadgetId);
-        }
-        if (msg.author.type !== "user") {
-          for (let {gadgetId, name} of msg.addedBindings ?? []) {
-            let key = bindingAdditionKey(gadgetId, name);
-            recordedBindingAdditions.set(key, (recordedBindingAdditions.get(key) ?? 0) + 1);
-          }
         }
         changeIdMap.set(msg.sequence, nextChangeId);
         ++nextChangeId;
@@ -2031,9 +1965,9 @@ export async function runAgent(
     pendingReplayEdits = [];
   }
 
-  // Likewise, re-adopt gadget creations and binding additions from a crashed turn that were
+  // Likewise, re-adopt gadget creations from a crashed turn that were
   // never recorded in a "changes" message, so this turn's next flush records (and thereby
-  // sequence-stamps) them. The registry rows/edges already exist, unstamped; reconciliation
+  // sequence-stamps) them. The registry rows already exist, unstamped; reconciliation
   // spares them because their tool calls appear in the log (see reconcilePendingGadgets in
   // overseer.ts).
   for (let creation of replayedCreations) {
@@ -2041,16 +1975,6 @@ export async function runAgent(
       pendingCreatedGadgets.push(creation);
     }
   }
-  let seenAdditionCounts = new Map<string, number>();
-  for (let addition of replayedBindingAdditions) {
-    let key = bindingAdditionKey(addition.gadgetId, addition.name);
-    let occurrence = (seenAdditionCounts.get(key) ?? 0) + 1;
-    seenAdditionCounts.set(key, occurrence);
-    if (occurrence > (recordedBindingAdditions.get(key) ?? 0)) {
-      pendingAddedBindings.push(addition);
-    }
-  }
-
   // Error-path notes for tool calls, merged into the persisted tool-call log at the turn_end
   // barrier. A tool that fails throws (so the model sees an error result), but pi's conversion
   // of a thrown error discards the tool's `details`, so the catch blocks record what the log
@@ -2076,13 +2000,12 @@ export async function runAgent(
   let awaitingActionDecision = false;
 
   let flushCapturedYdocChanges = () => {
-    if (capturedYdocChanges.length === 0 && pendingCreatedGadgets.length === 0 &&
-        pendingAddedBindings.length === 0) {
+    if (capturedYdocChanges.length === 0 && pendingCreatedGadgets.length === 0) {
       return;
     }
 
-    // A creation or binding addition with no accompanying edits still needs a "changes" message
-    // (it is the durable record that stamps the pending registry row/edge -- see addChatMessages
+    // A creation with no accompanying edits still needs a "changes" message
+    // (it is the durable record that stamps the pending registry row -- see addChatMessages
     // in overseer.ts), but it records no code update -- and thus no observed version.
     let update = capturedYdocChanges.length > 0
         ? Y.mergeUpdatesV2(capturedYdocChanges)
@@ -2090,8 +2013,6 @@ export async function runAgent(
     capturedYdocChanges = [];
     let createdGadgets = pendingCreatedGadgets;
     pendingCreatedGadgets = [];
-    let addedBindings = pendingAddedBindings;
-    pendingAddedBindings = [];
     hooks.addChatMessages(chatId, author, [{
       type: "changes",
       // Captured edits imply the session Y.Doc was built, so `versionLock` is set; stamping it
@@ -2099,7 +2020,6 @@ export async function runAgent(
       // the session's code state.
       ...(update !== undefined ? {update, observedCodeVersion: versionLock!} : {}),
       ...(createdGadgets.length > 0 ? {createdGadgets} : {}),
-      ...(addedBindings.length > 0 ? {addedBindings} : {}),
     }]);
     ++nextChangeId;
   };
@@ -2544,65 +2464,6 @@ export async function runAgent(
       execute: async (toolCallId, {name}) => {
         try {
           return toolResult(await resolveBindingDescription(name, chatBindings, hooks));
-        } catch (error) {
-          toolCallNotes.set(toolCallId, {
-            error: toolErrorText(error)
-          });
-          throw error;
-        }
-      }
-    }),
-
-    setGadgetBinding: defineTool({
-      name: "setGadgetBinding",
-      label: "Bind resource to gadget",
-      description: SET_GADGET_BINDING_TOOL_DESCRIPTION,
-      parameters: Type.Object({
-        gadget: Type.String({
-          description: "Env binding name of the gadget whose bindings to modify.",
-        }),
-        source: Type.String({
-          description: "Env binding name of the resource to wire into the gadget.",
-        }),
-        name: Type.Optional(Type.String({
-          description:
-              "Name to bind the Contract under within the gadget (`env.<name>` in the gadget's " +
-              "own code). Defaults to the same name as `source`. Style: ALL_CAPS_WITH_UNDERSCORES.",
-        })),
-      }),
-      execute: async (toolCallId, {gadget, source, name}) => {
-        try {
-          let gadgetEntry = chatBindings.get(gadget);
-          if (!gadgetEntry || gadgetEntry.type !== "workpiece") {
-            throw new Error(`There is no gadget named "${gadget}" in your env.`);
-          }
-          let sourceEntry = chatBindings.get(source);
-          if (!sourceEntry) {
-            throw new Error(`There is no binding named "${source}" in your env.`);
-          }
-          if (sourceEntry.type !== "workpiece") {
-            throw new Error(`env.${source} holds agent callback arguments; it cannot be bound ` +
-                `into a gadget.`);
-          }
-          let bindingName = name ?? source;
-
-          // Like createGadget, flush edits captured so far into their own "changes" message
-          // first, so a revert at the addition never drags along earlier edits; the addition
-          // then rides the *next* flush, whose "changes" message durably records and
-          // sequence-stamps the pending edge (see addChatMessages in overseer.ts).
-          flushCapturedYdocChanges();
-          hooks.addGadgetBinding(gadgetEntry.id, bindingName, sourceEntry.id, chatId);
-          pendingAddedBindings.push(
-              {gadgetId: gadgetEntry.id, name: bindingName, target: sourceEntry.id});
-
-          // Record the resolved edge as the tool's output so a crashed turn's replay can re-adopt
-          // the addition (see replayedBindingAdditions); the model-visible result is just
-          // success + the batch's change ID.
-          let output = {gadgetId: gadgetEntry.id, name: bindingName, target: sourceEntry.id,
-                        changeId: nextChangeId};
-          return toolResult(
-              jsonToolResultText({success: true, changeId: nextChangeId}),
-              {output} as Partial<AiToolCall>);
         } catch (error) {
           toolCallNotes.set(toolCallId, {
             error: toolErrorText(error)

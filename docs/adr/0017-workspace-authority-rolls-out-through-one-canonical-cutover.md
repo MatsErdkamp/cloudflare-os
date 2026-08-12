@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+The migration, compatibility-facade, and rollback mechanics in this ADR are superseded by
+[ADR 0026](./0026-pre-launch-workspaces-hard-cut-over-to-canonical-authority.md). Its one-way
+canonical-authority and fail-closed principles remain in force.
+
 ## Context
 
 Existing workspaces store Gatekeeper and current-format Contract records, Gadget bindings, chats, hooks, action logs, and state without the identity, provenance, decision, and Consumer records required by Workspace Authority. The migration preserves eligible installed capabilities while removed Contract formats fail closed under ADR 0024; historical ambiguity cannot become new authority.

@@ -352,7 +352,7 @@ describe("compaction checkpoint state", () => {
     expect(state.proposedChanges).toBeUndefined();
   });
 
-  // A creation-only batch leaves no Y.Doc update, so the checkpoint has nothing to carry for it --
+  // A creation-only batch leaves no Y.Doc update, so the checkpoint has nothing to carry for it;
   // the registry row it created is what records it. The binding name still has to reach replay,
   // since retained messages refer to it as `env.NEW`.
   it("keeps a provisional creation's binding name without inventing an update", () => {
@@ -360,7 +360,6 @@ describe("compaction checkpoint state", () => {
       record(0, agent, {
         type: "changes",
         createdGadgets: [{gadgetId: 2, title: "New", bindingName: "NEW"}],
-        addedBindings: [{gadgetId: 2, name: "DB", target: 9}],
       }),
     ], 1);
 
